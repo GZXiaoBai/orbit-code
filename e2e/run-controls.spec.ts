@@ -143,7 +143,7 @@ async function startFixtureBuild(page: import("@playwright/test").Page, plan = s
   await expect(page.locator(".plan-card")).toBeVisible({ timeout: 5000 });
   await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
   await page.getByRole("button", { name: /Agent Loop/ }).click();
-  await page.getByRole("tab", { name: /Changes/ }).click();
+  await page.getByRole("tab", { name: /变更|Changes/ }).click();
 }
 
 test.describe("Orbit Code — Run Controls", () => {
@@ -395,16 +395,16 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
     await page.getByRole("button", { name: /Agent Loop/ }).click();
 
-    await page.getByRole("tab", { name: /Changes/ }).click();
+    await page.getByRole("tab", { name: /变更|Changes/ }).click();
     await expect(page.locator(".approval-request-card", { hasText: "run_command" })).toBeVisible({ timeout: 10000 });
     await page.locator(".approval-request-card", { hasText: "run_command" }).getByRole("button", { name: /批准|Approve/ }).click();
 
-    await page.getByRole("tab", { name: /Terminal/ }).click();
+    await page.getByRole("tab", { name: /终端|Terminal/ }).click();
     await expect(page.locator(".dock-terminal")).toContainText("Desktop runtime required", { timeout: 10000 });
 
-    await page.getByRole("tab", { name: /Changes/ }).click();
+    await page.getByRole("tab", { name: /变更|Changes/ }).click();
     await expect(page.locator(".dock-diff-card")).toBeVisible({ timeout: 10000 });
-    await expect(page.locator(".dock-diff-card")).toContainText(/Sandbox sandboxed|Sandbox failed/);
+    await expect(page.locator(".dock-diff-card")).toContainText(/沙盒 已预演|沙盒 预演失败|Sandbox Previewed|Sandbox Preview failed/);
     await expect(page.locator(".dock-diff-card")).toContainText("AGENT_GUI_FIXTURE.md");
 
     await page.locator(".dock-diff-card .apply-patch-action-btn").click();
@@ -412,7 +412,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(page.locator(".dock-applied-history")).toContainText(/所有修改已安全应用到本地|All changes have been applied locally/, { timeout: 10000 });
     await expect(page.locator(".approval-request-card", { hasText: "npm test" })).toBeVisible({ timeout: 10000 });
 
-    await page.getByRole("tab", { name: /Files/ }).click();
+    await page.getByRole("tab", { name: /文件|Files/ }).click();
     await page.getByPlaceholder("搜索文件").fill("AGENT_GUI_FIXTURE");
     await page.locator(".file-tree-node.file", { hasText: "AGENT_GUI_FIXTURE.md" }).click();
     await expect(page.locator("[data-testid='monaco-readonly-preview']")).toBeVisible({ timeout: 10000 });
@@ -434,7 +434,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.waitForTimeout(2300);
     await page.reload();
     await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
-    await page.getByRole("tab", { name: /Changes/ }).click();
+    await page.getByRole("tab", { name: /变更|Changes/ }).click();
 
     const recoveredApproval = page.locator(".approval-request-card", { hasText: "run_command" });
     await expect(recoveredApproval).toBeVisible({ timeout: 10000 });
@@ -442,7 +442,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await recoveredApproval.getByRole("button", { name: /批准|Approve/ }).click();
 
     await expect.poll(() => page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_LOG__ || [])).toContain("run_command_async");
-    await page.getByRole("tab", { name: /Terminal/ }).click();
+    await page.getByRole("tab", { name: /终端|Terminal/ }).click();
     await expect(page.locator(".dock-terminal")).toContainText("npm test", { timeout: 5000 });
   });
 
@@ -456,7 +456,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.waitForTimeout(2300);
     await page.reload();
     await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
-    await page.getByRole("tab", { name: /Changes/ }).click();
+    await page.getByRole("tab", { name: /变更|Changes/ }).click();
 
     const recoveredQuestion = page.locator(".question-request-card");
     await expect(recoveredQuestion).toBeVisible({ timeout: 10000 });
@@ -480,7 +480,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.waitForTimeout(2300);
     await page.reload();
     await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
-    await page.getByRole("tab", { name: /Changes/ }).click();
+    await page.getByRole("tab", { name: /变更|Changes/ }).click();
 
     await expect(page.locator(".dock-diff-card")).toContainText("AGENT_GUI_FIXTURE.md", { timeout: 10000 });
     await page.locator(".dock-diff-card .apply-patch-action-btn").click();
@@ -526,7 +526,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
     await page.getByRole("button", { name: /Agent Loop/ }).click();
 
-    await page.getByRole("tab", { name: /Changes/ }).click();
+    await page.getByRole("tab", { name: /变更|Changes/ }).click();
     const questionCard = page.locator(".question-request-card");
     await expect(questionCard).toBeVisible({ timeout: 10000 });
     await expect(questionCard).toContainText(/Which implementation path|Agent/);
@@ -552,7 +552,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
     await page.getByRole("button", { name: /Agent Loop/ }).click();
 
-    await page.getByRole("tab", { name: /Changes/ }).click();
+    await page.getByRole("tab", { name: /变更|Changes/ }).click();
     await page.locator(".approval-request-card", { hasText: "run_command" }).getByRole("button", { name: /批准|Approve/ }).click();
     await expect(page.locator(".dock-diff-card")).toContainText("AGENT_GUI_FIXTURE.md", { timeout: 10000 });
 
@@ -594,13 +594,13 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
     await page.getByRole("button", { name: /Agent Loop/ }).click();
 
-    await page.getByRole("tab", { name: /Changes/ }).click();
+    await page.getByRole("tab", { name: /变更|Changes/ }).click();
     const approval = page.locator(".approval-request-card", { hasText: "run_command" });
     await expect(approval).toBeVisible({ timeout: 10000 });
     await approval.getByRole("button", { name: /拒绝|Deny/ }).click();
 
     await expect(page.locator(".agent-collaboration-timeline")).toContainText(/拒绝|denied/i, { timeout: 10000 });
-    await page.getByRole("tab", { name: /Terminal/ }).click();
+    await page.getByRole("tab", { name: /终端|Terminal/ }).click();
     await expect(page.locator(".dock-terminal")).toHaveCount(0);
   });
 });

@@ -78,7 +78,7 @@ references: []`);
     await textarea.press("Enter");
     await page.waitForTimeout(2000);
 
-    await page.getByRole("tab", { name: /Tasks/ }).click();
+    await page.getByRole("tab", { name: /任务|Tasks/ }).click();
     await expect(page.locator(".review-dock")).toBeVisible();
     await expect(page.locator(".review-dock").getByText("Step 1")).toBeVisible({ timeout: 5000 });
   });

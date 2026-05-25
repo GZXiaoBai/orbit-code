@@ -188,7 +188,7 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
     return (
       <div className="diff-split-view">
         <div className="diff-split-pane left-pane">
-          <div className="pane-header">Original</div>
+          <div className="pane-header">{copy.diff.original}</div>
           <div className="pane-body">
             {leftRows.map((row, idx) => {
               if (row.type === "empty") {
@@ -212,7 +212,7 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
           </div>
         </div>
         <div className="diff-split-pane right-pane">
-          <div className="pane-header">Modified</div>
+          <div className="pane-header">{copy.diff.modified}</div>
           <div className="pane-body">
             {rightRows.map((row, idx) => {
               if (row.type === "empty") {

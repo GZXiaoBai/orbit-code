@@ -156,7 +156,7 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
                 <button
                   type="button"
                   className="project-more-button"
-                  aria-label="Project actions"
+                  aria-label={copy.workbench.projectActions}
                   data-project-menu-trigger="true"
                   onClick={() => openButtonMenu(project.workspacePath)}
                 >

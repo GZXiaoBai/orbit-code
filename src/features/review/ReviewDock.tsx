@@ -30,6 +30,14 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
   const filePreview = useFilePreview(workspace.activeFilePath, workspace.activeFileContent);
   const tasks = workspace.importedPlan?.plan.tasks ?? [];
   const terminalRuns = model.terminalRuns;
+  const taskStatusOptions: Array<{ value: TaskStatus; label: string }> = [
+    { value: "queued", label: copy.workbench.taskStatus.queued },
+    { value: "running", label: copy.workbench.taskStatus.running },
+    { value: "blocked", label: copy.workbench.taskStatus.blocked },
+    { value: "review", label: copy.workbench.taskStatus.review },
+    { value: "verified", label: copy.workbench.taskStatus.verified },
+    { value: "done", label: copy.workbench.taskStatus.done },
+  ];
   const terminalEntries: TerminalRun[] = terminalRuns.length > 0 ? terminalRuns : Object.entries(workspace.terminalLogs).map(([taskId, output]) => ({
     id: taskId,
     taskId,
@@ -84,21 +92,14 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
                     </div>
                     <SelectMenu
                       value={task.status}
-                      ariaLabel={`${task.title} status`}
+                      ariaLabel={`${task.title} ${copy.workbench.status}`}
                       size="compact"
                       onChange={(value) => workspace.updateTask(task.id, { status: value as TaskStatus })}
-                      options={[
-                        { value: "queued", label: "Queued" },
-                        { value: "running", label: "Running" },
-                        { value: "blocked", label: "Blocked" },
-                        { value: "review", label: "Review" },
-                        { value: "verified", label: "Verified" },
-                        { value: "done", label: "Done" },
-                      ]}
+                      options={taskStatusOptions}
                     />
                   </header>
                   <p>{task.description}</p>
-                  <StatusBadge tone={statusTone(task.status)}>{task.status}</StatusBadge>
+                  <StatusBadge tone={statusTone(task.status)}>{copy.workbench.taskStatus[task.status]}</StatusBadge>
                 </article>
               ))}
             </div>
@@ -117,7 +118,7 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
                     <small>{step.detail}</small>
                   </div>
                   <StatusBadge tone={step.status === "waiting" ? "warning" : step.status === "denied" || step.status === "failed" ? "danger" : step.status === "done" ? "success" : "neutral"}>
-                    {step.status}
+                    {copy.workbench.runStepStatus[step.status]}
                   </StatusBadge>
                 </header>
               </article>

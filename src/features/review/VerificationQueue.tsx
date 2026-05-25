@@ -1,4 +1,5 @@
 import { Check, ShieldCheck, X } from "lucide-react";
+import type { PermissionAction } from "../../domain/types";
 import type { AppCopy } from "../../i18n/copy";
 import type { ApprovalRequest } from "../../state/useApprovalQueue";
 import { Button, StatusBadge } from "../../ui/primitives";
@@ -16,6 +17,7 @@ export function VerificationQueue({
   onResolve: (id: string, approved: boolean) => void;
 }) {
   if (approvals.length === 0) return null;
+  const actionLabel = (action: PermissionAction) => copy.security[action] || action;
 
   return (
     <>
@@ -37,9 +39,9 @@ export function VerificationQueue({
             <div className="approval-command-summary">
               <code className="approval-command-line">{view.display}</code>
               <small>{copy.workbench.workspacePath}: {view.workspacePath || workspaceRoot || copy.workbench.noWorkspace}</small>
-              <div className="approval-risk-list" aria-label="permission actions">
+              <div className="approval-risk-list" aria-label={copy.workbench.permissionActions}>
                 {view.actions.map((action) => (
-                  <span key={action} className="approval-risk-chip">{action}</span>
+                  <span key={action} className="approval-risk-chip">{actionLabel(action)}</span>
                 ))}
               </div>
             </div>

@@ -98,7 +98,7 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
         ) : null}
 
         <PlanSummary copy={copy} importedPlan={workspace.importedPlan} importError={workspace.importError} />
-        <RunStepList steps={workspace.runSteps} />
+        <RunStepList copy={copy} steps={workspace.runSteps} />
 
         <AgentTimeline
           copy={copy}

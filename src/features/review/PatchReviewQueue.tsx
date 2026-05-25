@@ -38,8 +38,12 @@ export function PatchReviewQueue({
               <small>{event.timestamp}</small>
             </header>
             <div className="patch-status-row">
-              <span className={`patch-status-chip ${sandboxStatus}`}>Sandbox {sandboxStatus}</span>
-              <span className={`patch-status-chip ${applyStatus}`}>Apply {applyStatus}</span>
+              <span className={`patch-status-chip ${sandboxStatus}`}>
+                {copy.workbench.sandboxLabel} {copy.workbench.patchSandboxStatus[sandboxStatus]}
+              </span>
+              <span className={`patch-status-chip ${applyStatus}`}>
+                {copy.workbench.applyLabel} {copy.workbench.patchApplyStatus[applyStatus]}
+              </span>
             </div>
             {sandboxPath ? <small className="patch-sandbox-path">{sandboxPath}</small> : null}
             {sandboxOutput ? <pre className="patch-sandbox-output">{sandboxOutput}</pre> : null}

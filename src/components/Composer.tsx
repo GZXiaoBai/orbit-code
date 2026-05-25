@@ -137,7 +137,7 @@ export function Composer({
           onPaste={(event) => void handlePaste(event)}
           placeholder={copy.composer.placeholder}
         />
-        <button className="send-button" type="submit" aria-label="Send">
+        <button className="send-button" type="submit" aria-label={copy.workbench.send}>
           <ArrowUp size={18} />
         </button>
       </div>

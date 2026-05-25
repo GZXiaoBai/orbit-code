@@ -9,6 +9,41 @@ import {
   type TerminalRun,
 } from "../domain/terminalRun";
 
+const ACTIVE_WORKSPACE_KEY = "orbit-code.active-workspace.v1";
+const LEGACY_ACTIVE_WORKSPACE_KEY = "agent-gui.active-workspace.v1";
+
+function readStoredWorkspaceRoot(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return (
+      window.localStorage.getItem(ACTIVE_WORKSPACE_KEY) ||
+      window.localStorage.getItem(LEGACY_ACTIVE_WORKSPACE_KEY) ||
+      ""
+    );
+  } catch {
+    return "";
+  }
+}
+
+function storeWorkspaceRoot(path: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(ACTIVE_WORKSPACE_KEY, path);
+  } catch {
+    // UI persistence is best-effort; the Rust workspace root still remains authoritative.
+  }
+}
+
+function clearStoredWorkspaceRoot(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(ACTIVE_WORKSPACE_KEY);
+    window.localStorage.removeItem(LEGACY_ACTIVE_WORKSPACE_KEY);
+  } catch {
+    // Ignore storage failures in private or restricted contexts.
+  }
+}
+
 export interface FileSystemState {
   workspaceRoot: string;
   workspaceError: string | null;
@@ -63,7 +98,16 @@ export function useFileSystem(
       }
 
       try {
-        const root = await invokeDesktop<string>("get_workspace_root");
+        const storedRoot = readStoredWorkspaceRoot();
+        let root = "";
+        if (storedRoot) {
+          try {
+            root = await invokeDesktop<string>("set_workspace_root", { path: storedRoot });
+          } catch {
+            clearStoredWorkspaceRoot();
+          }
+        }
+        if (!root) root = await invokeDesktop<string>("get_workspace_root");
         if (!root) {
           setWorkspaceRootState("");
           setWorkspaceFiles([]);
@@ -73,6 +117,7 @@ export function useFileSystem(
         const files = await invokeDesktop<string[]>("list_workspace_files", { workspacePath: root });
         setWorkspaceRootState(root);
         setWorkspaceFiles(files);
+        storeWorkspaceRoot(root);
         setWorkspaceError(null);
       } catch {
         setWorkspaceRootState("");
@@ -116,6 +161,7 @@ export function useFileSystem(
 
     const trimmed = path.trim();
     if (!trimmed) {
+      clearStoredWorkspaceRoot();
       setWorkspaceError("Workspace path is required.");
       return false;
     }
@@ -125,6 +171,7 @@ export function useFileSystem(
       const files = await invokeDesktop<string[]>("list_workspace_files", { workspacePath: root });
       setWorkspaceRootState(root);
       setWorkspaceFiles(files);
+      storeWorkspaceRoot(root);
       setWorkspaceError(null);
       setActiveFilePath(null);
       setActiveFileContent(null);
@@ -142,6 +189,7 @@ export function useFileSystem(
       const files = await invokeDesktop<string[]>("list_workspace_files", { workspacePath: root });
       setWorkspaceRootState(root);
       setWorkspaceFiles(files);
+      if (root) storeWorkspaceRoot(root);
       setWorkspaceError(null);
     } catch (e) {
       setWorkspaceError(String(e));

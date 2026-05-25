@@ -1,7 +1,9 @@
 import { CheckCircle2, Clock3, FileDiff, PlayCircle, XCircle } from "lucide-react";
 import type { RunStep } from "../../domain/runSteps";
+import type { AppCopy } from "../../i18n/copy";
 
 interface RunStepListProps {
+  copy: AppCopy;
   steps: RunStep[];
 }
 
@@ -13,12 +15,12 @@ function iconForStep(step: RunStep) {
   return <CheckCircle2 size={14} />;
 }
 
-export function RunStepList({ steps }: RunStepListProps) {
+export function RunStepList({ copy, steps }: RunStepListProps) {
   const visibleSteps = steps.slice(-8);
   if (visibleSteps.length === 0) return null;
 
   return (
-    <section className="run-step-list" aria-label="Agent run steps">
+    <section className="run-step-list" aria-label={copy.workbench.agentRunSteps}>
       {visibleSteps.map((step) => (
         <article key={step.id} className={`run-step run-step-${step.status}`}>
           <span className="run-step-icon">{iconForStep(step)}</span>
