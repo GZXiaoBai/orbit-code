@@ -9,6 +9,7 @@ interface PlanSummaryProps {
 
 export function PlanSummary({ copy, importedPlan, importError }: PlanSummaryProps) {
   const plan = importedPlan?.plan;
+  const nextTask = plan?.tasks.find((task) => task.status !== "done" && task.status !== "verified") || plan?.tasks[0];
 
   return (
     <>
@@ -24,31 +25,21 @@ export function PlanSummary({ copy, importedPlan, importError }: PlanSummaryProp
       ) : null}
 
       {plan ? (
-        <section className="plan-card">
+        <section className="plan-card plan-card-compact">
           <div className="plan-card-header">
             <div>
-              <h3>{copy.planImported}</h3>
-              <span>{importedPlan.fileName}</span>
+              <span>{copy.planImported}</span>
+              <h3>{plan.title}</h3>
             </div>
             <strong>{plan.tasks.length}</strong>
           </div>
 
-          <div className="plan-columns">
-            <div>
-              <h4>{copy.goals}</h4>
-              <ul>
-                {plan.goals.slice(0, 3).map((goal) => (
-                  <li key={goal}>{goal}</li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <h4>{copy.planTasks}</h4>
-              <ol>
-                {plan.tasks.slice(0, 4).map((task) => (
-                  <li key={task.id}>{task.title}</li>
-                ))}
-              </ol>
+          <div className="plan-compact-body">
+            <p>{nextTask?.title || plan.goals[0] || importedPlan.fileName}</p>
+            <div className="plan-compact-meta">
+              <span>{copy.goals} {plan.goals.length}</span>
+              <span>{copy.planTasks} {plan.tasks.length}</span>
+              <span>{copy.acceptanceCriteria} {plan.acceptanceCriteria.length}</span>
             </div>
           </div>
         </section>

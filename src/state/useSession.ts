@@ -350,7 +350,13 @@ export function useSession(): SessionState {
             activeLLMConfig.provider,
             activeLLMConfig.model,
             PLANNER_SYSTEM_PROMPT,
-            `请帮我分析以下用户编码需求并生成一个合法的开发计划：\n${source}`,
+            [
+              "Analyze the following coding request and generate a detailed Orbit Code plan.",
+              "Use the same language as the user's request for all user-facing plan content.",
+              "The plan must be detailed enough for a coding agent to execute with Review Dock approvals and verification.",
+              "",
+              source,
+            ].join("\n"),
             activeLLMConfig.url
           );
 
@@ -365,7 +371,7 @@ export function useSession(): SessionState {
             tasks: (parsedPlan.tasks || []).map((t: any, index: number) => ({
               id: t.id || `llm-task-${index}-${Date.now()}`,
               title: t.title || "开发步骤",
-              description: t.description || t.details || "修改对应文件",
+              description: t.description || t.details || t.detail || "修改对应文件，并说明具体变更、影响范围和验证方式",
               status: "queued" as const,
               dependsOn: t.dependsOn || [],
               filesHint: t.filesHint || [],

@@ -37,6 +37,8 @@ export function AgentTimeline({
   streamingActive,
 }: AgentTimelineProps) {
   if (agentEvents.length === 0) return null;
+  const visibleEvents = compactAgentEvents(agentEvents);
+  const hiddenCount = Math.max(0, agentEvents.length - visibleEvents.length);
 
   return (
     <section className="agent-collaboration-timeline">
@@ -70,7 +72,12 @@ export function AgentTimeline({
       </div>
 
       <div className="timeline-container">
-        {agentEvents.map((evt) => (
+        {hiddenCount > 0 ? (
+          <div className="timeline-history-note">
+            {copy.language === "中" ? `已收起 ${hiddenCount} 条低优先级运行记录` : `${hiddenCount} low-priority run records hidden`}
+          </div>
+        ) : null}
+        {visibleEvents.map((evt) => (
           <div key={evt.id} className={`timeline-node role-${evt.role} status-${evt.status}`}>
             <div className="node-avatar-col">
               <AgentAvatar role={evt.role} status={evt.status} size={36} />
@@ -113,6 +120,29 @@ export function AgentTimeline({
       </div>
     </section>
   );
+}
+
+function compactAgentEvents(events: AgentEvent[]): AgentEvent[] {
+  const important = events.filter((event) => {
+    if (event.patches?.length) return true;
+    if (/failed|error|denied|approval|question|patch|plan ready|self-heal|verification|run guard|guard|模型|model|api key|ollama|build 执行通道/i.test(`${event.name} ${event.message}`)) return true;
+    return false;
+  });
+
+  const source = important.length > 0 ? important : events;
+  const deduped: AgentEvent[] = [];
+  const seenRestore = new Set<string>();
+
+  for (const event of source) {
+    if (event.name === "Recovered Waiting State") {
+      const key = event.message;
+      if (seenRestore.has(key)) continue;
+      seenRestore.add(key);
+    }
+    deduped.push(event);
+  }
+
+  return deduped.slice(-8);
 }
 
 function escapeHtml(text: string): string {

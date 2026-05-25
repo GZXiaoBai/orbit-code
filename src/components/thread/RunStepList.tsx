@@ -17,7 +17,9 @@ function iconForStep(step: RunStep) {
 }
 
 export function RunStepList({ copy, steps }: RunStepListProps) {
-  const visibleSteps = steps.slice(-8);
+  const visibleSteps = steps
+    .filter((step) => step.status !== "done")
+    .slice(-3);
   if (visibleSteps.length === 0) return null;
 
   return (

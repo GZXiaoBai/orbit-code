@@ -315,7 +315,7 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
           }
 
           return (
-            <div key={index} className={`diff-row ${lineClass}`}>
+            <div key={index} className={`diff-row diff-inline-row ${lineClass}`}>
               <div className="diff-ln old-ln">
                 {change.oldLineNumber !== undefined ? change.oldLineNumber : ""}
               </div>
