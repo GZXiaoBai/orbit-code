@@ -81,7 +81,7 @@ export function AgentTimeline({
         {visibleEvents.map((evt) => (
           <div key={evt.id} className={`timeline-node role-${evt.role} status-${evt.status}`}>
             <div className="node-avatar-col">
-              <AgentAvatar role={evt.role} status={evt.status} size={36} />
+              <AgentAvatar role={evt.role} status={evt.status} size={24} />
               <div className="node-line-connector"></div>
             </div>
             <div className="node-content-col">
@@ -103,7 +103,7 @@ export function AgentTimeline({
         {streamingActive && (
           <div className="timeline-node role-coder status-thinking">
             <div className="node-avatar-col">
-              <AgentAvatar role="coder" status="thinking" size={36} />
+              <AgentAvatar role="coder" status="thinking" size={24} />
               <div className="node-line-connector"></div>
             </div>
             <div className="node-content-col">

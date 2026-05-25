@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { KEYCHAIN_SERVICE_CANDIDATES, LEGACY_AGENT_GUI_KEYCHAIN_SERVICE, ORBIT_CODE_KEYCHAIN_SERVICE } from "../storage/keychain";
+import { ORBIT_CODE_VAULT_PREFIX } from "../storage/keychain";
 import { fallbackCapability, isOpenAICompatibleProvider, normalizeModelInfo } from "../providers/providerAdapters";
 
 describe("provider persistence and adapters", () => {
-  it("prefers Orbit Code keychain service and keeps legacy fallback", () => {
-    expect(KEYCHAIN_SERVICE_CANDIDATES).toEqual([
-      ORBIT_CODE_KEYCHAIN_SERVICE,
-      LEGACY_AGENT_GUI_KEYCHAIN_SERVICE,
-    ]);
+  it("uses Orbit Code encrypted credential vault keys", () => {
+    expect(ORBIT_CODE_VAULT_PREFIX).toBe("credential.vault.");
   });
 
   it("treats newly added providers as OpenAI-compatible where appropriate", () => {

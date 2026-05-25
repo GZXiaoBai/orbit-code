@@ -29,6 +29,7 @@ export function PatchReviewQueue({
         const applyStatus = patchApplySummary(event);
         const sandboxOutput = event.patches?.find((patch) => patch.sandboxOutput)?.sandboxOutput;
         const sandboxPath = event.patches?.find((patch) => patch.sandboxPath)?.sandboxPath;
+        const compactSandboxPath = sandboxPath ? compactPath(sandboxPath) : "";
         return (
           <section key={event.id} className="dock-diff-card">
             <header>
@@ -46,7 +47,11 @@ export function PatchReviewQueue({
                 {copy.workbench.applyLabel} {copy.workbench.patchApplyStatus[applyStatus]}
               </span>
             </div>
-            {sandboxPath ? <small className="patch-sandbox-path">{sandboxPath}</small> : null}
+            {sandboxPath ? (
+              <small className="patch-sandbox-path" title={sandboxPath}>
+                {compactSandboxPath}
+              </small>
+            ) : null}
             {sandboxOutput ? <pre className="patch-sandbox-output">{localizedRuntimeText(copy, sandboxOutput)}</pre> : null}
             <DiffViewer
               copy={copy}
@@ -60,4 +65,10 @@ export function PatchReviewQueue({
       })}
     </>
   );
+}
+
+function compactPath(path: string): string {
+  const parts = path.split("/");
+  if (parts.length <= 4) return path;
+  return `.../${parts.slice(-3).join("/")}`;
 }

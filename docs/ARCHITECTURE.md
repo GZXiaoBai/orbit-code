@@ -13,7 +13,7 @@ This document describes the current architecture, not the intended final product
 - Plan parsing: YAML.
 - Local runtime: Rust commands through Tauri invoke.
 - Storage: SQLite through Rust commands with localStorage fallback in web/test contexts.
-- Credentials: OS Keychain through Rust `keyring`.
+- Credentials: Orbit-owned encrypted local vault, stored as ciphertext in SQLite and unlocked into process memory with a user passphrase.
 - Tests: Vitest, Playwright, Cargo test.
 
 ## Frontend Layers
@@ -93,7 +93,7 @@ Frontend adapters:
 - `workspaceStorage.ts`
 - `keychain.ts`
 
-API keys must stay in OS Keychain.
+API keys must stay out of plaintext localStorage/SQLite. New credentials are encrypted in the Orbit credential vault; the vault passphrase is never stored.
 
 ### Code Intelligence
 

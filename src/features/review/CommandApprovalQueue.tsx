@@ -27,11 +27,13 @@ export function CommandApprovalQueue({
       </div>
       {approvals.map((request) => {
         const view = commandApprovalView(request.params as Record<string, unknown>, request.reason || copy.workbench.pendingApproval);
+        const toolLabel = request.tool === "run_command" ? copy.security.command : request.tool === "apply_patch" ? copy.security.write : request.tool;
         return (
           <article key={request.id} className="approval-request-card">
             <header>
               <div>
-                <strong>{request.tool}</strong>
+                <strong>{toolLabel}</strong>
+                <span className="sr-only">{request.tool}</span>
                 <small>{view.reason}</small>
               </div>
               <StatusBadge tone="warning">{copy.workbench.pendingApproval}</StatusBadge>

@@ -24,7 +24,6 @@ import { sessionStore } from "../storage/sessionStore";
 import { callLLMApi, PLANNER_SYSTEM_PROMPT, cleanJsonOutput } from "../services/llmService";
 import { isTauri } from "../utils/tauri";
 import { resolveModelSelection } from "./modelSettings";
-import { providerRegistry } from "../providers/providerRegistry";
 
 export interface ImportedPlanState {
   plan: CodingPlan;
@@ -64,6 +63,7 @@ export interface SessionState {
   importError: ImportErrorState | null;
   providerSettings: ProviderSettings;
   apiKeys: Record<string, string>;
+  credentialVaultProviders: string[];
   isRealLLMActive: boolean;
   activeLLMConfig: { provider: LLMProvider; model: string; url?: string } | null;
   activeTitle: string | null;
@@ -82,7 +82,8 @@ export interface SessionState {
   deleteTask: (taskId: string) => void;
   moveTask: (taskId: string, direction: "up" | "down") => void;
   updateProviderSettings: (newSettings: ProviderSettings) => Promise<void>;
-  updateApiKey: (providerId: string, key: string) => Promise<void>;
+  updateApiKey: (providerId: string, key: string, passphrase: string) => Promise<void>;
+  unlockCredentialVault: (passphrase: string) => Promise<string[]>;
 }
 
 const defaultProviderSettings: ProviderSettings = {
@@ -158,6 +159,7 @@ export function useSession(): SessionState {
   const [isLoading, setIsLoading] = useState(true);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>(normalizeProviderSettings(defaultProviderSettings));
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
+  const [credentialVaultProviders, setCredentialVaultProviders] = useState<string[]>([]);
   const [isRealLLMActive, setIsRealLLMActive] = useState(false);
   const [activeLLMConfig, setActiveLLMConfig] = useState<{ provider: LLMProvider; model: string; url?: string } | null>(null);
   const [loadedAgentEvents, setLoadedAgentEvents] = useState<any[] | null>(null);
@@ -243,17 +245,9 @@ export function useSession(): SessionState {
           }
         }
 
-        const providers = providerRegistry
-          .filter((provider) => !provider.capabilities.local && provider.id !== "fixture")
-          .map((provider) => provider.id);
-        const loadedKeys: Record<string, string> = {};
-        for (const prov of providers) {
-          const key = await keychainStorage.loadApiKey(prov);
-          if (key) {
-            loadedKeys[prov] = key;
-          }
-        }
-        setApiKeys(loadedKeys);
+        const savedProviders = await keychainStorage.listSavedProviders();
+        setCredentialVaultProviders(savedProviders);
+        setApiKeys({});
       } catch (err) {
         console.error("Failed to load workspace data:", err);
       } finally {
@@ -447,9 +441,17 @@ export function useSession(): SessionState {
     }
   }, []);
 
-  const updateApiKey = useCallback(async (providerId: string, key: string) => {
-    setApiKeys((prev) => ({ ...prev, [providerId]: key }));
-    await keychainStorage.saveApiKey(providerId, key).catch(console.error);
+  const unlockCredentialVault = useCallback(async (passphrase: string) => {
+    const providers = await keychainStorage.unlock(passphrase);
+    setCredentialVaultProviders(providers);
+    setApiKeys(Object.fromEntries(providers.map((provider) => [provider, "__vault_unlocked__"])));
+    return providers;
+  }, []);
+
+  const updateApiKey = useCallback(async (providerId: string, key: string, passphrase: string) => {
+    await keychainStorage.saveApiKey(providerId, key, passphrase);
+    setCredentialVaultProviders((prev) => [...new Set([...prev, providerId])]);
+    setApiKeys((prev) => ({ ...prev, [providerId]: "__vault_unlocked__" }));
   }, []);
 
   const activeTitle = importedPlan?.plan.title ?? null;
@@ -469,6 +471,7 @@ export function useSession(): SessionState {
     importError,
     providerSettings,
     apiKeys,
+    credentialVaultProviders,
     isRealLLMActive,
     activeLLMConfig,
     activeTitle,
@@ -487,5 +490,6 @@ export function useSession(): SessionState {
     moveTask,
     updateProviderSettings,
     updateApiKey,
+    unlockCredentialVault,
   };
 }

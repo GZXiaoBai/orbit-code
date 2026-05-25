@@ -80,6 +80,7 @@ function App() {
         <SettingsWorkspace
           providerSettings={workspace.providerSettings}
           apiKeys={workspace.apiKeys}
+          credentialVaultProviders={workspace.credentialVaultProviders}
           usageSnapshot={workspace.usageSnapshot}
           theme={theme}
           layoutPreferences={workspace.layoutPreferences}
@@ -91,6 +92,7 @@ function App() {
           onSectionChange={(settingsSection) => workspace.updateLayoutPreferences({ settingsSection })}
           onUpdateSettings={workspace.updateProviderSettings}
           onUpdateApiKey={workspace.updateApiKey}
+          onUnlockCredentialVault={workspace.unlockCredentialVault}
           onThemeChange={setTheme}
           onUpdateLayoutPreferences={workspace.updateLayoutPreferences}
           onTogglePinnedProject={workspace.togglePinnedProject}

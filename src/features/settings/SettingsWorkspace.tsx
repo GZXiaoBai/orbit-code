@@ -44,6 +44,7 @@ interface SettingsWorkspaceProps {
   copy: AppCopy;
   providerSettings: ProviderSettings;
   apiKeys: Record<string, string>;
+  credentialVaultProviders: string[];
   usageSnapshot: UsageSnapshot;
   theme: Theme;
   layoutPreferences: LayoutPreferences;
@@ -53,7 +54,8 @@ interface SettingsWorkspaceProps {
   activeSection: string;
   onSectionChange: (section: string) => void;
   onUpdateSettings: (settings: ProviderSettings) => Promise<void> | void;
-  onUpdateApiKey: (providerId: string, key: string) => Promise<void> | void;
+  onUpdateApiKey: (providerId: string, key: string, passphrase: string) => Promise<void> | void;
+  onUnlockCredentialVault: (passphrase: string) => Promise<string[]> | string[];
   onThemeChange: (theme: Theme) => void;
   onUpdateLayoutPreferences: (patch: Partial<LayoutPreferences>) => void;
   onTogglePinnedProject: (workspacePath: string) => void;
@@ -74,10 +76,23 @@ function smokeLabel(copy: AppCopy, status: string) {
   return copy.settingsModal.smokeNotConfigured;
 }
 
+function providerConnectionLabel(
+  copy: AppCopy,
+  smokeStatus: string,
+  options: { local: boolean; imported: boolean; hasUnlockedKey: boolean; hasSavedKey: boolean; hasTypedKey: boolean },
+) {
+  if (options.local) return smokeLabel(copy, smokeStatus);
+  if (options.hasUnlockedKey || options.hasTypedKey) return smokeLabel(copy, smokeStatus);
+  if (options.hasSavedKey) return copy.settingsModal.vaultLocked;
+  if (options.imported) return copy.settingsModal.vaultNeedsKey;
+  return copy.settingsModal.smokeNotConfigured;
+}
+
 export function SettingsWorkspace({
   copy,
   providerSettings,
   apiKeys,
+  credentialVaultProviders,
   usageSnapshot,
   theme,
   layoutPreferences,
@@ -88,6 +103,7 @@ export function SettingsWorkspace({
   onSectionChange,
   onUpdateSettings,
   onUpdateApiKey,
+  onUnlockCredentialVault,
   onThemeChange,
   onUpdateLayoutPreferences,
   onTogglePinnedProject,
@@ -99,6 +115,8 @@ export function SettingsWorkspace({
 }: SettingsWorkspaceProps) {
   const [draftSettings, setDraftSettings] = useState(providerSettings);
   const [localApiKeys, setLocalApiKeys] = useState<Record<string, string>>({});
+  const [vaultPassphrase, setVaultPassphrase] = useState("");
+  const [vaultMessage, setVaultMessage] = useState("");
   const [activeProviderId, setActiveProviderId] = useState(providerSettings.activeProviderId || providerRegistry[0].id);
   const [modelSearch, setModelSearch] = useState("");
   const [customModel, setCustomModel] = useState("");
@@ -106,7 +124,7 @@ export function SettingsWorkspace({
 
   useEffect(() => {
     setDraftSettings(providerSettings);
-    setLocalApiKeys({ ...apiKeys });
+    setLocalApiKeys({});
     setActiveProviderId((current) => providerRegistry.some((provider) => provider.id === current)
       ? current
       : providerSettings.activeProviderId || providerRegistry[0].id);
@@ -138,7 +156,18 @@ export function SettingsWorkspace({
 
   const activeProvider = providerRegistry.find((provider) => provider.id === activeProviderId) || providerRegistry[0];
   const activeConfig = getProviderConfig(draftSettings, activeProvider.id);
-  const activeProviderHasDetectedKey = Boolean(apiKeys[activeProvider.id] || localApiKeys[activeProvider.id]);
+  const activeProviderHasVaultCredential = credentialVaultProviders.includes(activeProvider.id);
+  const activeProviderHasDetectedKey = Boolean(apiKeys[activeProvider.id] || localApiKeys[activeProvider.id] || activeProviderHasVaultCredential);
+  const vaultCopy = {
+    passphrase: copy.language === "中" ? "Orbit 凭据库主密码" : "Orbit credential vault passphrase",
+    passphraseHelp: copy.language === "中"
+      ? "API Key 会加密存入本地 SQLite；主密码不会保存，重启后需要再次解锁。"
+      : "API keys are encrypted into local SQLite. The passphrase is never saved and is required again after restart.",
+    unlock: copy.language === "中" ? "解锁凭据库" : "Unlock vault",
+    locked: copy.language === "中" ? "已保存密钥，当前未解锁" : "Saved key, currently locked",
+    unlocked: copy.language === "中" ? "凭据库已解锁" : "Vault unlocked",
+    required: copy.language === "中" ? "请输入凭据库主密码，用于加密或解锁 API Key。" : "Enter the vault passphrase to encrypt or unlock API keys.",
+  };
   const security = draftSettings.security || { preset: "askBeforeAction" as const, advancedRules: {}, sandboxMode: "none" as const };
   const agent = draftSettings.agent || {
     maxIterations: 15,
@@ -166,17 +195,44 @@ export function SettingsWorkspace({
     });
   };
 
+  const ensureProviderCredential = async (providerId: string) => {
+    const provider = providerRegistry.find((item) => item.id === providerId);
+    if (!provider || provider.capabilities.local || apiKeys[providerId]) return true;
+
+    const typedKey = localApiKeys[providerId]?.trim() || "";
+    const passphrase = vaultPassphrase.trim();
+    if (!passphrase) {
+      setVaultMessage(vaultCopy.required);
+      return false;
+    }
+
+    if (typedKey) {
+      await onUpdateApiKey(providerId, typedKey, passphrase);
+      setVaultMessage(vaultCopy.unlocked);
+      return true;
+    }
+
+    if (credentialVaultProviders.includes(providerId)) {
+      const providers = await onUnlockCredentialVault(passphrase);
+      const unlocked = Array.isArray(providers) ? providers.includes(providerId) : true;
+      setVaultMessage(unlocked ? vaultCopy.unlocked : vaultCopy.locked);
+      return unlocked;
+    }
+
+    setVaultMessage(copy.settingsModal.importMissingKey);
+    return false;
+  };
+
   const importProviderModels = async (providerId: string) => {
     const provider = providerRegistry.find((item) => item.id === providerId);
     if (!provider) return;
-    const key = localApiKeys[providerId]?.trim() || "";
-    if (!provider.capabilities.local && !key) {
+    const hasCredential = await ensureProviderCredential(providerId);
+    if (!provider.capabilities.local && !hasCredential) {
       setImportStates((prev) => ({ ...prev, [providerId]: { state: "error", message: copy.settingsModal.importMissingKey } }));
       return;
     }
     setImportStates((prev) => ({ ...prev, [providerId]: { state: "importing" } }));
     try {
-      if (!provider.capabilities.local) await onUpdateApiKey(providerId, key);
       const discovered = await discoverProviderModels(providerId, draftSettings.configs[providerId]?.baseUrl || provider.baseUrl || "");
       const next = setImportedModels(draftSettings, providerId, discovered);
       commitSettings(setProviderSmokeRecord(next, providerId, {
@@ -196,8 +252,8 @@ export function SettingsWorkspace({
   const smokeProvider = async (providerId: string) => {
     const provider = providerRegistry.find((item) => item.id === providerId);
     if (!provider) return;
-    const key = localApiKeys[providerId]?.trim() || apiKeys[providerId] || "";
-    if (!provider.capabilities.local && !key) {
+    const hasCredential = await ensureProviderCredential(providerId);
+    if (!provider.capabilities.local && !hasCredential) {
       commitSettings(setProviderSmokeRecord(draftSettings, providerId, {
         status: "smokeFailed",
         message: copy.settingsModal.importMissingKey,
@@ -206,7 +262,6 @@ export function SettingsWorkspace({
     }
     setImportStates((prev) => ({ ...prev, [providerId]: { state: "importing", message: copy.settingsModal.smokeTest } }));
     try {
-      if (!provider.capabilities.local) await onUpdateApiKey(providerId, key);
       const discovered = await discoverProviderModels(providerId, draftSettings.configs[providerId]?.baseUrl || provider.baseUrl || "");
       commitSettings(setProviderSmokeRecord(draftSettings, providerId, {
         status: "smokePassed",
@@ -301,7 +356,10 @@ export function SettingsWorkspace({
               {providerRegistry.map((provider) => {
                 const config = getProviderConfig(draftSettings, provider.id);
                 const imported = config.importedModels.length > 0;
-                const detectedKey = Boolean(apiKeys[provider.id] || localApiKeys[provider.id]);
+                const hasUnlockedKey = Boolean(apiKeys[provider.id]);
+                const hasSavedKey = credentialVaultProviders.includes(provider.id);
+                const hasTypedKey = Boolean(localApiKeys[provider.id]);
+                const detectedKey = Boolean(hasUnlockedKey || hasTypedKey || hasSavedKey);
                 const smoke = getProviderSmokeRecord(draftSettings, provider.id);
                 return (
                   <button
@@ -312,7 +370,17 @@ export function SettingsWorkspace({
                     <span className="provider-import-icon"><Sparkles size={15} /></span>
                     <span>
                       <strong>{provider.label}</strong>
-                      <small>{imported ? copy.settingsModal.imported : detectedKey ? copy.settingsModal.detectedApiKey : copy.settingsModal.notImported} · {smokeLabel(copy, smoke.status)}</small>
+                      <small>
+                        {imported ? copy.settingsModal.imported : detectedKey ? copy.settingsModal.detectedApiKey : copy.settingsModal.notImported}
+                        {" · "}
+                        {providerConnectionLabel(copy, smoke.status, {
+                          local: provider.capabilities.local,
+                          imported,
+                          hasUnlockedKey,
+                          hasSavedKey,
+                          hasTypedKey,
+                        })}
+                      </small>
                     </span>
                     <ChevronRight size={14} />
                   </button>
@@ -328,21 +396,45 @@ export function SettingsWorkspace({
                 </div>
                 <span className={`import-status-chip ${getProviderSmokeRecord(draftSettings, activeProvider.id).status}`}>
                   <Check size={13} />
-                  {smokeLabel(copy, getProviderSmokeRecord(draftSettings, activeProvider.id).status)}
+                  {providerConnectionLabel(copy, getProviderSmokeRecord(draftSettings, activeProvider.id).status, {
+                    local: activeProvider.capabilities.local,
+                    imported: activeConfig.importedModels.length > 0,
+                    hasUnlockedKey: Boolean(apiKeys[activeProvider.id]),
+                    hasSavedKey: activeProviderHasVaultCredential,
+                    hasTypedKey: Boolean(localApiKeys[activeProvider.id]),
+                  })}
                 </span>
               </section>
               <section className="provider-credential-panel">
                 {!activeProvider.capabilities.local ? (
-                  <div className="setting-field">
-                    <label><Key size={14} />{activeProvider.apiKeyName || copy.settingsModal.apiKey}</label>
-                    <input
-                      type="password"
-                      value={localApiKeys[activeProvider.id] || ""}
-                      onChange={(event) => setLocalApiKeys((prev) => ({ ...prev, [activeProvider.id]: event.target.value }))}
-                      placeholder={`${copy.settingsModal.apiKeyPlaceholderPrefix} ${activeProvider.apiKeyName || "API Key"}`}
-                    />
-                    <div className="security-notice"><ShieldAlert size={12} /><span>{copy.settingsModal.securityNotice}</span></div>
-                  </div>
+                  <>
+                    <div className="setting-field">
+                      <label><Key size={14} />{activeProvider.apiKeyName || copy.settingsModal.apiKey}</label>
+                      <input
+                        type="password"
+                        value={localApiKeys[activeProvider.id] || ""}
+                        onChange={(event) => setLocalApiKeys((prev) => ({ ...prev, [activeProvider.id]: event.target.value }))}
+                        placeholder={activeProviderHasVaultCredential ? vaultCopy.locked : `${copy.settingsModal.apiKeyPlaceholderPrefix} ${activeProvider.apiKeyName || "API Key"}`}
+                      />
+                    </div>
+                    <div className="setting-field">
+                      <label><ShieldAlert size={14} />{vaultCopy.passphrase}</label>
+                      <input
+                        type="password"
+                        value={vaultPassphrase}
+                        onChange={(event) => setVaultPassphrase(event.target.value)}
+                        placeholder={vaultCopy.passphrase}
+                      />
+                      <div className="security-notice"><ShieldAlert size={12} /><span>{vaultCopy.passphraseHelp}</span></div>
+                    </div>
+                    {activeProviderHasVaultCredential && !apiKeys[activeProvider.id] ? (
+                      <button type="button" className="btn" onClick={() => void ensureProviderCredential(activeProvider.id)}>
+                        <ShieldCheck size={14} />
+                        {vaultCopy.unlock}
+                      </button>
+                    ) : null}
+                    {vaultMessage ? <span className="import-inline-message">{vaultMessage}</span> : null}
+                  </>
                 ) : null}
                 <div className="setting-field">
                   <label><Globe size={14} />{copy.settingsModal.baseUrl}</label>

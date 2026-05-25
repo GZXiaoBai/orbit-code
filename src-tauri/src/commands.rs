@@ -6,8 +6,8 @@
 //! ## Credential Management
 //! | Command | Params | Returns | Description |
 //! |---------|--------|---------|-------------|
-//! | `store_credential` | service:&str, account:&str, secret:&str | `()` | Store API key in OS Keychain |
-//! | `get_credential` | service:&str, account:&str | `Option<String>` | Retrieve API key from OS Keychain |
+//! | `store_vault_credential` | provider:String, secret:String, passphrase:String | `()` | Encrypt an API key into Orbit's local credential vault |
+//! | `unlock_credential_vault` | passphrase:String | `Vec<String>` | Unlock stored provider credentials for the current process |
 //!
 //! ## File Operations
 //! | Command | Params | Returns | Description |
@@ -41,9 +41,9 @@
 //! ## LLM API Relay
 //! | Command | Params | Returns | Description |
 //! |---------|--------|---------|-------------|
-//! | `call_llm_api` | provider:String, api_url:String, payload:Value | `String` | Synchronous LLM API call (CORS bypass). Reads API key from Keychain |
+//! | `call_llm_api` | provider:String, api_url:String, payload:Value | `String` | Synchronous LLM API call (CORS bypass). Reads API key from the unlocked credential vault |
 //! | `call_llm_api_streaming` | app:AppHandle, stream_id:String, provider:String, api_url:String, payload:Value | `()` | Streaming LLM API call. Emits `llm-stream-start/chunk/end/error` events |
-//! | `list_llm_models` | provider:String, base_url?:String | `Vec<String>` | Fetch provider model IDs using the stored Keychain credential |
+//! | `list_llm_models` | provider:String, base_url?:String | `Vec<String>` | Fetch provider model IDs using the unlocked credential vault |
 //!
 //! ## Vector Embeddings & Semantic Search
 //! | Command | Params | Returns | Description |
@@ -55,7 +55,15 @@ use crate::code_graph;
 use crate::db;
 use crate::embedding;
 use crate::process_monitor;
-use keyring::Entry;
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
+use argon2::{Algorithm, Argon2, Params, Version};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use rand::rngs::OsRng;
+use rand::RngCore;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -74,40 +82,158 @@ pub fn greet(name: &str) -> String {
 }
 
 /* ==========================================================================
-跨平台系统密钥保管箱模块 (Keychain / Credentials Manager)
+跨平台凭据保管模块
 ========================================================================== */
 
+const VAULT_KEY_PREFIX: &str = "credential.vault.";
+
+static CREDENTIAL_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn credential_cache() -> &'static Mutex<HashMap<String, String>> {
+    CREDENTIAL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EncryptedCredentialEnvelope {
+    version: u8,
+    provider: String,
+    kdf: String,
+    salt: String,
+    nonce: String,
+    ciphertext: String,
+}
+
+fn vault_key(provider: &str) -> String {
+    format!("{}{}", VAULT_KEY_PREFIX, provider)
+}
+
+fn derive_vault_key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32], String> {
+    if passphrase.trim().is_empty() {
+        return Err("Credential vault passphrase cannot be empty".to_string());
+    }
+    let params = Params::new(19_456, 2, 1, Some(32)).map_err(|e| e.to_string())?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut key = [0u8; 32];
+    argon2
+        .hash_password_into(passphrase.as_bytes(), salt, &mut key)
+        .map_err(|e| e.to_string())?;
+    Ok(key)
+}
+
+fn encrypt_secret(provider: &str, secret: &str, passphrase: &str) -> Result<EncryptedCredentialEnvelope, String> {
+    let mut salt = [0u8; 16];
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut nonce_bytes);
+
+    let key = derive_vault_key(passphrase, &salt)?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| e.to_string())?;
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce_bytes), secret.as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    Ok(EncryptedCredentialEnvelope {
+        version: 1,
+        provider: provider.to_string(),
+        kdf: "argon2id:m=19456,t=2,p=1".to_string(),
+        salt: BASE64.encode(salt),
+        nonce: BASE64.encode(nonce_bytes),
+        ciphertext: BASE64.encode(ciphertext),
+    })
+}
+
+fn decrypt_secret(envelope: &EncryptedCredentialEnvelope, passphrase: &str) -> Result<String, String> {
+    let salt = BASE64.decode(&envelope.salt).map_err(|e| e.to_string())?;
+    let nonce = BASE64.decode(&envelope.nonce).map_err(|e| e.to_string())?;
+    let ciphertext = BASE64.decode(&envelope.ciphertext).map_err(|e| e.to_string())?;
+    let key = derive_vault_key(passphrase, &salt)?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| e.to_string())?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .map_err(|_| "Unable to decrypt credential vault. Check the passphrase.".to_string())?;
+    String::from_utf8(plaintext).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
-pub fn store_credential(service: &str, account: &str, secret: &str) -> Result<(), String> {
-    let entry = Entry::new(service, account).map_err(|e| e.to_string())?;
-    entry.set_password(secret).map_err(|e| e.to_string())?;
+pub fn store_vault_credential(
+    app: AppHandle,
+    provider: String,
+    secret: String,
+    passphrase: String,
+) -> Result<(), String> {
+    if provider.trim().is_empty() {
+        return Err("Provider is required".to_string());
+    }
+    if secret.trim().is_empty() {
+        return Err("API key is required".to_string());
+    }
+    let envelope = encrypt_secret(&provider, &secret, &passphrase)?;
+    let raw = serde_json::to_string(&envelope).map_err(|e| e.to_string())?;
+    db::db_set(app, vault_key(&provider), raw)?;
+    credential_cache()
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(provider, secret);
     Ok(())
 }
 
 #[tauri::command]
-pub fn get_credential(service: &str, account: &str) -> Result<Option<String>, String> {
-    let entry = Entry::new(service, account).map_err(|e| e.to_string())?;
-    match entry.get_password() {
-        Ok(password) => Ok(Some(password)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
+pub fn unlock_credential_vault(app: AppHandle, passphrase: String) -> Result<Vec<String>, String> {
+    let conn = db::get_connection(&app)?;
+    let mut stmt = conn
+        .prepare("SELECT key, value FROM kv_store WHERE key LIKE ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([format!("{}%", VAULT_KEY_PREFIX)], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut unlocked = Vec::new();
+    let mut cache = credential_cache().lock().map_err(|e| e.to_string())?;
+    for row in rows {
+        let (key, value) = row.map_err(|e| e.to_string())?;
+        let provider = key.trim_start_matches(VAULT_KEY_PREFIX).to_string();
+        let envelope = serde_json::from_str::<EncryptedCredentialEnvelope>(&value).map_err(|e| e.to_string())?;
+        let secret = decrypt_secret(&envelope, &passphrase)?;
+        cache.insert(provider.clone(), secret);
+        unlocked.push(provider);
     }
+    Ok(unlocked)
 }
 
-fn credential_service_candidates() -> [&'static str; 2] {
-    ["orbit-code", "agent-gui"]
+#[tauri::command]
+pub fn list_vault_credential_providers(app: AppHandle) -> Result<Vec<String>, String> {
+    let conn = db::get_connection(&app)?;
+    let mut stmt = conn
+        .prepare("SELECT key FROM kv_store WHERE key LIKE ?1 ORDER BY key")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([format!("{}%", VAULT_KEY_PREFIX)], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let mut providers = Vec::new();
+    for row in rows {
+        providers.push(row.map_err(|e| e.to_string())?.trim_start_matches(VAULT_KEY_PREFIX).to_string());
+    }
+    Ok(providers)
+}
+
+#[tauri::command]
+pub fn delete_vault_credential(app: AppHandle, provider: String) -> Result<(), String> {
+    db::db_delete(app, vault_key(&provider))?;
+    credential_cache()
+        .lock()
+        .map_err(|e| e.to_string())?
+        .remove(&provider);
+    Ok(())
 }
 
 fn get_provider_credential(provider: &str) -> Result<Option<String>, String> {
-    for service in credential_service_candidates() {
-        if let Some(secret) = get_credential(service, provider)? {
-            if service != "orbit-code" {
-                let _ = store_credential("orbit-code", provider, &secret);
-            }
-            return Ok(Some(secret));
-        }
-    }
-    Ok(None)
+    Ok(credential_cache()
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get(provider)
+        .cloned())
 }
 
 /* ==========================================================================
@@ -972,7 +1098,7 @@ pub async fn call_llm_api(
     payload: serde_json::Value,
 ) -> Result<String, String> {
     let api_key = get_provider_credential(&provider)?
-        .ok_or_else(|| format!("API Key for {} not configured in Keychain", provider))?;
+        .ok_or_else(|| format!("API Key for {} is not unlocked in Orbit credential vault", provider))?;
 
     let final_url = if provider == "google" && !api_url.contains("key=") {
         let separator = if api_url.contains('?') { "&" } else { "?" };
@@ -1185,7 +1311,7 @@ pub async fn list_llm_models(
     } else {
         Some(
             get_provider_credential(&provider)?
-                .ok_or_else(|| format!("API Key for {} not configured in Keychain", provider))?,
+                .ok_or_else(|| format!("API Key for {} is not unlocked in Orbit credential vault", provider))?,
         )
     };
 
@@ -1234,7 +1360,7 @@ pub async fn call_llm_api_streaming(
     payload: serde_json::Value,
 ) -> Result<(), String> {
     let api_key = get_provider_credential(&provider)?
-        .ok_or_else(|| format!("API Key for {} not configured in Keychain", provider))?;
+        .ok_or_else(|| format!("API Key for {} is not unlocked in Orbit credential vault", provider))?;
 
     let final_url = if provider == "google" && !api_url.contains("key=") {
         let separator = if api_url.contains('?') { "&" } else { "?" };
@@ -1362,8 +1488,11 @@ mod provider_tests {
     use super::*;
 
     #[test]
-    fn credential_services_prefer_orbit_code_with_legacy_fallback() {
-        assert_eq!(credential_service_candidates(), ["orbit-code", "agent-gui"]);
+    fn credential_vault_encrypts_and_rejects_wrong_passphrase() {
+        let envelope = encrypt_secret("deepseek", "sk-test", "correct horse").unwrap();
+        assert_ne!(envelope.ciphertext, "sk-test");
+        assert_eq!(decrypt_secret(&envelope, "correct horse").unwrap(), "sk-test");
+        assert!(decrypt_secret(&envelope, "wrong horse").is_err());
     }
 
     #[test]

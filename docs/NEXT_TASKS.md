@@ -47,7 +47,7 @@ Done:
 - Persisted Agent waiting state and added reload recovery E2E for pending command approval, question, and patch review.
 - Added provider smoke state and a manual smoke button in Models settings; fixture smoke is covered by Playwright.
 - Added Ollama discovery-only Build blocking coverage so imported Ollama models cannot be mistaken for executable Agent models.
-- Added Orbit Code keychain/SQLite migration helpers so imported API keys and provider settings survive the Agent GUI rename.
+- Replaced OS Keychain usage with an Orbit-owned encrypted credential vault; next manual smoke should verify restart, unlock, wrong passphrase, and model refresh.
 - Added smart Composer paste attachment classification for code blocks, YAML plans, long text, images, PDFs, and dropped files.
 - Added first-pass Provider adapter coverage for OpenRouter, xAI, Mistral, Groq, Qwen/DashScope, Kimi/Moonshot, SiliconFlow, and Zhipu/GLM.
 

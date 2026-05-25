@@ -9,11 +9,10 @@ The project is active and not yet product-complete. Core desktop, file browsing,
 - Open a local project and browse a real file tree.
 - Preview code with a read-only Monaco viewer.
 - Import model providers and only show models returned by the provider API.
-- Restore imported provider state after app rename by reading the Orbit Code keychain namespace first and the legacy Agent GUI namespace as a fallback.
+- Store provider API keys in Orbit's encrypted local credential vault instead of the OS Keychain.
 - Run a single coding task through Plan / Build modes.
 - Route commands, questions, patch proposals, and verification runs through Review Dock.
 - Apply file changes through patch review and transactional Rust-side writes.
-- Store API keys in the operating system Keychain instead of localStorage.
 - Preserve local-first state for projects, layout, file tree expansion, and run controls.
 
 ## Current Status
@@ -33,7 +32,7 @@ Status labels in docs should use `verified`, `partial`, `design-only`, `broken`,
 - Frontend: React 19, TypeScript 5.8, Vite 7
 - Editor preview: Monaco, read-only
 - Styling: plain CSS variables and project-owned primitives
-- Backend: Rust commands, SQLite, OS Keychain, reqwest
+- Backend: Rust commands, SQLite, encrypted credential vault, reqwest
 - Testing: Vitest, Playwright, Cargo test
 
 ## Development
@@ -63,7 +62,7 @@ npm run tauri build -- --debug
 
 Orbit Code is local-first, but it is still a tool that can inspect and change source code. The default safety model is:
 
-- API keys are stored through the OS Keychain.
+- API keys are encrypted into local SQLite with an Orbit credential-vault passphrase. The passphrase is not persisted, so the vault must be unlocked again after restart.
 - File and patch operations go through Rust workspace path validation.
 - Multi-file writes use transactional patch application and stale-write checks.
 - Commands and writes are reviewed in Review Dock before execution.

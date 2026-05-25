@@ -57,6 +57,35 @@ function isBuildProvider(providerId: string): providerId is LLMProvider {
   return SUPPORTED_BUILD_PROVIDERS.includes(providerId as LLMProvider);
 }
 
+function toolDisplayName(tool: string): string {
+  if (tool === "run_command") return "命令";
+  if (tool === "apply_patch") return "补丁";
+  if (tool === "ask_user") return "问题";
+  if (tool === "read_file") return "读取文件";
+  if (tool === "search_code") return "搜索代码";
+  if (tool === "list_files") return "列出文件";
+  return tool;
+}
+
+function compactPhaseMessage(message: string): string {
+  const toolMatch = message.match(/(?:Executing|Running):\s*([a-z_]+)/i);
+  if (toolMatch) return `正在处理：${toolDisplayName(toolMatch[1])}`;
+  const approvalMatch = message.match(/^(run_command|apply_patch|ask_user|read_file|search_code|list_files):/);
+  if (approvalMatch) return `等待审查台处理：${toolDisplayName(approvalMatch[1])}`;
+  return message;
+}
+
+function approvalEventMessage(tool: string, params: ToolParams): string {
+  if (tool === "run_command") {
+    const command = typeof params.command === "string" ? params.command : "command";
+    const args = Array.isArray(params.args) ? params.args.filter((arg): arg is string => typeof arg === "string") : [];
+    const reason = typeof params.reason === "string" && params.reason.trim() ? `。原因：${params.reason}` : "";
+    return `等待你在审查台批准命令：${[command, ...args].join(" ")}${reason}`;
+  }
+  if (tool === "apply_patch") return "等待你在审查台审查补丁。批准后才会写入当前工作区。";
+  return `等待你在审查台确认：${toolDisplayName(tool)}`;
+}
+
 interface SandboxPreviewResult {
   id: string;
   proposal_id: string;
@@ -220,7 +249,7 @@ export function useAgentRun({
           role: phase === "implementing" ? "coder" : phase === "reviewing" ? "reviewer" : phase === "verifying" ? "verifier" : "planner",
           name: `Agent (${phase})`,
           status: phase === "done" || phase === "error" ? "done" : "thinking",
-          message,
+          message: compactPhaseMessage(message),
           timestamp: new Date().toLocaleTimeString(),
         }]);
       },
@@ -264,7 +293,7 @@ export function useAgentRun({
           role: "reviewer",
           name: "Approval Gate",
           status: "thinking",
-          message: `Requesting approval: ${tool} — ${JSON.stringify(approvalParams).substring(0, 100)}`,
+          message: approvalEventMessage(tool, approvalParams),
           timestamp: new Date().toLocaleTimeString(),
         }]);
         const approved = await requestApproval(tool, approvalParams, reason, (request) => {

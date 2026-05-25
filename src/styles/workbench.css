@@ -970,7 +970,12 @@
 
 .dock-task .ui-select-menu {
   width: auto;
-  min-width: 86px;
+  min-width: 102px;
+}
+
+.dock-task .ui-select-value {
+  min-width: 52px;
+  justify-content: center;
 }
 
 .dock-terminal header {

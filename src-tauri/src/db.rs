@@ -110,7 +110,7 @@
 //! | id | TEXT PK | UUID |
 //! | provider | TEXT UNIQUE | openai/anthropic/google/deepseek |
 //! | label | TEXT | Display label |
-//! | api_key_provider_id | TEXT NOT NULL | Keychain account ID |
+//! | api_key_provider_id | TEXT NOT NULL | Credential vault provider ID |
 //! | base_url | TEXT | Custom API endpoint |
 //! | default_model | TEXT | Default model name |
 //! | capabilities | TEXT | JSON capability flags |
