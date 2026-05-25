@@ -1,0 +1,67 @@
+/* ============================================================
+   Light Theme Overrides
+   ============================================================ */
+
+[data-theme="light"] {
+  --bg-primary: rgba(248, 248, 245, 0.96);
+  --bg-secondary: rgba(255, 255, 255, 0.92);
+  --bg-tertiary: rgba(238, 238, 233, 0.92);
+  --bg-hover: rgba(255, 255, 255, 0.96);
+  --surface: rgba(255, 255, 255, 0.9);
+  --surface-2: rgba(244, 244, 240, 0.92);
+
+  --text-primary: #20201E;
+  --text-secondary: #595955;
+  --text-muted: #94948C;
+
+  --accent: #20201E;
+  --accent-hover: #000000;
+  --accent-muted: rgba(32, 32, 30, 0.08);
+
+  --line: rgba(0, 0, 0, 0.08);
+  --line-strong: rgba(0, 0, 0, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+  --shadow-glow: 0 0 12px rgba(22, 163, 74, 0.1);
+}
+
+/* Explicit light mode style fixes */
+[data-theme="light"] .session-chip span,
+[data-theme="light"] .session-chip small { color: var(--text-primary); }
+
+[data-theme="light"] .terminal-console {
+  background: #F8FAFC;
+  color: var(--accent);
+  border-color: var(--line-strong);
+}
+
+[data-theme="light"] .agent-loop-btn { color: #fff; }
+
+[data-theme="light"] .brand-mark { color: #fff; }
+
+[data-theme="light"] .composer-footer .send-button,
+[data-theme="light"] .composer-input-shell .send-button { color: #fff; }
+
+[data-theme="light"] .settings-modal { background: rgba(246, 246, 243, 0.74); }
+
+[data-theme="light"] .rail-usage-popover,
+[data-theme="light"] .project-context-menu,
+[data-theme="light"] .thread-actions-menu,
+[data-theme="light"] .project-permission-menu,
+[data-theme="light"] .command-palette {
+  background: rgba(250, 250, 247, 0.995);
+}
+
+[data-theme="light"] .model-search,
+[data-theme="light"] .custom-model-row,
+[data-theme="light"] .model-provider-section,
+[data-theme="light"] .model-toggle-row {
+  background: rgba(255, 255, 255, 0.94);
+}
+
+[data-theme="light"] .model-provider-section > header,
+[data-theme="light"] .model-toggle-row {
+  color: #20201e;
+}

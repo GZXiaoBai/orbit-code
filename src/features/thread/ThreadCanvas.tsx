@@ -1,0 +1,131 @@
+import { Bot, MoreHorizontal } from "lucide-react";
+import { useMemo, useState, type KeyboardEvent } from "react";
+import type { AppCopy } from "../../i18n/copy";
+import type { useWorkspace } from "../../state/useWorkspace";
+import { Composer } from "../../components/Composer";
+import { AgentTimeline } from "../../components/thread/AgentTimeline";
+import { PlanSummary } from "../../components/thread/PlanSummary";
+import { RunStepList } from "../../components/thread/RunStepList";
+import { EmptyState } from "../../ui/primitives";
+import { ThreadActionsMenu } from "./ThreadActionsMenu";
+import { nextWorkbenchMode, shouldToggleModeFromKey } from "./threadModeShortcut";
+
+type WorkspaceState = ReturnType<typeof useWorkspace>;
+
+interface ThreadCanvasProps {
+  copy: AppCopy;
+  workspace: WorkspaceState;
+  onOpenSettings: (section?: string) => void;
+}
+
+export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const plan = workspace.importedPlan?.plan;
+  const isBuildMode = workspace.runControls.mode === "build";
+  const title = workspace.threadUiState.title || plan?.title || copy.workbench.startEmptyTitle;
+  const threadSummary = useMemo(() => {
+    const taskCount = plan?.tasks.length || 0;
+    return [
+      `${copy.workbench.activeThread}: ${title}`,
+      `${copy.workbench.headerProject}: ${workspace.workspaceRoot || copy.workbench.noWorkspace}`,
+      `${copy.planTasks}: ${taskCount}`,
+      `${copy.workbench.changesTab}: ${workspace.agentEvents.length}`,
+    ].join("\n");
+  }, [copy, plan?.tasks.length, title, workspace.agentEvents.length, workspace.workspaceRoot]);
+
+  function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (!shouldToggleModeFromKey(event.nativeEvent)) return;
+    event.preventDefault();
+    workspace.runControls.setMode(nextWorkbenchMode(workspace.runControls.mode));
+  }
+
+  async function copySummary() {
+    try {
+      await navigator.clipboard.writeText(threadSummary);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = threadSummary;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+  }
+
+  return (
+    <section className="thread-canvas" aria-label={copy.workbench.activeThread} onKeyDown={handleKeyDown}>
+      <header className="thread-canvas-header">
+        <div>
+          <span>{copy.workbench.activeThread}</span>
+          <h1>{title}</h1>
+        </div>
+        <button
+          type="button"
+          aria-label={copy.workbench.threadActions}
+          className={menuOpen ? "active" : ""}
+          data-thread-menu-trigger="true"
+          onClick={() => setMenuOpen((open) => !open)}
+        >
+          <MoreHorizontal size={18} />
+        </button>
+        {menuOpen ? (
+          <ThreadActionsMenu
+            copy={copy}
+            pinned={workspace.threadUiState.pinned}
+            archived={workspace.threadUiState.archived}
+            reviewDockVisible={workspace.layoutPreferences.reviewDockVisible}
+            onClose={() => setMenuOpen(false)}
+            onPin={workspace.togglePinnedThread}
+            onRename={() => {
+              const next = window.prompt(copy.workbench.renameThread, title);
+              if (next !== null) workspace.renameThread(next);
+            }}
+            onArchive={() => workspace.archiveThread(!workspace.threadUiState.archived)}
+            onToggleReviewDock={workspace.toggleReviewDock}
+            onCopySummary={() => void copySummary()}
+            onOpenNewWindow={workspace.openNewWindow}
+          />
+        ) : null}
+      </header>
+
+      <div className="thread-scroll">
+        {!plan && workspace.agentEvents.length === 0 ? (
+          <EmptyState
+            icon={<Bot size={24} />}
+            title={copy.workbench.startEmptyTitle}
+            body={copy.workbench.startEmptyBody}
+          />
+        ) : null}
+
+        <PlanSummary copy={copy} importedPlan={workspace.importedPlan} importError={workspace.importError} />
+        <RunStepList steps={workspace.runSteps} />
+
+        <AgentTimeline
+          copy={copy}
+          agentEvents={workspace.agentEvents}
+          agentLoopPhase={workspace.agentLoopPhase}
+          agentLoopRunning={workspace.agentLoopRunning}
+          agentLoopToolCalls={workspace.agentLoopToolCalls}
+          onStartAgentLoop={isBuildMode ? workspace.startAgentLoop : undefined}
+          onCancelAgentLoop={workspace.cancelAgentLoop}
+          onRestartCollaboration={workspace.startCollaborationFlow}
+          onApplyEventPatch={workspace.applyEventPatch}
+          onRefinePatch={workspace.refinePatch}
+          onUpdatePatch={workspace.updateEventPatch}
+          streamingContent={workspace.streamingContent}
+          streamingActive={workspace.streamingActive}
+        />
+      </div>
+
+      <Composer
+        copy={copy}
+        onPlanImport={workspace.importPlan}
+        runControls={workspace.runControls}
+        onOpenSettings={onOpenSettings}
+        workspaceRoot={workspace.workspaceRoot}
+        projectPermissionPreset={workspace.projectSecurityOverride?.preset || workspace.effectiveSecurityPolicy.preset}
+        onProjectPermissionChange={(preset) => void workspace.updateProjectSecurityOverride({ preset })}
+      />
+    </section>
+  );
+}

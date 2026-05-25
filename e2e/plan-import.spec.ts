@@ -1,0 +1,85 @@
+import { test, expect } from "@playwright/test";
+
+test.describe("Orbit Code — Plan Import", () => {
+  test("imports checkout-plan.yaml and shows tasks", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+
+    // Find the composer input and paste a plan
+    const composer = page.locator(".composer");
+    await expect(composer).toBeVisible();
+
+    const textarea = composer.locator("textarea");
+    await expect(textarea).toBeVisible();
+
+    // Paste a simple plan
+    await textarea.fill(`version: "1"
+title: "Test Plan"
+goals:
+  - "Test goal"
+constraints: []
+tasks:
+  - id: task-1
+    title: "Test Task"
+    description: "Do something"
+    status: queued
+    dependsOn: []
+    filesHint:
+      - "src/App.tsx"
+    verification:
+      - "npm test"
+acceptanceCriteria: []
+risks: []
+references: []`);
+
+    // Submit (blur or press a button)
+    await textarea.press("Enter");
+    await page.waitForTimeout(1500);
+
+    // A plan card should appear
+    const planCard = page.locator(".plan-card");
+    await expect(planCard).toBeVisible({ timeout: 5000 });
+  });
+
+  test("shift enter keeps a newline in the composer", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+
+    const textarea = page.locator(".composer textarea");
+    await textarea.fill("first line");
+    await textarea.press("Shift+Enter");
+    await textarea.type("second line");
+
+    await expect(textarea).toHaveValue("first line\nsecond line");
+    await expect(page.locator(".plan-card")).not.toBeVisible();
+  });
+
+  test("task queue appears in review dock after plan import", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+
+    const textarea = page.locator(".composer textarea");
+    await textarea.fill(`version: "1"
+title: "Queue Test"
+goals: ["Test"]
+constraints: []
+tasks:
+  - id: t1
+    title: "Step 1"
+    description: "First step"
+    status: queued
+    dependsOn: []
+    filesHint: ["src/App.tsx"]
+    verification: ["echo ok"]
+acceptanceCriteria: []
+risks: []
+references: []`);
+
+    await textarea.press("Enter");
+    await page.waitForTimeout(2000);
+
+    await page.getByRole("tab", { name: /Tasks/ }).click();
+    await expect(page.locator(".review-dock")).toBeVisible();
+    await expect(page.locator(".review-dock").getByText("Step 1")).toBeVisible({ timeout: 5000 });
+  });
+});

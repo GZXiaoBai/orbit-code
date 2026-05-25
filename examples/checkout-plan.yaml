@@ -1,0 +1,51 @@
+version: "1"
+title: Checkout refactor
+goals:
+  - Fix flaky checkout tests caused by concurrent session refresh.
+  - Keep the patch small enough for direct user review.
+constraints:
+  - Do not change payment provider behavior.
+  - Ask before installing dependencies or running network commands.
+tasks:
+  - id: discover
+    title: Discover checkout race
+    description: Inspect the checkout session refresh path and failing tests.
+    status: queued
+    depends_on: []
+    agent_hint: planner
+    files_hint:
+      - src/checkout/session.ts
+      - src/checkout/session.test.ts
+    verification:
+      - rg "refreshSession|checkout" src
+  - id: patch
+    title: Serialize session refresh
+    description: Add the minimal locking or dedupe behavior needed to avoid token rotation races.
+    status: queued
+    depends_on:
+      - discover
+    agent_hint: coder
+    files_hint:
+      - src/checkout/session.ts
+    verification:
+      - pnpm test -- checkout
+  - id: review
+    title: Review and verify patch
+    description: Summarize the diff, run tests, and request user approval before applying final changes.
+    status: queued
+    depends_on:
+      - patch
+    agent_hint: verifier
+    files_hint: []
+    verification:
+      - git diff --stat
+      - pnpm test -- checkout
+acceptance_criteria:
+  - Checkout test suite passes.
+  - Diff explains the race fix clearly.
+  - No secrets are read or displayed.
+risks:
+  - Locking may hide a deeper payment retry issue.
+  - Tests may be flaky because of timers rather than session state.
+references:
+  - docs/ARCHITECTURE.md

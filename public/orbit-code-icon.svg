@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Orbit Code icon">
+  <defs>
+    <linearGradient id="bg" x1="42" y1="28" x2="214" y2="228" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2e3338"/>
+      <stop offset="1" stop-color="#151719"/>
+    </linearGradient>
+    <linearGradient id="orbit" x1="34" y1="82" x2="224" y2="170" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#d9f1ff"/>
+      <stop offset=".45" stop-color="#7db2ff"/>
+      <stop offset="1" stop-color="#3764b8"/>
+    </linearGradient>
+  </defs>
+  <rect x="14" y="14" width="228" height="228" rx="54" fill="url(#bg)"/>
+  <ellipse cx="128" cy="128" rx="88" ry="56" fill="none" stroke="url(#orbit)" stroke-width="8" transform="rotate(-18 128 128)"/>
+  <ellipse cx="128" cy="128" rx="74" ry="74" fill="none" stroke="#bde5ff" stroke-opacity=".38" stroke-width="4" transform="rotate(28 128 128)"/>
+  <rect x="74" y="82" width="108" height="92" rx="23" fill="#f7f9fb"/>
+  <path d="M102 112l-15 16 15 16" fill="none" stroke="#2c5caa" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M154 112l15 16-15 16" fill="none" stroke="#2c5caa" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="116" y="148" width="27" height="10" rx="5" fill="#2a2d30"/>
+  <circle cx="62" cy="80" r="10" fill="#fff"/>
+  <circle cx="199" cy="166" r="11" fill="#66c0ff"/>
+  <circle cx="177" cy="65" r="7" fill="#fff" opacity=".92"/>
+</svg>
