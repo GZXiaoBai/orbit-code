@@ -18,7 +18,7 @@
 //! ## Shell Execution
 //! | Command | Params | Returns | Description |
 //! |---------|--------|---------|-------------|
-//! | `run_command_async` | app:AppHandle, task_id:String, command:String, args:Vec\<String\>, sandbox_mode:String, workspace_path?:String | `()` | Async shell execution with 10s timeout + 50MB RSS guard. Emits `command-output` events |
+//! | `run_command_async` | app:AppHandle, task_id:String, command:String, args:Vec\<String\>, sandbox_mode:String, workspace_path?:String | `()` | Async shell execution with timeout + RSS guard. Emits `command-output` events |
 //! | `run_command_sync` | command:String, args:Vec\<String\>, sandbox_mode:String, workspace_path?:String | `String` | Synchronous shell execution with process monitoring |
 //!
 //! ## Patch Application
@@ -390,7 +390,7 @@ pub fn run_command_async(
 
         let monitor_handle = thread::spawn(move || {
             let start_time = std::time::Instant::now();
-            let limit_rss_increment = 50 * 1024 * 1024;
+            let limit_rss_increment = 512 * 1024 * 1024;
             let mut initial_rss = 0;
 
             for _ in 0..10 {
@@ -406,10 +406,10 @@ pub fn run_command_async(
                     break;
                 }
 
-                if start_time.elapsed().as_secs() >= 10 {
+                if start_time.elapsed().as_secs() >= 120 {
                     let _ = app_monitor.emit("command-output", serde_json::json!({
                         "taskId": task_id_monitor,
-                        "text": "\n[Verifier Guard] Error: Time Limit Exceeded (10s). Process killed.\n",
+                        "text": "\n[Verifier Guard] Error: Time Limit Exceeded (120s). Process killed.\n",
                         "done": false,
                         "exitCode": null
                     }));
@@ -426,7 +426,7 @@ pub fn run_command_async(
                     if initial_rss > 0 && rss > initial_rss + limit_rss_increment {
                         let _ = app_monitor.emit("command-output", serde_json::json!({
                                 "taskId": task_id_monitor,
-                                "text": format!("\n[Verifier Guard] Error: Resource Leak Detected (RSS increased by >50MB. Initial: {}MB, Current: {}MB). Process killed.\n", initial_rss / 1024 / 1024, rss / 1024 / 1024),
+                                "text": format!("\n[Verifier Guard] Error: Resource Limit Exceeded (RSS increased by >512MB. Initial: {}MB, Current: {}MB). Process killed.\n", initial_rss / 1024 / 1024, rss / 1024 / 1024),
                                 "done": false,
                                 "exitCode": null
                             }));

@@ -61,6 +61,7 @@ export interface AgentLoopCallbacks {
   onPatchProposed?: (params: ToolParams) => Promise<string>;
   getWorkspacePath?: () => string;
   getSecuritySettings?: () => { global?: SecuritySettings; project?: ProjectSecurityOverride };
+  getCommandSandboxMode?: () => string | undefined;
   getMaxIterations?: () => number;
   getAgentSettings?: () => AgentSettings | undefined;
   onError: (error: string) => void;
@@ -342,6 +343,7 @@ export class AgentLoopEngine {
             } else {
               result = await executeToolCall(toolName, tc.params, {
                 workspacePath: this.callbacks.getWorkspacePath?.() || "",
+                sandboxMode: this.callbacks.getCommandSandboxMode?.(),
               });
             }
             this.callbacks.onToolResult(tc.id, result);

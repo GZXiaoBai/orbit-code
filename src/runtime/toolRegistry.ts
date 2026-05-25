@@ -5,6 +5,7 @@ import { parseCommandLine } from "./commandParser";
 
 interface ToolExecutionContext {
   workspacePath?: string;
+  sandboxMode?: string;
 }
 
 function asString(value: unknown): string {
@@ -149,11 +150,11 @@ async function runCommandSyncFallback(params: ToolParams, context: ToolExecution
     return await invoke<string>("run_command_sync", {
       command,
       args,
-      sandboxMode: "restricted",
+      sandboxMode: context.sandboxMode || "none",
       workspacePath: context.workspacePath || "",
     });
-  } catch {
-    return "Error: run_command_sync not available. Use the Review dock for manual testing.";
+  } catch (e: any) {
+    return `Error running command: ${e?.message || String(e)}`;
   }
 }
 

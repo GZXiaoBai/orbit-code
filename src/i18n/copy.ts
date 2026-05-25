@@ -290,6 +290,8 @@ export const copy = {
       title: "后台命令控制台",
       executing: "EXECUTING",
       ready: "READY",
+      failed: "FAILED",
+      cancelled: "CANCELLED",
       waiting: "等待命令执行输出...\n",
     },
     diff: {
@@ -668,6 +670,8 @@ export const copy = {
       title: "Command console",
       executing: "EXECUTING",
       ready: "READY",
+      failed: "FAILED",
+      cancelled: "CANCELLED",
       waiting: "Waiting for command output...\n",
     },
     diff: {

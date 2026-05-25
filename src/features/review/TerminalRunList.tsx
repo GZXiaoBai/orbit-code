@@ -3,6 +3,13 @@ import type { TerminalRun } from "../../domain/terminalRun";
 import type { AppCopy } from "../../i18n/copy";
 import { EmptyState, StatusBadge } from "../../ui/primitives";
 
+function terminalStatusLabel(copy: AppCopy, run: TerminalRun): string {
+  if (run.status === "running") return copy.terminal.executing;
+  if (run.status === "failed") return copy.terminal.failed;
+  if (run.status === "cancelled") return copy.terminal.cancelled;
+  return copy.terminal.ready;
+}
+
 export function TerminalRunList({
   copy,
   runs,
@@ -22,7 +29,7 @@ export function TerminalRunList({
             <TerminalSquare size={15} />
             <strong>{[run.command, ...run.args].join(" ")}</strong>
             <StatusBadge tone={run.status === "running" ? "warning" : run.exitCode === 0 ? "success" : run.status === "failed" ? "danger" : "neutral"}>
-              {run.status === "running" ? copy.terminal.executing : copy.terminal.ready}
+              {terminalStatusLabel(copy, run)}
             </StatusBadge>
           </header>
           <small className="terminal-run-reason">

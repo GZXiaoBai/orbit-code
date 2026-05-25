@@ -346,6 +346,7 @@ export function useAgentRun({
       },
       getWorkspacePath: () => workspaceRoot,
       getSecuritySettings: () => ({ global: securitySettings, project: projectSecurityOverride }),
+      getCommandSandboxMode: () => securitySettings?.sandboxMode || providerSettings.sandboxMode || "none",
       getMaxIterations: () => providerSettings.agent?.maxIterations || 15,
       getAgentSettings: () => providerSettings.agent,
       onError: (error) => {

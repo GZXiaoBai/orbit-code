@@ -11,8 +11,8 @@ pub struct ProcessMonitorPolicy {
 impl Default for ProcessMonitorPolicy {
     fn default() -> Self {
         ProcessMonitorPolicy {
-            timeout_secs: 10,
-            max_memory_mb: 50,
+            timeout_secs: 120,
+            max_memory_mb: 512,
         }
     }
 }
