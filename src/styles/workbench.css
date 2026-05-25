@@ -1,4 +1,16 @@
 /* Native workbench surface */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .workbench-shell {
   height: 100dvh;
   min-height: 0;
@@ -319,6 +331,81 @@
 .recent-list small {
   color: var(--text-muted);
   font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.project-threads {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.project-threads header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.project-threads h2 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.project-threads header button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  color: var(--text-muted);
+}
+
+.project-threads header button:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.project-thread-list {
+  display: grid;
+  gap: 2px;
+}
+
+.project-thread-list > button {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  text-align: left;
+  transition: background var(--motion-menu), color var(--motion-menu), transform var(--motion-menu);
+}
+
+.project-thread-list > button:hover,
+.project-thread-list > button.active {
+  background: color-mix(in srgb, var(--surface-2) 78%, transparent);
+  color: var(--text-primary);
+  transform: translateX(2px);
+}
+
+.project-thread-list span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-thread-list small {
+  color: var(--text-muted);
   font-size: 10px;
 }
 
@@ -846,12 +933,44 @@
   padding-bottom: var(--space-3);
 }
 
+.dock-task header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.dock-task header > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
 .dock-task strong,
 .approval-request-card strong,
 .dock-diff-card strong,
 .dock-terminal strong {
   font-size: var(--font-size-sm);
   font-weight: 650;
+}
+
+.dock-task strong {
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.dock-task header small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-task .ui-select-menu {
+  width: auto;
+  min-width: 86px;
 }
 
 .dock-terminal header {
@@ -1164,7 +1283,6 @@
 .ui-select-popover {
   position: absolute;
   right: 0;
-  bottom: calc(100% + 8px);
   z-index: 70;
   min-width: max(100%, 220px);
   max-width: min(420px, calc(100vw - 28px));
@@ -1177,6 +1295,16 @@
   box-shadow: 0 16px 40px color-mix(in srgb, #000 24%, transparent);
   animation: menu-pop var(--motion-menu);
   transform-origin: bottom right;
+}
+
+.ui-select-popover-above {
+  bottom: calc(100% + 8px);
+  transform-origin: bottom right;
+}
+
+.ui-select-popover-below {
+  top: calc(100% + 8px);
+  transform-origin: top right;
 }
 
 .settings-row .ui-select-popover,

@@ -27,6 +27,24 @@ import type { ApprovalRequest } from "./useApprovalQueue";
 export type { AgentEvent } from "../domain/agentEvents";
 export type { ImportedPlanState, ImportErrorState, ProviderSettings } from "./useSession";
 
+const THREAD_SNAPSHOTS_KEY = "orbit-code.thread-snapshots.v1";
+
+interface ThreadSnapshot {
+  importedPlan: ImportedPlanState | null;
+  agentEvents: AgentEvent[];
+  updatedAt: string;
+}
+
+function loadThreadSnapshots(): Record<string, ThreadSnapshot> {
+  try {
+    const raw = localStorage.getItem(THREAD_SNAPSHOTS_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, ThreadSnapshot>;
+  } catch {
+    return {};
+  }
+}
+
 export function useWorkspace() {
   const session = useSession();
 
@@ -97,10 +115,10 @@ export function useWorkspace() {
   }, []);
 
   useEffect(() => {
-    if (session.importedPlan && !session.isLoading && (!session.loadedAgentEvents || session.loadedAgentEvents.length === 0)) {
+    if (session.importedPlan && !session.isLoading && agentEvents.length === 0 && (!session.loadedAgentEvents || session.loadedAgentEvents.length === 0)) {
       startCollaborationFlow(session.importedPlan);
     }
-  }, [session.importedPlan?.plan?.title, session.isLoading, session.loadedAgentEvents, startCollaborationFlow]);
+  }, [agentEvents.length, session.importedPlan?.plan?.title, session.isLoading, session.loadedAgentEvents, startCollaborationFlow]);
 
   const terminalLogsRef = useRef<Record<string, string>>({});
 
@@ -273,7 +291,49 @@ export function useWorkspace() {
   }, [triggerSelfHealing]);
 
   const fs = useFileSystem(session.providerSettings, session.updateTask, handleCommandComplete, session.loadedTerminalRuns || []);
-  const threadUi = useThreadUiState(fs.workspaceRoot, session.activeTitle || "default-thread");
+  const threadUi = useThreadUiState(fs.workspaceRoot, "default-thread");
+  const [threadSnapshots, setThreadSnapshots] = useState<Record<string, ThreadSnapshot>>(() => loadThreadSnapshots());
+
+  useEffect(() => {
+    localStorage.setItem(THREAD_SNAPSHOTS_KEY, JSON.stringify(threadSnapshots));
+  }, [threadSnapshots]);
+
+  const persistCurrentThreadSnapshot = useCallback((threadId = threadUi.threadId) => {
+    if (!threadId) return;
+    setThreadSnapshots((prev) => ({
+      ...prev,
+      [threadId]: {
+        importedPlan: session.importedPlan,
+        agentEvents: agentEventsRef.current,
+        updatedAt: new Date().toISOString(),
+      },
+    }));
+  }, [session.importedPlan, threadUi.threadId]);
+
+  const restoreThreadSnapshot = useCallback((threadId: string) => {
+    const snapshot = threadSnapshots[threadId];
+    approvalQueue.cancelPendingApprovals();
+    questionQueue.cancelPendingQuestions();
+    session.restoreImportedPlan(snapshot?.importedPlan ?? null);
+    setAgentEvents(snapshot?.agentEvents ?? []);
+  }, [approvalQueue, questionQueue, session, threadSnapshots]);
+
+  const createThread = useCallback(() => {
+    persistCurrentThreadSnapshot();
+    const nextThreadId = threadUi.createThread();
+    approvalQueue.cancelPendingApprovals();
+    questionQueue.cancelPendingQuestions();
+    session.restoreImportedPlan(null);
+    setAgentEvents([]);
+    return nextThreadId;
+  }, [approvalQueue, persistCurrentThreadSnapshot, questionQueue, session, threadUi]);
+
+  const switchThread = useCallback((nextThreadId: string) => {
+    if (!nextThreadId || nextThreadId === threadUi.threadId) return;
+    persistCurrentThreadSnapshot();
+    threadUi.switchThread(nextThreadId);
+    restoreThreadSnapshot(nextThreadId);
+  }, [persistCurrentThreadSnapshot, restoreThreadSnapshot, threadUi]);
 
   useEffect(() => {
     const resumeKind = session.loadedAgentRunSession?.resumeKind;
@@ -331,12 +391,13 @@ export function useWorkspace() {
   useEffect(() => { terminalLogsRef.current = fs.terminalLogs; }, [fs.terminalLogs]);
 
   const setWorkspaceRoot = useCallback(async (path: string) => {
+    persistCurrentThreadSnapshot();
     const ok = await fs.setWorkspaceRoot(path);
     if (ok) {
       await projectStore.rememberProject(path);
     }
     return ok;
-  }, [fs, projectStore]);
+  }, [fs, persistCurrentThreadSnapshot, projectStore]);
 
   useEffect(() => {
     if (restoredRecentWorkspaceRef.current) return;
@@ -520,7 +581,7 @@ export function useWorkspace() {
     const timer = setTimeout(() => {
       sessionStore.saveSession({
         activeProjectId: "default",
-        activeThreadId: "default",
+        activeThreadId: threadUi.threadId,
         importedPlan: session.importedPlan,
         providerSettings: session.providerSettings,
         agentEvents,
@@ -532,7 +593,11 @@ export function useWorkspace() {
       }).catch(console.error);
     }, 2000);
     return () => clearTimeout(timer);
-  }, [session.importedPlan, session.providerSettings, agentEvents, agentRun.agentRunSession, approvalQueue.approvalRequests, questionQueue.questionRequests, fs.terminalRuns, session.isLoading]);
+  }, [session.importedPlan, session.providerSettings, agentEvents, agentRun.agentRunSession, approvalQueue.approvalRequests, questionQueue.questionRequests, fs.terminalRuns, session.isLoading, threadUi.threadId]);
+
+  useEffect(() => {
+    persistCurrentThreadSnapshot();
+  }, [agentEvents, persistCurrentThreadSnapshot, session.importedPlan]);
 
   return {
     // From session
@@ -620,6 +685,10 @@ export function useWorkspace() {
     usageSnapshot: buildUsageSnapshot(fs.terminalRuns),
     threadId: threadUi.threadId,
     threadUiState: threadUi.threadUiState,
+    threadList: threadUi.threadList,
+    threadsByProject: threadUi.threadsByProject,
+    createThread,
+    switchThread,
     updateThreadUiState: threadUi.updateThreadUiState,
     togglePinnedThread: threadUi.togglePinnedThread,
     renameThread: threadUi.renameThread,

@@ -334,12 +334,35 @@ function getMockResponse(system: string, _user: string): string {
       ],
       tasks: [
         {
-          id: "task-sidebar-1",
-          title: "优化 App.tsx 的加载画面",
-          description: "在 App.tsx 中将原本粗糙的 Loading 状态升级为带环形加载指示和暗色主题适配的高级画面。",
+          id: "task-audit-current-state",
+          title: "审查当前工作台状态",
+          description: "先阅读入口布局、侧边栏、审查台和样式 token，确认哪些 UI 状态已经接入，哪些仍是演示或过时路径。推荐先保守收敛现有结构，不新增大型 UI 框架；备选是重写 Shell，但风险更高。",
           verification: ["npm run build"],
-          filesHint: ["src/App.tsx"]
+          filesHint: ["src/App.tsx", "src/styles/workbench.css"]
+        },
+        {
+          id: "task-implement-focused-fix",
+          title: "实现最小可验证改动",
+          description: "围绕用户描述的核心问题修改对应组件、状态和文案，保持命令审批、Patch 审查和文件预览路径不破坏。若需要产品选择，默认采用更安全、可回滚的实现，并在计划风险里标明需要用户确认的选项。",
+          verification: ["npm test -- --run", "npm run build"],
+          filesHint: ["src/state/useWorkspace.ts", "src/components", "src/features"]
+        },
+        {
+          id: "task-validate-regression",
+          title: "验证核心回归",
+          description: "运行受影响层测试并检查桌面工作台关键路径：打开项目、切换对话、Plan/Build、审查台、文件预览和主题。失败时优先修复 P0/P1，再记录仍需下一轮处理的功能差距。",
+          verification: ["npm run test:e2e"],
+          filesHint: ["e2e"]
         }
+      ],
+      acceptanceCriteria: [
+        "计划以用户输入语言输出，包含推荐选择、替代方案和明确验证命令。",
+        "每个任务都有可执行描述、影响文件提示和验收方式。",
+        "未知信息以假设或待确认问题呈现，而不是生成空泛步骤。"
+      ],
+      risks: [
+        "如果项目类型未知，验证命令需要先通过 package.json 或构建文件确认。",
+        "如果用户要求涉及写文件或命令执行，Build 阶段仍必须走审批和审查台。"
       ]
     });
   } else {
@@ -522,8 +545,11 @@ You must output a single JSON object matching this schema. Do NOT wrap it in HTM
 
 Planning rules:
 - Write the plan in the same natural language as the user's request. If the user writes Chinese, every title, goal, task, risk, and acceptance criterion must be Chinese. If the user writes English, use English.
+- Before locking the implementation, infer the likely open questions a senior coding agent should ask. Put them in constraints or risks as explicit "需要用户确认/Assumption" items, and when possible recommend a default option.
+- When there are multiple credible approaches, include choices in the task descriptions: list the recommended path first, then alternatives and tradeoffs. Do not ask the user to choose unless the choice affects scope, safety, or product behavior.
+- Produce Codex-like planning depth: summary-level goals, concrete deliverables, architecture/interface changes, UI/UX behavior, tests, validation commands, assumptions, and rollback or failure notes when relevant.
 - Be specific enough for a coding agent to execute without guessing: include implementation scope, affected surfaces, data/state changes, tests, validation commands, and risks.
-- Prefer 5-10 concrete tasks for non-trivial requests. Do not collapse the work into vague steps like "implement feature".
+- Prefer 7-14 concrete tasks for non-trivial requests. Do not collapse the work into vague steps like "implement feature".
 - Each task title should be short, but its details/description should explain the exact expected outcome.
 - Include acceptanceCriteria and risks whenever the request changes product behavior or local files.
 - Verification commands must be realistic for the detected project. If unknown, propose safe discovery commands first.

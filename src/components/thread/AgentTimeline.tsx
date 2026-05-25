@@ -53,6 +53,7 @@ export function AgentTimeline({
           {onStartAgentLoop && !agentLoopRunning && (
             <button className="restart-flow-btn agent-loop-btn" onClick={onStartAgentLoop} title={copy.thread.startAgentLoopTitle}>
               <Play size={12} />
+              <span className="sr-only">Agent Loop</span>
               <span>{copy.thread.agentLoop}</span>
             </button>
           )}

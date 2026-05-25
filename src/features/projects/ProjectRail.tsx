@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Archive, FolderOpen, MoreHorizontal, Pin, RefreshCcw, Search, Settings, SquarePen, Gauge, ExternalLink, Pencil, Trash2 } from "lucide-react";
+import { Archive, FolderOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Pin, RefreshCcw, Search, Settings, SquarePen, Gauge, ExternalLink, Pencil, Trash2 } from "lucide-react";
 import type { ProjectMenuState } from "../../domain/types";
 import type { AppCopy } from "../../i18n/copy";
 import type { useWorkspace } from "../../state/useWorkspace";
@@ -202,6 +202,32 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
         )}
       </section>
 
+      {workspace.workspaceRoot ? (
+        <section className="project-threads" aria-label={copy.workbench.projectThreads}>
+          <header>
+            <h2>{copy.workbench.projectThreads}</h2>
+            <button type="button" onClick={() => workspace.createThread()} title={copy.workbench.newThread}>
+              <MessageSquarePlus size={14} />
+            </button>
+          </header>
+          <div className="project-thread-list">
+            {workspace.threadList.map((thread) => (
+              <button
+                key={thread.threadId}
+                type="button"
+                className={workspace.threadId === thread.threadId ? "active" : ""}
+                onClick={() => workspace.switchThread(thread.threadId)}
+                title={thread.title || copy.workbench.untitledThread}
+              >
+                <MessageSquare size={13} />
+                <span>{thread.title || copy.workbench.untitledThread}</span>
+                <small>{formatThreadAge(thread.updatedAt)}</small>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="rail-files">
         <div className="rail-search">
           <Search size={14} />
@@ -249,4 +275,16 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
       </footer>
     </aside>
   );
+}
+
+function formatThreadAge(updatedAt?: string): string {
+  if (!updatedAt) return "";
+  const time = new Date(updatedAt).getTime();
+  if (!Number.isFinite(time) || time <= 0) return "";
+  const diff = Date.now() - time;
+  const minutes = Math.max(1, Math.round(diff / 60000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
 }

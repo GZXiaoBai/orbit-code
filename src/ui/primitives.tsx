@@ -131,6 +131,7 @@ export function SelectMenu({
   const id = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
+  const [placement, setPlacement] = useState<"above" | "below">("above");
   const [activeIndex, setActiveIndex] = useState(() => Math.max(0, options.findIndex((option) => option.value === value)));
   const selected = options.find((option) => option.value === value) || options[0];
 
@@ -154,6 +155,19 @@ export function SelectMenu({
     setActiveIndex(Math.max(0, options.findIndex((option) => option.value === value)));
   }, [options, value]);
 
+  const updatePlacement = () => {
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    setPlacement(spaceBelow >= 220 || spaceBelow >= spaceAbove ? "below" : "above");
+  };
+
+  const openMenu = () => {
+    updatePlacement();
+    setOpen(true);
+  };
+
   const commit = (option: SelectMenuOption) => {
     if (option.disabled) return;
     onChange(option.value);
@@ -164,7 +178,7 @@ export function SelectMenu({
     if (options.length === 0) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      setOpen(true);
+      openMenu();
       setActiveIndex((current) => {
         const delta = event.key === "ArrowDown" ? 1 : -1;
         const next = (current + delta + options.length) % options.length;
@@ -177,7 +191,7 @@ export function SelectMenu({
         const option = options[activeIndex] || options[0];
         if (option) commit(option);
       }
-      else setOpen(true);
+      else openMenu();
     }
   };
 
@@ -190,7 +204,10 @@ export function SelectMenu({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={`${id}-listbox`}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          if (open) setOpen(false);
+          else openMenu();
+        }}
         onKeyDown={onKeyDown}
       >
         {icon ? <span className="ui-select-icon">{icon}</span> : null}
@@ -198,7 +215,7 @@ export function SelectMenu({
         <ChevronDown size={14} />
       </button>
       {open ? (
-        <div className="ui-select-popover" role="listbox" id={`${id}-listbox`} aria-label={ariaLabel}>
+        <div className={`ui-select-popover ui-select-popover-${placement}`} role="listbox" id={`${id}-listbox`} aria-label={ariaLabel}>
           {options.map((option, index) => (
             <button
               key={option.value}

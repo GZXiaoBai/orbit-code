@@ -75,6 +75,7 @@ export interface SessionState {
   loadedTerminalRuns: TerminalRun[] | null;
 
   importPlan: (source: string, fileName?: string) => Promise<boolean>;
+  restoreImportedPlan: (plan: ImportedPlanState | null) => void;
   clearImportedPlan: () => void;
   updateTask: (taskId: string, updates: Partial<PlanTask>) => void;
   addTask: (task: PlanTask) => void;
@@ -354,6 +355,8 @@ export function useSession(): SessionState {
               "Analyze the following coding request and generate a detailed Orbit Code plan.",
               "Use the same language as the user's request for all user-facing plan content.",
               "The plan must be detailed enough for a coding agent to execute with Review Dock approvals and verification.",
+              "Include a Summary, deliverables, choices with a recommended default, assumptions/questions for the user, implementation tasks, UI/UX notes when relevant, public interfaces, test plan, and risks.",
+              "If information is missing, do not produce a tiny plan. State the recommended assumption and the exact question the Agent should ask next in the plan constraints/risks.",
               "",
               source,
             ].join("\n"),
@@ -426,6 +429,12 @@ export function useSession(): SessionState {
     tauriWorkspaceStorage.clear().catch(console.error);
   }, []);
 
+  const restoreImportedPlan = useCallback((plan: ImportedPlanState | null) => {
+    setImportedPlan(plan);
+    setImportError(null);
+    tauriWorkspaceStorage.save({ importedPlan: plan }).catch(console.error);
+  }, []);
+
   const updateProviderSettings = useCallback(async (newSettings: ProviderSettings) => {
     const normalized = normalizeProviderSettings(newSettings);
     setProviderSettings(normalized);
@@ -470,6 +479,7 @@ export function useSession(): SessionState {
     loadedQuestionRequests,
     loadedTerminalRuns,
     importPlan,
+    restoreImportedPlan,
     clearImportedPlan,
     updateTask,
     addTask,
