@@ -839,7 +839,7 @@
   color: var(--text-secondary);
   font-size: var(--font-size-xs);
   font-weight: 750;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 .dock-task {
@@ -852,6 +852,18 @@
 .dock-terminal strong {
   font-size: var(--font-size-sm);
   font-weight: 650;
+}
+
+.dock-terminal header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.dock-terminal strong {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dock-task p {
@@ -968,10 +980,13 @@
 
 .patch-sandbox-path {
   display: block;
+  overflow: hidden;
   padding: 0 var(--space-3) var(--space-2);
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .patch-sandbox-output {

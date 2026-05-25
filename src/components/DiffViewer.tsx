@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { Check, Columns, FileCode, Play, AlertCircle } from "lucide-react";
 import type { AppCopy } from "../i18n/copy";
-import { computeLineDiff } from "../utils/diff";
+import { computeLineDiff, type DiffChange } from "../utils/diff";
 
 interface DiffPatch {
   path: string;
@@ -34,6 +34,30 @@ interface NormalBlock {
 }
 
 type ParsedBlock = NormalBlock | ConflictBlock;
+
+interface ContextRow {
+  kind: "context";
+  count: number;
+}
+
+interface ChangeRow {
+  kind: "change";
+  change: DiffChange;
+}
+
+type InlineRow = ContextRow | ChangeRow;
+
+interface SplitPairRow {
+  kind: "pair";
+  left?: DiffChange;
+  right?: DiffChange;
+  normal?: boolean;
+}
+
+type SplitRow = ContextRow | SplitPairRow;
+
+const KEYWORD_RE = /\b(?:await|async|break|case|catch|class|const|continue|default|describe|else|enum|export|extends|false|finally|for|from|function|if|import|interface|it|let|new|null|return|switch|test|throw|true|try|type|undefined|var|while|expect)\b/g;
+const TOKEN_RE = /(\/\/.*$|\/\*.*?\*\/|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|`(?:\\.|[^`])*`|\b(?:await|async|break|case|catch|class|const|continue|default|describe|else|enum|export|extends|false|finally|for|from|function|if|import|interface|it|let|new|null|return|switch|test|throw|true|try|type|undefined|var|while|expect)\b|\b\d+(?:\.\d+)?\b|[{}()[\].,:;=+\-*/<>!?&|]+)/g;
 
 function parseConflicts(content: string): ParsedBlock[] {
   const lines = content.split("\n");
@@ -94,6 +118,134 @@ function parseConflicts(content: string): ParsedBlock[] {
   return blocks;
 }
 
+function countPatchStats(patch: DiffPatch | undefined) {
+  if (!patch || patch.hasConflict) return { additions: 0, deletions: 0 };
+  return computeLineDiff(patch.oldContent, patch.newContent).reduce(
+    (acc, change) => {
+      if (change.type === "added") acc.additions += 1;
+      if (change.type === "removed") acc.deletions += 1;
+      return acc;
+    },
+    { additions: 0, deletions: 0 },
+  );
+}
+
+function compactInlineRows(changes: DiffChange[], context = 3, minCollapse = 10): InlineRow[] {
+  const rows: InlineRow[] = [];
+  let index = 0;
+
+  while (index < changes.length) {
+    const change = changes[index];
+    if (change.type !== "normal") {
+      rows.push({ kind: "change", change });
+      index += 1;
+      continue;
+    }
+
+    const start = index;
+    while (index < changes.length && changes[index].type === "normal") {
+      index += 1;
+    }
+
+    const block = changes.slice(start, index);
+    if (block.length > minCollapse) {
+      block.slice(0, context).forEach((item) => rows.push({ kind: "change", change: item }));
+      rows.push({ kind: "context", count: block.length - context * 2 });
+      block.slice(-context).forEach((item) => rows.push({ kind: "change", change: item }));
+    } else {
+      block.forEach((item) => rows.push({ kind: "change", change: item }));
+    }
+  }
+
+  return rows;
+}
+
+function pairDiffChanges(changes: DiffChange[]): SplitPairRow[] {
+  const rows: SplitPairRow[] = [];
+  let index = 0;
+
+  while (index < changes.length) {
+    const change = changes[index];
+    if (change.type === "normal") {
+      rows.push({ kind: "pair", left: change, right: change, normal: true });
+      index += 1;
+    } else if (change.type === "removed") {
+      if (index + 1 < changes.length && changes[index + 1].type === "added") {
+        rows.push({ kind: "pair", left: change, right: changes[index + 1] });
+        index += 2;
+      } else {
+        rows.push({ kind: "pair", left: change });
+        index += 1;
+      }
+    } else {
+      rows.push({ kind: "pair", right: change });
+      index += 1;
+    }
+  }
+
+  return rows;
+}
+
+function compactSplitRows(rows: SplitPairRow[], context = 3, minCollapse = 10): SplitRow[] {
+  const compacted: SplitRow[] = [];
+  let index = 0;
+
+  while (index < rows.length) {
+    const row = rows[index];
+    if (!row.normal) {
+      compacted.push(row);
+      index += 1;
+      continue;
+    }
+
+    const start = index;
+    while (index < rows.length && rows[index].normal) {
+      index += 1;
+    }
+
+    const block = rows.slice(start, index);
+    if (block.length > minCollapse) {
+      compacted.push(...block.slice(0, context));
+      compacted.push({ kind: "context", count: block.length - context * 2 });
+      compacted.push(...block.slice(-context));
+    } else {
+      compacted.push(...block);
+    }
+  }
+
+  return compacted;
+}
+
+function renderCodeLine(value: string) {
+  const parts: Array<{ text: string; type?: string }> = [];
+  let lastIndex = 0;
+
+  for (const match of value.matchAll(TOKEN_RE)) {
+    const text = match[0];
+    const index = match.index ?? 0;
+    if (index > lastIndex) parts.push({ text: value.slice(lastIndex, index) });
+
+    let type = "punctuation";
+    if (text.startsWith("//") || text.startsWith("/*")) type = "comment";
+    else if (text.startsWith("\"") || text.startsWith("'") || text.startsWith("`")) type = "string";
+    else if (/^\d/.test(text)) type = "number";
+    else if (KEYWORD_RE.test(text)) type = "keyword";
+    KEYWORD_RE.lastIndex = 0;
+
+    parts.push({ text, type });
+    lastIndex = index + text.length;
+  }
+
+  if (lastIndex < value.length) parts.push({ text: value.slice(lastIndex) });
+  if (parts.length === 0) return "\u00a0";
+
+  return parts.map((part, index) => (
+    <span key={`${part.text}-${index}`} className={part.type ? `code-token code-token-${part.type}` : undefined}>
+      {part.text}
+    </span>
+  ));
+}
+
 export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: DiffViewerProps) {
   const [selectedFileIdx, setSelectedFileIdx] = useState(0);
   const [isSplit, setIsSplit] = useState(false);
@@ -110,6 +262,18 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
     if (!currentPatch || currentPatch.hasConflict) return [];
     return computeLineDiff(currentPatch.oldContent, currentPatch.newContent);
   }, [currentPatch]);
+  const inlineRows = useMemo(() => compactInlineRows(diffChanges), [diffChanges]);
+  const splitRows = useMemo(() => compactSplitRows(pairDiffChanges(diffChanges)), [diffChanges]);
+  const currentStats = useMemo(() => countPatchStats(currentPatch), [currentPatch]);
+  const totalStats = useMemo(() => patches.reduce(
+    (acc, patch) => {
+      const stats = countPatchStats(patch);
+      acc.additions += stats.additions;
+      acc.deletions += stats.deletions;
+      return acc;
+    },
+    { additions: 0, deletions: 0 },
+  ), [patches]);
 
   const allApplied = patches.every((p) => p.applied);
 
@@ -129,7 +293,17 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
   const renderInline = () => {
     return (
       <div className="diff-inline-view">
-        {diffChanges.map((change, index) => {
+        {inlineRows.map((row, index) => {
+          if (row.kind === "context") {
+            return (
+              <div key={`context-${index}`} className="diff-row diff-context-row">
+                <div className="diff-context-spacer" />
+                <span>{row.count} {copy.diff.unchangedLines}</span>
+              </div>
+            );
+          }
+
+          const change = row.change;
           let lineClass = "diff-line-normal";
           let prefix = " ";
           if (change.type === "added") {
@@ -149,7 +323,7 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
                 {change.newLineNumber !== undefined ? change.newLineNumber : ""}
               </div>
               <div className="diff-prefix">{prefix}</div>
-              <pre className="diff-code-content">{change.value}</pre>
+              <pre className="diff-code-content">{renderCodeLine(change.value)}</pre>
             </div>
           );
         })}
@@ -159,82 +333,37 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
 
   // 渲染双栏 (Split) 视图
   const renderSplit = () => {
-    const leftRows: any[] = [];
-    const rightRows: any[] = [];
-
-    let i = 0;
-    while (i < diffChanges.length) {
-      const change = diffChanges[i];
-      if (change.type === "normal") {
-        leftRows.push(change);
-        rightRows.push(change);
-        i++;
-      } else if (change.type === "removed") {
-        leftRows.push(change);
-        if (i + 1 < diffChanges.length && diffChanges[i + 1].type === "added") {
-          rightRows.push(diffChanges[i + 1]);
-          i += 2;
-        } else {
-          rightRows.push({ type: "empty" });
-          i++;
-        }
-      } else if (change.type === "added") {
-        leftRows.push({ type: "empty" });
-        rightRows.push(change);
-        i++;
-      }
-    }
-
     return (
       <div className="diff-split-view">
-        <div className="diff-split-pane left-pane">
-          <div className="pane-header">{copy.diff.original}</div>
-          <div className="pane-body">
-            {leftRows.map((row, idx) => {
-              if (row.type === "empty") {
-                return (
-                  <div key={idx} className="diff-row diff-line-empty">
-                    <div className="diff-ln">&nbsp;</div>
-                    <div className="diff-prefix">&nbsp;</div>
-                    <pre className="diff-code-content">&nbsp;</pre>
-                  </div>
-                );
-              }
-              const isRem = row.type === "removed";
-              return (
-                <div key={idx} className={`diff-row ${isRem ? "diff-line-removed" : "diff-line-normal"}`}>
-                  <div className="diff-ln">{row.oldLineNumber}</div>
-                  <div className="diff-prefix">{isRem ? "-" : " "}</div>
-                  <pre className="diff-code-content">{row.value}</pre>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-        <div className="diff-split-pane right-pane">
-          <div className="pane-header">{copy.diff.modified}</div>
-          <div className="pane-body">
-            {rightRows.map((row, idx) => {
-              if (row.type === "empty") {
-                return (
-                  <div key={idx} className="diff-row diff-line-empty">
-                    <div className="diff-ln">&nbsp;</div>
-                    <div className="diff-prefix">&nbsp;</div>
-                    <pre className="diff-code-content">&nbsp;</pre>
-                  </div>
-                );
-              }
-              const isAdd = row.type === "added";
-              return (
-                <div key={idx} className={`diff-row ${isAdd ? "diff-line-added" : "diff-line-normal"}`}>
-                  <div className="diff-ln">{row.newLineNumber}</div>
-                  <div className="diff-prefix">{isAdd ? "+" : " "}</div>
-                  <pre className="diff-code-content">{row.value}</pre>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <div className="pane-header left-pane">{copy.diff.original}</div>
+        <div className="pane-header right-pane">{copy.diff.modified}</div>
+        {splitRows.map((row, idx) => {
+          if (row.kind === "context") {
+            return (
+              <div key={`split-context-${idx}`} className="diff-split-context-row">
+                <span>{row.count} {copy.diff.unchangedLines}</span>
+              </div>
+            );
+          }
+
+          const leftClass = row.left?.type === "removed" ? "diff-line-removed" : row.left ? "diff-line-normal" : "diff-line-empty";
+          const rightClass = row.right?.type === "added" ? "diff-line-added" : row.right ? "diff-line-normal" : "diff-line-empty";
+
+          return (
+            <div key={`split-row-${idx}`} className="diff-split-row">
+              <div className={`diff-row ${leftClass}`}>
+                <div className="diff-ln">{row.left?.oldLineNumber ?? ""}</div>
+                <div className="diff-prefix">{row.left?.type === "removed" ? "-" : " "}</div>
+                <pre className="diff-code-content">{row.left ? renderCodeLine(row.left.value) : "\u00a0"}</pre>
+              </div>
+              <div className={`diff-row ${rightClass}`}>
+                <div className="diff-ln">{row.right?.newLineNumber ?? ""}</div>
+                <div className="diff-prefix">{row.right?.type === "added" ? "+" : " "}</div>
+                <pre className="diff-code-content">{row.right ? renderCodeLine(row.right.value) : "\u00a0"}</pre>
+              </div>
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -355,6 +484,11 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
   return (
     <section className="diff-viewer-card">
       <div className="diff-tabs-bar">
+        <div className="diff-summary-pill">
+          <span>{patches.length} {copy.diff.changedFiles}</span>
+          <strong className="diff-additions">+{totalStats.additions}</strong>
+          <strong className="diff-deletions">-{totalStats.deletions}</strong>
+        </div>
         {patches.map((p, idx) => {
           const fileName = p.path.split("/").pop() || p.path;
           return (
@@ -375,6 +509,10 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
         <div className="diff-file-info">
           <FileCode size={16} className="text-muted-foreground" />
           <span className="diff-filename">{currentPatch.path}</span>
+          <span className="diff-file-stats">
+            <strong className="diff-additions">+{currentStats.additions}</strong>
+            <strong className="diff-deletions">-{currentStats.deletions}</strong>
+          </span>
         </div>
         {!currentPatch.hasConflict && (
           <button

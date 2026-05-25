@@ -39,6 +39,7 @@ export function useWorkspace() {
   const healingAttemptsRef = useRef(healingAttempts);
   const timerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const restoredWaitNoticeRef = useRef(false);
+  const restoredRecentWorkspaceRef = useRef(false);
 
   useEffect(() => { agentEventsRef.current = agentEvents; }, [agentEvents]);
   useEffect(() => { isRealLLMActiveRef.current = session.isRealLLMActive; }, [session.isRealLLMActive]);
@@ -277,6 +278,14 @@ export function useWorkspace() {
   useEffect(() => {
     const resumeKind = session.loadedAgentRunSession?.resumeKind;
     if (!resumeKind || restoredWaitNoticeRef.current) return;
+    const existingEvents = (session.loadedAgentEvents as AgentEvent[] | null | undefined) || agentEventsRef.current;
+    const alreadyNoted = existingEvents.some((event) =>
+      event.name === "Recovered Waiting State" && event.message.includes(`：${resumeKind}`)
+    );
+    if (alreadyNoted) {
+      restoredWaitNoticeRef.current = true;
+      return;
+    }
     restoredWaitNoticeRef.current = true;
     addAgentEvent({
       id: `resume-${Date.now()}`,
@@ -286,7 +295,7 @@ export function useWorkspace() {
       message: `已恢复上次未完成的等待操作：${resumeKind}。请在 Review Dock 中继续处理。`,
       timestamp: new Date().toLocaleTimeString(),
     });
-  }, [addAgentEvent, session.loadedAgentRunSession?.resumeKind]);
+  }, [addAgentEvent, session.loadedAgentEvents, session.loadedAgentRunSession?.resumeKind]);
 
   const projectSecurityOverride = useMemo(() => {
     if (!fs.workspaceRoot) return undefined;
@@ -328,6 +337,29 @@ export function useWorkspace() {
     }
     return ok;
   }, [fs, projectStore]);
+
+  useEffect(() => {
+    if (restoredRecentWorkspaceRef.current) return;
+    if (fs.workspaceRoot) {
+      restoredRecentWorkspaceRef.current = true;
+      return;
+    }
+    if (session.isLoading || projectStore.isLoadingProjects) return;
+    if (session.providerSettings.general?.openLastWorkspace === false) return;
+
+    const lastProjectPath = projectStore.recentProjects[0]?.workspacePath;
+    if (!lastProjectPath) return;
+
+    restoredRecentWorkspaceRef.current = true;
+    void setWorkspaceRoot(lastProjectPath);
+  }, [
+    fs.workspaceRoot,
+    projectStore.isLoadingProjects,
+    projectStore.recentProjects,
+    session.isLoading,
+    session.providerSettings.general?.openLastWorkspace,
+    setWorkspaceRoot,
+  ]);
 
   const requestPostPatchVerification = useCallback((eventId: string) => {
     const task = session.importedPlan?.plan.tasks.find(t => t.status !== "done" && t.status !== "verified" && t.verification?.some(Boolean))

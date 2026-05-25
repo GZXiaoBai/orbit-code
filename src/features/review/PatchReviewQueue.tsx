@@ -2,6 +2,7 @@ import { GitPullRequestArrow } from "lucide-react";
 import type { AgentEvent, AgentEventPatch } from "../../domain/agentEvents";
 import type { AppCopy } from "../../i18n/copy";
 import { DiffViewer } from "../../components/DiffViewer";
+import { localizedAgentEventName, localizedRuntimeText } from "../../components/thread/agentDisplayText";
 import { patchApplySummary, patchSandboxSummary } from "./reviewCardUtils";
 
 export function PatchReviewQueue({
@@ -33,7 +34,7 @@ export function PatchReviewQueue({
             <header>
               <div>
                 <GitPullRequestArrow size={15} />
-                <strong>{event.name}</strong>
+                <strong>{localizedAgentEventName(copy, event.name)}</strong>
               </div>
               <small>{event.timestamp}</small>
             </header>
@@ -46,7 +47,7 @@ export function PatchReviewQueue({
               </span>
             </div>
             {sandboxPath ? <small className="patch-sandbox-path">{sandboxPath}</small> : null}
-            {sandboxOutput ? <pre className="patch-sandbox-output">{sandboxOutput}</pre> : null}
+            {sandboxOutput ? <pre className="patch-sandbox-output">{localizedRuntimeText(copy, sandboxOutput)}</pre> : null}
             <DiffViewer
               copy={copy}
               patches={event.patches || []}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, FileCode2, GitPullRequestArrow, ListChecks, ShieldCheck, X } from "lucide-react";
 import type { PlanTask, TaskStatus } from "../../domain/types";
 import type { Theme } from "../../domain/types";
@@ -14,6 +14,7 @@ import { QuestionQueue } from "./QuestionQueue";
 import { TerminalRunList } from "./TerminalRunList";
 import { VerificationQueue } from "./VerificationQueue";
 import { statusTone } from "./reviewCardUtils";
+import { localizedAgentEventName, localizedRuntimeText } from "../../components/thread/agentDisplayText";
 
 type WorkspaceState = ReturnType<typeof useWorkspace>;
 type DockTab = "files" | "tasks" | "changes" | "terminal";
@@ -26,6 +27,7 @@ interface ReviewDockProps {
 
 export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
   const [activeTab, setActiveTab] = useState<DockTab>("files");
+  const didAutoSelectTab = useRef(false);
   const model = workspace.reviewDockModel;
   const filePreview = useFilePreview(workspace.activeFilePath, workspace.activeFileContent);
   const tasks = workspace.importedPlan?.plan.tasks ?? [];
@@ -50,13 +52,32 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
     startedAt: "",
     completedAt: undefined,
   }));
+  const failedTerminalCount = terminalEntries.filter((run) => run.status === "failed" || (run.exitCode !== null && run.exitCode !== 0)).length;
+  const activeChangeSteps = useMemo(
+    () => workspace.runSteps
+      .filter((step) => (step.kind === "command" || step.kind === "patch") && step.status !== "done")
+      .slice(-4),
+    [workspace.runSteps],
+  );
+  const headerStatus = reviewHeaderStatus(copy, model.counts.changes, failedTerminalCount, workspace.pendingApprovals.length);
+
+  useEffect(() => {
+    if (didAutoSelectTab.current) return;
+    if (model.counts.changes > 0) {
+      didAutoSelectTab.current = true;
+      setActiveTab("changes");
+    } else if (failedTerminalCount > 0) {
+      didAutoSelectTab.current = true;
+      setActiveTab("terminal");
+    }
+  }, [failedTerminalCount, model.counts.changes]);
 
   return (
     <aside className="review-dock" aria-label={copy.workbench.reviewDock}>
       <header className="review-dock-header">
         <strong>{copy.workbench.reviewDock}</strong>
-        <StatusBadge tone={workspace.pendingApprovals.length > 0 ? "warning" : "neutral"}>
-          {workspace.pendingApprovals.length > 0 ? copy.workbench.pendingApproval : copy.workbench.noApprovals}
+        <StatusBadge tone={headerStatus.tone}>
+          {headerStatus.label}
         </StatusBadge>
       </header>
 
@@ -110,12 +131,12 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
 
         {activeTab === "changes" ? (
           <div className="dock-changes">
-            {workspace.runSteps.filter((step) => step.kind === "command" || step.kind === "patch").slice(-4).map((step) => (
+            {activeChangeSteps.map((step) => (
               <article key={step.id} className={`dock-run-step dock-run-step-${step.status}`}>
                 <header>
                   <div>
-                    <strong>{step.title}</strong>
-                    <small>{step.detail}</small>
+                    <strong>{localizedAgentEventName(copy, step.title)}</strong>
+                    <small>{localizedRuntimeText(copy, step.detail)}</small>
                   </div>
                   <StatusBadge tone={step.status === "waiting" ? "warning" : step.status === "denied" || step.status === "failed" ? "danger" : step.status === "done" ? "success" : "neutral"}>
                     {copy.workbench.runStepStatus[step.status]}
@@ -155,7 +176,7 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
                   <article key={event.id} className="dock-run-step dock-run-step-done">
                     <header>
                       <div>
-                        <strong>{event.name}</strong>
+                        <strong>{localizedAgentEventName(copy, event.name)}</strong>
                         <small>{event.patches?.map((patch) => patch.path).join(", ")}</small>
                       </div>
                       <StatusBadge tone="success">{copy.diff.allApplied}</StatusBadge>
@@ -212,4 +233,16 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
       </div>
     </aside>
   );
+}
+
+function reviewHeaderStatus(
+  copy: AppCopy,
+  changeCount: number,
+  failedTerminalCount: number,
+  pendingApprovalCount: number,
+): { label: string; tone: "neutral" | "warning" | "danger" } {
+  if (pendingApprovalCount > 0) return { label: copy.workbench.pendingApproval, tone: "warning" };
+  if (changeCount > 0) return { label: copy.workbench.reviewHasChanges, tone: "warning" };
+  if (failedTerminalCount > 0) return { label: copy.workbench.reviewHasTerminalIssues, tone: "danger" };
+  return { label: copy.workbench.reviewReady, tone: "neutral" };
 }

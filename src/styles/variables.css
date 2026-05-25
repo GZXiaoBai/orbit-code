@@ -10,6 +10,13 @@
   --bg-hover: rgba(48, 48, 48, 0.82);
   --surface: rgba(34, 34, 34, 0.74);
   --surface-2: rgba(46, 46, 46, 0.78);
+  --code-bg: #171717;
+  --code-fg: #c9c9c3;
+  --syntax-keyword: #b779ff;
+  --syntax-string: #89e379;
+  --syntax-comment: #7f827d;
+  --syntax-number: #70d6ff;
+  --syntax-punctuation: #b7b7b0;
 
   --text-primary: #F4F4F1;
   --text-secondary: #B8B8B2;

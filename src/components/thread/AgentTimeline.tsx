@@ -3,6 +3,7 @@ import type { AgentLoopPhase, ToolCall } from "../../domain/agentLoop";
 import type { AppCopy } from "../../i18n/copy";
 import type { AgentEvent } from "../../state/useWorkspace";
 import { AgentAvatar } from "../AgentAvatar";
+import { localizedAgentEventName, localizedRuntimeText } from "./agentDisplayText";
 
 interface AgentTimelineProps {
   copy: AppCopy;
@@ -77,15 +78,15 @@ export function AgentTimeline({
             </div>
             <div className="node-content-col">
               <header className="node-meta">
-                <strong>{evt.name}</strong>
+                <strong>{localizedAgentEventName(copy, evt.name)}</strong>
                 <span className="node-time">{evt.timestamp}</span>
               </header>
-              <div className="node-message" dangerouslySetInnerHTML={{ __html: renderAgentMessage(evt.message) }} />
+              <div className="node-message" dangerouslySetInnerHTML={{ __html: renderAgentMessage(copy, evt.message) }} />
 
               {evt.patches && evt.patches.length > 0 && (
                 <div className="node-patch-summary">
                   <strong>{copy.workbench.patchReview}</strong>
-                  <span>{evt.patches.length} files · {copy.workbench.changesTab}</span>
+                  <span>{evt.patches.length} {copy.workbench.filesCount} · {copy.workbench.changesTab}</span>
                 </div>
               )}
             </div>
@@ -125,8 +126,9 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (c) => map[c]);
 }
 
-function renderAgentMessage(message: string): string {
-  let safe = escapeHtml(message);
+function renderAgentMessage(copy: AppCopy, message: string): string {
+  const localized = localizedRuntimeText(copy, message);
+  let safe = escapeHtml(localized);
   safe = safe.replace(/\[([^\]]+)\]\(file:\/\/(?:\/|\.\/)([^)]+)\)/g, '<a href="file:///$2" class="file-link">$1</a>');
   return safe;
 }

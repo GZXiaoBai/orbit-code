@@ -33,7 +33,7 @@ references: []`);
     // Timeline nodes should exist without fabricating patches.
     const nodes = timeline.locator(".timeline-node");
     await expect(nodes.first()).toBeVisible({ timeout: 8000 });
-    await expect(timeline).toContainText("Plan Ready");
+    await expect(timeline).toContainText(/计划已就绪|Plan Ready/);
     await expect(page.locator("button:has-text('Agent Loop')")).toHaveCount(0);
   });
 

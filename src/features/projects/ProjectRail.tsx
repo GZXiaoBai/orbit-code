@@ -223,7 +223,11 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
         ) : (
           <EmptyState
             icon={<FolderOpen size={20} />}
-            title={copy.sidebar.noWorkspaceFiles}
+            title={
+              workspace.workspaceRoot
+                ? (fileTree.filter ? copy.workbench.noFileSearchResults : copy.workbench.emptyWorkspaceFiles)
+                : copy.sidebar.noWorkspaceFiles
+            }
             body={workspace.workspaceRoot ? copy.workbench.fileSearch : copy.workbench.startEmptyBody}
           />
         )}

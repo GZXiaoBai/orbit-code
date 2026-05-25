@@ -438,7 +438,7 @@ test.describe("Orbit Code — Run Controls", () => {
 
     const recoveredApproval = page.locator(".approval-request-card", { hasText: "run_command" });
     await expect(recoveredApproval).toBeVisible({ timeout: 10000 });
-    await expect(page.locator(".agent-collaboration-timeline")).toContainText(/已恢复等待操作|Recovered Waiting State/, { timeout: 10000 });
+    await expect(page.locator(".agent-collaboration-timeline")).toContainText(/已恢复等待态|已恢复等待操作|Recovered Waiting State/, { timeout: 10000 });
     await recoveredApproval.getByRole("button", { name: /批准|Approve/ }).click();
 
     await expect.poll(() => page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_LOG__ || [])).toContain("run_command_async");
