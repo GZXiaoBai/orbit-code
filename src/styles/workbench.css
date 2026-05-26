@@ -1320,12 +1320,11 @@
 }
 
 .ui-select-popover {
-  position: absolute;
-  right: 0;
+  position: fixed;
   z-index: 70;
-  min-width: max(100%, 220px);
+  width: min(320px, calc(100vw - 28px));
+  min-width: 0;
   max-width: min(420px, calc(100vw - 28px));
-  max-height: min(360px, calc(100vh - 120px));
   overflow: auto;
   padding: 6px;
   border: 1px solid var(--line-strong);
@@ -1337,19 +1336,15 @@
 }
 
 .ui-select-popover-above {
-  bottom: calc(100% + 8px);
   transform-origin: bottom right;
 }
 
 .ui-select-popover-below {
-  top: calc(100% + 8px);
   transform-origin: top right;
 }
 
 .settings-row .ui-select-popover,
 .permission-row .ui-select-popover {
-  top: calc(100% + 8px);
-  bottom: auto;
   transform-origin: top right;
 }
 
@@ -1363,6 +1358,7 @@
   color: var(--text-primary);
   font-size: var(--font-size-sm);
   text-align: left;
+  overflow-wrap: anywhere;
 }
 
 .ui-select-popover button small {

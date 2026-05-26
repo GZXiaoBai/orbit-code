@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 
 export interface SelectMenuOption {
@@ -130,38 +131,72 @@ export function SelectMenu({
 }) {
   const id = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<"above" | "below">("above");
+  const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({});
   const [activeIndex, setActiveIndex] = useState(() => Math.max(0, options.findIndex((option) => option.value === value)));
   const selected = options.find((option) => option.value === value) || options[0];
-
-  useEffect(() => {
-    if (!open) return;
-    const closeOnPointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOnPointer, true);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnPointer, true);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    setActiveIndex(Math.max(0, options.findIndex((option) => option.value === value)));
-  }, [options, value]);
 
   const updatePlacement = () => {
     const rect = rootRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const spaceBelow = window.innerHeight - rect.bottom;
-    const spaceAbove = rect.top;
-    setPlacement(spaceBelow >= 220 || spaceBelow >= spaceAbove ? "below" : "above");
+
+    const viewportPadding = 14;
+    const optionHeight = 42;
+    const menuHeight = Math.min(
+      360,
+      Math.max(46, options.length * optionHeight + 12),
+      window.innerHeight - viewportPadding * 2,
+    );
+    const menuWidth = Math.min(Math.max(rect.width, 220), window.innerWidth - viewportPadding * 2);
+    const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+    const spaceAbove = rect.top - viewportPadding;
+    const nextPlacement = spaceBelow >= menuHeight || spaceBelow >= spaceAbove ? "below" : "above";
+    const top = nextPlacement === "below"
+      ? Math.min(rect.bottom + 8, window.innerHeight - menuHeight - viewportPadding)
+      : Math.max(viewportPadding, rect.top - menuHeight - 8);
+    const left = Math.min(
+      Math.max(viewportPadding, rect.right - menuWidth),
+      window.innerWidth - menuWidth - viewportPadding,
+    );
+
+    setPlacement(nextPlacement);
+    setPopoverStyle({
+      top,
+      left,
+      width: menuWidth,
+      maxHeight: menuHeight,
+    });
   };
+
+  useEffect(() => {
+    if (!open) return;
+    updatePlacement();
+    const closeOnPointer = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target) || popoverRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const updateOnViewportChange = () => updatePlacement();
+    document.addEventListener("pointerdown", closeOnPointer, true);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", updateOnViewportChange);
+    window.addEventListener("scroll", updateOnViewportChange, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointer, true);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", updateOnViewportChange);
+      window.removeEventListener("scroll", updateOnViewportChange, true);
+    };
+  }, [open, options.length]);
+
+  useEffect(() => {
+    setActiveIndex(Math.max(0, options.findIndex((option) => option.value === value)));
+  }, [options, value]);
 
   const openMenu = () => {
     updatePlacement();
@@ -214,8 +249,15 @@ export function SelectMenu({
         <span className="ui-select-value">{selected?.label || ariaLabel}</span>
         <ChevronDown size={14} />
       </button>
-      {open ? (
-        <div className={`ui-select-popover ui-select-popover-${placement}`} role="listbox" id={`${id}-listbox`} aria-label={ariaLabel}>
+      {open ? createPortal(
+        <div
+          ref={popoverRef}
+          className={`ui-select-popover ui-select-popover-${placement}`}
+          role="listbox"
+          id={`${id}-listbox`}
+          aria-label={ariaLabel}
+          style={popoverStyle}
+        >
           {options.map((option, index) => (
             <button
               key={option.value}
@@ -231,7 +273,8 @@ export function SelectMenu({
               {option.description ? <small>{option.description}</small> : null}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </div>
   );

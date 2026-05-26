@@ -66,7 +66,8 @@ references: []`);
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
 
     // The localized Agent run button should be visible.
-    const loopBtn = page.getByRole("button", { name: /开始执行|Agent Loop/ });
+    await expect(page.locator("button:has-text('Agent Loop')")).toHaveCount(0);
+    const loopBtn = page.getByRole("button", { name: "开始执行" });
     await expect(loopBtn).toBeVisible({ timeout: 5000 });
   });
 
