@@ -8,6 +8,7 @@ interface DiffPatch {
   oldContent: string;
   newContent: string;
   applied: boolean;
+  sandboxStatus?: "idle" | "sandboxing" | "sandboxed" | "failed";
   hasConflict?: boolean;
   conflictContent?: string;
   conflictResolved?: boolean;
@@ -248,7 +249,7 @@ function renderCodeLine(value: string) {
 
 export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: DiffViewerProps) {
   const [selectedFileIdx, setSelectedFileIdx] = useState(0);
-  const [isSplit, setIsSplit] = useState(false);
+  const [isSplit, setIsSplit] = useState(true);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -276,6 +277,7 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
   ), [patches]);
 
   const allApplied = patches.every((p) => p.applied);
+  const hasUnpreviewedPatch = patches.some((p) => !p.applied && p.sandboxStatus !== "sandboxed");
 
   const handleApply = async () => {
     setApplying(true);
@@ -547,6 +549,11 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
           <div className="applied-badge-container warning">
             <AlertCircle size={14} className="warning-icon" style={{ color: "#f87171", marginRight: 6 }} />
             <span className="diff-conflict-warning-text">{copy.diff.resolveBeforeApply}</span>
+          </div>
+        ) : hasUnpreviewedPatch ? (
+          <div className="applied-badge-container warning">
+            <AlertCircle size={14} className="warning-icon" style={{ color: "#f59e0b", marginRight: 6 }} />
+            <span className="diff-conflict-warning-text">{copy.diff.previewBeforeApply}</span>
           </div>
         ) : (
           <button

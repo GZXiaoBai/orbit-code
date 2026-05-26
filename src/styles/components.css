@@ -628,7 +628,7 @@
 
 .diff-inline-view,
 .diff-split-view {
-  min-width: max-content;
+  min-width: 100%;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
@@ -637,13 +637,13 @@
 .diff-row {
   min-height: 24px;
   display: grid;
-  grid-template-columns: 52px 22px minmax(360px, 1fr);
+  grid-template-columns: 48px 20px minmax(220px, 1fr);
   align-items: stretch;
   white-space: pre;
 }
 
 .diff-inline-row {
-  grid-template-columns: 52px 52px 22px minmax(520px, 1fr);
+  grid-template-columns: 46px 46px 20px minmax(260px, 1fr);
 }
 
 .diff-inline-row .old-ln {
@@ -733,7 +733,7 @@
 
 .diff-split-view {
   display: grid;
-  grid-template-columns: minmax(420px, 1fr) minmax(420px, 1fr);
+  grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr);
   column-gap: 0;
 }
 
@@ -743,7 +743,7 @@
 
 .diff-split-row > .diff-row {
   min-width: 0;
-  grid-template-columns: 54px 22px minmax(300px, 1fr);
+  grid-template-columns: 46px 20px minmax(200px, 1fr);
 }
 
 .diff-split-row > .diff-row:first-child,
