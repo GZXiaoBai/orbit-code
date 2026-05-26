@@ -355,7 +355,7 @@ export class AgentLoopEngine {
           toolResults.push({ id: tc.id, name: toolName, result });
 
           if (toolName === "apply_patch") {
-            this.setPhase("reviewing", "Patch proposal is waiting for user review in the Review Dock.");
+            this.setPhase("reviewing", "补丁提案正在等待你在审查台审查。");
             this.isRunning = false;
             return result;
           }

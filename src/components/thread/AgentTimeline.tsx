@@ -39,6 +39,9 @@ export function AgentTimeline({
   if (agentEvents.length === 0) return null;
   const visibleEvents = compactAgentEvents(agentEvents);
   const hiddenCount = Math.max(0, agentEvents.length - visibleEvents.length);
+  const localizedPhase = agentLoopPhase
+    ? copy.workbench.agentPhases[agentLoopPhase as keyof typeof copy.workbench.agentPhases] || agentLoopPhase
+    : "";
 
   return (
     <section className="agent-collaboration-timeline">
@@ -47,7 +50,7 @@ export function AgentTimeline({
         <div className="timeline-actions">
           {agentLoopRunning && (
             <span className="agent-loop-status">
-              {copy.thread.agentLoopStatus}: {agentLoopPhase}
+              {copy.thread.agentLoopStatus}: {localizedPhase}
             </span>
           )}
           {onStartAgentLoop && !agentLoopRunning && (
