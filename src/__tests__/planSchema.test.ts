@@ -48,6 +48,41 @@ tasks:
     expect(result.plan.tasks[0].status).toBe("queued");
   });
 
+  it("accepts camelCase plan fields from generated plans", () => {
+    const result = parseCodingPlan(`
+version: "1"
+title: Generated plan
+goals: ["Ship a real workflow"]
+tasks:
+  - id: implement-ui
+    title: Implement UI
+    description: Wire the main surface
+    dependsOn: ["audit"]
+    agentHint: coder
+    filesHint: ["src/App.tsx"]
+    verification: ["npm run build"]
+acceptanceCriteria: ["UI renders without overlap"]
+risks: ["Needs visual review"]
+references: ["src/App.tsx"]
+decisionQuestions:
+  - question: "Use compact layout?"
+    recommended: "Yes, keep the center thread quiet."
+    options: ["Yes", "No, show every event"]
+`);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.tasks[0].dependsOn).toEqual(["audit"]);
+    expect(result.plan.tasks[0].agentHint).toBe("coder");
+    expect(result.plan.tasks[0].filesHint).toEqual(["src/App.tsx"]);
+    expect(result.plan.acceptanceCriteria).toEqual(["UI renders without overlap"]);
+    expect(result.plan.decisionQuestions?.[0]).toEqual({
+      question: "Use compact layout?",
+      recommended: "Yes, keep the center thread quiet.",
+      options: ["Yes", "No, show every event"],
+    });
+  });
+
   it("returns validation errors for invalid plans", () => {
     const result = parseCodingPlan("tasks: []");
     expect(result.ok).toBe(false);

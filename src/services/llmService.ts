@@ -332,6 +332,21 @@ function getMockResponse(system: string, _user: string): string {
         "优化侧边栏文件加载指示状态",
         "在主应用加载 SQLite 持久层时提供精致动效"
       ],
+      constraints: [
+        "需要用户确认：默认优先做局部修复，不重写整个应用；备选是系统性重构对应模块，但需要更多回归测试。",
+        "命令和写文件仍必须通过 Orbit Code 的审查台审批，不能在 Plan 模式自动执行。"
+      ],
+      decisionQuestions: [
+        {
+          question: "这次应该优先做多大范围的改动？",
+          recommended: "推荐：先做最小可验证修复，保留当前架构，降低回归风险。",
+          options: [
+            "最小修复：最快验证，适合 UI/交互 bug。",
+            "中等重构：顺手收缩相关状态和组件边界。",
+            "大重构：适合已确认旧路径无法维护，但需要更多测试。"
+          ]
+        }
+      ],
       tasks: [
         {
           id: "task-audit-current-state",
@@ -562,6 +577,13 @@ Schema:
   "references": ["files/that/are/relevant.ts"],
   "goals": ["Main goal 1", "Main goal 2"],
   "constraints": ["Important user or system constraints"],
+  "decisionQuestions": [
+    {
+      "question": "Targeted question the Agent needs answered",
+      "recommended": "Recommended default choice and why",
+      "options": ["Recommended option", "Alternative option", "User can specify another option"]
+    }
+  ],
   "tasks": [
     {
       "id": "unique-task-id-1",

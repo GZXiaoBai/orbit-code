@@ -17,7 +17,8 @@ test.describe("Orbit Code — Plan Import", () => {
 title: "Test Plan"
 goals:
   - "Test goal"
-constraints: []
+constraints:
+  - "Keep the test change local"
 tasks:
   - id: task-1
     title: "Test Task"
@@ -28,8 +29,16 @@ tasks:
       - "src/App.tsx"
     verification:
       - "npm test"
-acceptanceCriteria: []
-risks: []
+acceptanceCriteria:
+  - "The plan summary shows detailed sections"
+risks:
+  - "Visual regression in the thread summary"
+decisionQuestions:
+  - question: "Should the plan stay compact?"
+    recommended: "Yes, show only decision-level detail in the center thread."
+    options:
+      - "Yes"
+      - "No"
 references: []`);
 
     // Submit (blur or press a button)
@@ -39,6 +48,11 @@ references: []`);
     // A plan card should appear
     const planCard = page.locator(".plan-card");
     await expect(planCard).toBeVisible({ timeout: 5000 });
+    await expect(planCard.getByText("Keep the test change local")).toBeVisible();
+    await expect(planCard.getByText("Should the plan stay compact?")).toBeVisible();
+    await expect(planCard.getByText("Yes, show only decision-level detail in the center thread.")).toBeVisible();
+    await expect(planCard.getByText("The plan summary shows detailed sections")).toBeVisible();
+    await expect(planCard.getByText("Visual regression in the thread summary")).toBeVisible();
   });
 
   test("shift enter keeps a newline in the composer", async ({ page }) => {

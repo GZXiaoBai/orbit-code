@@ -25,6 +25,8 @@ import { callLLMApi, PLANNER_SYSTEM_PROMPT, cleanJsonOutput } from "../services/
 import { isTauri } from "../utils/tauri";
 import { resolveModelSelection } from "./modelSettings";
 
+type NormalizedDecisionQuestion = NonNullable<CodingPlan["decisionQuestions"]>[number];
+
 export interface ImportedPlanState {
   plan: CodingPlan;
   fileName: string;
@@ -375,6 +377,9 @@ export function useSession(): SessionState {
               filesHint: t.filesHint || [],
               verification: t.verification || ["npm test"]
             })),
+            decisionQuestions: normalizeGeneratedDecisionQuestions(
+              parsedPlan.decisionQuestions || parsedPlan.decision_questions || parsedPlan.questions,
+            ),
             acceptanceCriteria: parsedPlan.acceptanceCriteria || [],
             risks: parsedPlan.risks || [],
             references: parsedPlan.references || []
@@ -493,4 +498,25 @@ export function useSession(): SessionState {
     updateApiKey,
     unlockCredentialVault,
   };
+}
+
+function normalizeGeneratedDecisionQuestions(input: unknown): CodingPlan["decisionQuestions"] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((item): NormalizedDecisionQuestion | null => {
+      if (typeof item === "string") {
+        const question = item.trim();
+        return question ? { question, options: [] } : null;
+      }
+      if (!item || typeof item !== "object") return null;
+      const record = item as Record<string, unknown>;
+      const question = typeof record.question === "string" ? record.question.trim() : "";
+      if (!question) return null;
+      const recommended = typeof record.recommended === "string" ? record.recommended.trim() : "";
+      const options = Array.isArray(record.options)
+        ? record.options.filter((option): option is string => typeof option === "string" && Boolean(option.trim())).map((option) => option.trim())
+        : [];
+      return { question, recommended: recommended || undefined, options };
+    })
+    .filter((item): item is NormalizedDecisionQuestion => Boolean(item));
 }

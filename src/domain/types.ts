@@ -145,12 +145,19 @@ export interface PlanTask {
   verification: string[];
 }
 
+export interface PlanDecisionQuestion {
+  question: string;
+  recommended?: string;
+  options: string[];
+}
+
 export interface CodingPlan {
   version: "1";
   title: string;
   goals: string[];
   constraints: string[];
   tasks: PlanTask[];
+  decisionQuestions?: PlanDecisionQuestion[];
   acceptanceCriteria: string[];
   risks: string[];
   references: string[];
