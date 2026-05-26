@@ -471,7 +471,21 @@ export function useWorkspace() {
         });
         return;
       }
-      fs.executeCommand(task.id, displayCommand);
+      addAgentEvent({
+        id: `verify-approved-${Date.now()}`,
+        role: "verifier",
+        name: "Verification Approval",
+        status: "done",
+        message: `你已批准验证命令：${displayCommand}。Orbit 将在当前工作区运行它。`,
+        timestamp: new Date().toLocaleTimeString(),
+      });
+      fs.executeStructuredCommand({
+        taskId: task.id,
+        command: parsed.command,
+        args: parsed.args,
+        reason,
+        workspacePath: fs.workspaceRoot,
+      });
     });
   }, [addAgentEvent, approvalQueue, fs, session.importedPlan]);
 
