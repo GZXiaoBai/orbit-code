@@ -5,7 +5,6 @@ import type { useWorkspace } from "../../state/useWorkspace";
 import { Composer } from "../../components/Composer";
 import { AgentTimeline } from "../../components/thread/AgentTimeline";
 import { PlanSummary } from "../../components/thread/PlanSummary";
-import { RunStepList } from "../../components/thread/RunStepList";
 import { EmptyState } from "../../ui/primitives";
 import { ThreadActionsMenu } from "./ThreadActionsMenu";
 import { nextWorkbenchMode, shouldToggleModeFromKey } from "./threadModeShortcut";
@@ -98,7 +97,6 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
         ) : null}
 
         <PlanSummary copy={copy} importedPlan={workspace.importedPlan} importError={workspace.importError} />
-        <RunStepList copy={copy} steps={workspace.runSteps} />
 
         <AgentTimeline
           copy={copy}
