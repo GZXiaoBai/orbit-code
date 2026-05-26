@@ -164,6 +164,7 @@ export function useAgentRun({
 
   const agentLoopEngineRef = useRef<AgentLoopEngine | null>(null);
   const agentLoopCancelledRef = useRef(false);
+  const patchReviewPendingRef = useRef(false);
   const toolCallsRef = useRef(new Map<string, ToolCall>());
   const recoveredRef = useRef(false);
 
@@ -223,6 +224,7 @@ export function useAgentRun({
     setAgentLoopRunning(true);
     dispatchRunSession({ type: "start", taskId: task.id });
     agentLoopCancelledRef.current = false;
+    patchReviewPendingRef.current = false;
     setAgentLoopPhase("planning");
     setAgentLoopToolCalls([]);
     toolCallsRef.current.clear();
@@ -357,6 +359,7 @@ export function useAgentRun({
         const eventId = `patch-${Date.now()}`;
         const sandboxedPatches = await previewPatchesInSandbox(eventId, hydratedPatches, workspaceRoot);
         const sandboxFailed = sandboxedPatches.some((patch) => patch.sandboxStatus === "failed");
+        patchReviewPendingRef.current = true;
         dispatchRunSession({ type: "patch", patchProposalId: eventId });
         setAgentEvents(prev => [...prev, {
           id: eventId,
@@ -435,6 +438,10 @@ export function useAgentRun({
     }
 
     setAgentLoopRunning(false);
+    if (patchReviewPendingRef.current && !agentLoopCancelledRef.current) {
+      setAgentLoopPhase("reviewing");
+      return;
+    }
     setAgentLoopPhase("idle");
     if (!agentLoopCancelledRef.current) {
       dispatchRunSession({ type: "complete", phase: "idle" });

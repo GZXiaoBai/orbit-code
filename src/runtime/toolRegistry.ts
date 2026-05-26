@@ -198,8 +198,8 @@ Rules:
 - ALWAYS use read_file before modifying a file to see its current content.
 - Use search_code to find relevant code before making changes.
 - For run_command, prefer {"command":"npm","args":["test","--","--run"],"reason":"verify changes"} instead of one shell string.
-- For apply_patch, pass {"patches":[{"path":"relative/file","oldContent":"...","newContent":"..."}]}. It creates a review item; the user writes it after reviewing the diff.
-- After making ALL changes, use run_command to run tests.
+- For apply_patch, pass {"patches":[{"path":"relative/file","oldContent":"...","newContent":"..."}]}. It creates a review item; the user writes it after reviewing the diff. After apply_patch, stop and wait for review; do not call done yet.
+- After the user applies changes and starts verification, use run_command to run tests.
 - If you need user input, use ask_user.
 - When you're done, output {"tool": "done", "params": {"summary": "what you did"}}`;
 }

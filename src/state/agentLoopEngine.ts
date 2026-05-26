@@ -32,8 +32,9 @@ Follow these rules strictly:
 1. FIRST, understand the task and research by reading relevant files and searching code.
 2. THEN, plan your changes. Think about what files need modification.
 3. PROPOSE changes using apply_patch. It creates reviewable patch sets; it does not write files.
-4. AFTER the user approves patches, verify by running tests.
-5. Use ask_user ONLY when you truly need input.
+4. STOP after apply_patch and wait for the user to review and apply the patch in the Review Dock.
+5. AFTER the user applies patches and explicitly starts verification, verify by running tests.
+6. Use ask_user ONLY when you truly need input.
 
 You MUST output tool calls in this exact format on a single line:
 {"tool": "tool_name", "params": {"param1": "value1"}}
@@ -352,6 +353,12 @@ export class AgentLoopEngine {
           }
 
           toolResults.push({ id: tc.id, name: toolName, result });
+
+          if (toolName === "apply_patch") {
+            this.setPhase("reviewing", "Patch proposal is waiting for user review in the Review Dock.");
+            this.isRunning = false;
+            return result;
+          }
         }
 
         if (allDone) break;
