@@ -35,7 +35,7 @@ export function buildReviewDockModel(input: {
   const commandApprovals = pendingApprovals.filter((request) => request.tool === "run_command" && !isVerificationApproval(request));
   const otherApprovals = pendingApprovals.filter((request) => request.tool !== "run_command");
   const questions = input.questions.filter((question) => question.status === "pending");
-  const patchEvents = input.events.filter((event) => event.patches && event.patches.length > 0);
+  const patchEvents = input.events.filter((event) => event.patches && event.patches.length > 0).reverse();
   const patchReviews = patchEvents.filter((event) => event.patches?.some((patch) => !patch.applied));
   const appliedPatchReviews = patchEvents.filter((event) => event.patches?.length && event.patches.every((patch) => patch.applied));
 

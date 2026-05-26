@@ -45,4 +45,32 @@ describe("review dock queue model", () => {
     expect(model.terminalRuns).toHaveLength(1);
     expect(model.counts.changes).toBe(4);
   });
+
+  it("orders pending patch reviews newest first", () => {
+    const oldPatch: AgentEvent = {
+      id: "patch-old",
+      role: "coder",
+      name: "Patch Proposal",
+      status: "done",
+      message: "old",
+      timestamp: "12:00",
+      patches: [{ path: "old.ts", oldContent: "a", newContent: "b", applied: false }],
+    };
+    const newPatch: AgentEvent = {
+      ...oldPatch,
+      id: "patch-new",
+      message: "new",
+      timestamp: "12:05",
+      patches: [{ path: "new.ts", oldContent: "a", newContent: "b", applied: false }],
+    };
+
+    const model = buildReviewDockModel({
+      approvals: [],
+      questions: [],
+      events: [oldPatch, newPatch],
+      terminalRuns: [],
+    });
+
+    expect(model.patchReviews.map((event) => event.id)).toEqual(["patch-new", "patch-old"]);
+  });
 });
