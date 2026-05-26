@@ -308,7 +308,7 @@ export const copy = {
       oursTitle: "AI 补丁",
       theirsTitle: "本地修改",
       emptyLine: "(空行)",
-      resolve: "确认合并方案",
+      resolve: "解决冲突",
       applyError: "应用补丁错误",
       allApplied: "所有修改已安全应用到本地",
       resolveBeforeApply: "应用补丁前，请先在上方为冲突段选择合并方案",
