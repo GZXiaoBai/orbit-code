@@ -16,6 +16,7 @@ import type { AgentRunSession } from "../domain/agentRunSession";
 import type { ProjectSecurityOverride, SecuritySettings } from "../domain/types";
 import type { ApprovalRequest } from "./useApprovalQueue";
 import type { QuestionRequest } from "../domain/questionRequest";
+import { parseToolEnvelopes } from "../domain/agentToolEnvelope";
 
 interface UseAgentRunArgs {
   importedPlan: ImportedPlanState | null;
@@ -84,6 +85,42 @@ function approvalEventMessage(tool: string, params: ToolParams): string {
   }
   if (tool === "apply_patch") return "等待你在审查台审查补丁。批准后才会写入当前工作区。";
   return `等待你在审查台确认：${toolDisplayName(tool)}`;
+}
+
+export function summarizeAssistantToolOutput(content: string): string | null {
+  const parsed = parseToolEnvelopes(content);
+  if (parsed.envelopes.length === 0) return null;
+
+  const envelope = parsed.envelopes[0];
+  if (envelope.tool === "run_command") {
+    const command = typeof envelope.params.command === "string" ? envelope.params.command : "command";
+    const args = Array.isArray(envelope.params.args) ? envelope.params.args.filter((arg): arg is string => typeof arg === "string") : [];
+    const reason = typeof envelope.params.reason === "string" ? envelope.params.reason : "";
+    return `Agent 请求运行命令：${[command, ...args].join(" ")}${reason ? `。原因：${reason}` : ""}`;
+  }
+  if (envelope.tool === "apply_patch") {
+    const patches = Array.isArray(envelope.params.patches) ? envelope.params.patches : [];
+    const files = patches
+      .map((patch) => typeof patch === "object" && patch && "path" in patch ? String((patch as { path?: unknown }).path || "") : "")
+      .filter(Boolean);
+    return `Agent 提出补丁审查：${files.length || patches.length} 个文件${files.length ? `（${files.slice(0, 3).join("、")}${files.length > 3 ? " 等" : ""}）` : ""}`;
+  }
+  if (envelope.tool === "ask_user") {
+    const question = typeof envelope.params.question === "string" ? envelope.params.question : "需要用户确认";
+    return `Agent 正在询问：${question}`;
+  }
+  if (envelope.tool === "read_file") {
+    return `Agent 准备读取文件：${typeof envelope.params.path === "string" ? envelope.params.path : ""}`;
+  }
+  if (envelope.tool === "search_code") {
+    const query = typeof envelope.params.query === "string" ? envelope.params.query : envelope.params.pattern;
+    return `Agent 准备搜索代码：${typeof query === "string" ? query : ""}`;
+  }
+  if (envelope.tool === "list_files") return "Agent 准备读取项目文件列表";
+  if (envelope.tool === "done") {
+    return typeof envelope.params.summary === "string" ? envelope.params.summary : "Agent 已完成当前任务。";
+  }
+  return null;
 }
 
 interface SandboxPreviewResult {
@@ -407,13 +444,14 @@ export function useAgentRun({
       onStreamEnd: (_streamId, finalContent) => {
         setStreamingActive(false);
         if (!finalContent) return;
+        const summarized = summarizeAssistantToolOutput(finalContent);
         setAgentEvents(prev => {
           const lastIdx = prev.length - 1;
           if (lastIdx < 0 || prev[lastIdx].status !== "thinking") return prev;
           const next = [...prev];
           next[lastIdx] = {
             ...next[lastIdx],
-            message: finalContent.substring(0, 500) + (finalContent.length > 500 ? "..." : ""),
+            message: summarized || finalContent.substring(0, 500) + (finalContent.length > 500 ? "..." : ""),
           };
           return next;
         });

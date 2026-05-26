@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { AgentLoopEngine, parseToolCallsFromText } from "../state/agentLoopEngine";
+import { summarizeAssistantToolOutput } from "../state/useAgentRun";
 
 describe("AgentLoopEngine — parseToolCalls", () => {
   it("parses strict read_file tool call lines", () => {
@@ -102,5 +103,17 @@ describe("AgentLoopEngine — review gates", () => {
     expect(doneCalled).toBe(false);
     expect(phases[phases.length - 1]).toBe("reviewing");
     expect(toolResults.some((entry) => entry.result.includes("waiting for review"))).toBe(true);
+  });
+});
+
+describe("Agent event display summaries", () => {
+  it("summarizes tool JSON instead of exposing raw apply_patch payloads", () => {
+    const summary = summarizeAssistantToolOutput('{"tool":"apply_patch","params":{"patches":[{"path":"AGENT_GUI_FIXTURE.md","oldContent":"","newContent":"# Fixture"}]}}');
+    expect(summary).toBe("Agent 提出补丁审查：1 个文件（AGENT_GUI_FIXTURE.md）");
+  });
+
+  it("summarizes command tool calls with command and reason", () => {
+    const summary = summarizeAssistantToolOutput('{"tool":"run_command","params":{"command":"npm","args":["test","--","--run"],"reason":"verify changes"}}');
+    expect(summary).toBe("Agent 请求运行命令：npm test -- --run。原因：verify changes");
   });
 });
