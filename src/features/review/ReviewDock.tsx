@@ -204,12 +204,19 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
               <article key={request.id} className="approval-request-card">
                 <header>
                   <div>
-                    <strong>{request.tool}</strong>
+                    <strong>{localizedAgentEventName(copy, request.tool)}</strong>
                     <small>{request.reason || copy.workbench.pendingApproval}</small>
                   </div>
                   <StatusBadge tone="warning">{copy.workbench.pendingApproval}</StatusBadge>
                 </header>
-                <pre>{JSON.stringify(request.params as Record<string, unknown>, null, 2)}</pre>
+                <div className="approval-param-list">
+                  {approvalParamEntries(request.params as Record<string, unknown>).map(([key, value]) => (
+                    <span key={key}>
+                      <strong>{localizedApprovalParamKey(copy, key)}</strong>
+                      <code>{formatApprovalParamValue(value)}</code>
+                    </span>
+                  ))}
+                </div>
                 <footer>
                   <Button variant="ghost" onClick={() => workspace.resolveApproval(request.id, false)}>
                     <X size={14} />
@@ -233,6 +240,30 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
       </div>
     </aside>
   );
+}
+
+function approvalParamEntries(params: Record<string, unknown>): Array<[string, unknown]> {
+  return Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== "");
+}
+
+function localizedApprovalParamKey(copy: AppCopy, key: string): string {
+  const zh: Record<string, string> = {
+    path: "路径",
+    paths: "路径",
+    query: "查询",
+    pattern: "模式",
+    question: "问题",
+    reason: "原因",
+    workspacePath: copy.workbench.workspacePath,
+  };
+  if (copy.language === "中" && zh[key]) return zh[key];
+  return key;
+}
+
+function formatApprovalParamValue(value: unknown): string {
+  if (Array.isArray(value)) return value.map((item) => String(item)).join(", ");
+  if (typeof value === "object" && value) return "结构化参数";
+  return String(value);
 }
 
 function reviewHeaderStatus(

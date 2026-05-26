@@ -109,7 +109,7 @@ export function useWorkspace() {
       role: "planner",
       name: "Plan Ready",
       status: "idle",
-      message: `计划已导入，当前待处理任务：[${task.title}]。Plan 模式只更新任务；切换 Build 后才会启动 Agent、进入审批、提出 Patch 并等待 Diff 审查。`,
+      message: `计划已导入，当前待处理任务：[${task.title}]。Plan 模式只更新任务；切换 Build 后才会启动 Agent、进入审批、提出补丁并等待变更审查。`,
       timestamp: new Date().toLocaleTimeString(),
     }] : []);
   }, []);
@@ -215,7 +215,7 @@ export function useWorkspace() {
           next[healIdx] = {
             ...next[healIdx],
             status: "done",
-            message: `自愈代码补丁已成功生成。我已修复了 [${filePath}](file://./${filePath}) 中导致测试失败的逻辑错误。请重新审查新 Patch。`,
+            message: `自愈代码补丁已成功生成。我已修复了 [${filePath}](file://./${filePath}) 中导致测试失败的逻辑错误。请重新审查新补丁。`,
             patches: [{
               path: filePath,
               oldContent: lastFailedContent,
@@ -438,7 +438,7 @@ export function useWorkspace() {
         role: "verifier",
         name: "Verification",
         status: "idle",
-        message: "Patch 已写入。当前任务没有配置验证命令，请手动检查结果。",
+        message: "补丁已写入。当前任务没有配置验证命令，请手动检查结果。",
         timestamp: new Date().toLocaleTimeString(),
       });
       return;
@@ -447,7 +447,7 @@ export function useWorkspace() {
     const parsed = parseCommandLine(rawCommand);
     if (!parsed) return;
     const displayCommand = formatCommandForDisplay(parsed.command, parsed.args);
-    const reason = `Patch ${eventId} 已写入，运行验证命令确认当前任务：${task.title}`;
+    const reason = `补丁 ${eventId} 已写入，运行验证命令确认当前任务：${task.title}`;
 
     addAgentEvent({
       id: `verify-request-${Date.now()}`,
