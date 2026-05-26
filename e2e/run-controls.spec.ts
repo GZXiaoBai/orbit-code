@@ -235,6 +235,28 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(composer).toBeVisible();
   });
 
+  test("project can keep multiple named threads", async ({ page }) => {
+    await installDesktopFixture(page);
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+
+    await page.getByRole("button", { name: "手动路径" }).click();
+    await page.getByPlaceholder(/输入本地项目目录/).fill(fixtureWorkspace);
+    await page.getByRole("button", { name: "应用" }).click();
+
+    await page.locator(".composer textarea").fill(samplePlan);
+    await page.locator(".composer textarea").press("Enter");
+    await expect(page.locator(".plan-card")).toBeVisible({ timeout: 5000 });
+    await expect(page.locator(".project-thread-list button.active")).toContainText("Plan Only", { timeout: 5000 });
+
+    await page.locator(".project-threads header button").click();
+    await expect(page.locator(".project-thread-list button.active")).toContainText(/未命名对话|Untitled thread/);
+    await expect(page.locator(".plan-card")).toHaveCount(0);
+
+    await page.locator(".project-thread-list button", { hasText: "Plan Only" }).click();
+    await expect(page.locator(".plan-card")).toBeVisible({ timeout: 5000 });
+  });
+
   test("file tree search opens Monaco read-only preview and large files fall back safely", async ({ page }) => {
     await installDesktopFixture(page);
     await page.goto("/");

@@ -295,6 +295,12 @@ export function useWorkspace() {
   const [threadSnapshots, setThreadSnapshots] = useState<Record<string, ThreadSnapshot>>(() => loadThreadSnapshots());
 
   useEffect(() => {
+    const title = session.importedPlan?.plan.title?.trim();
+    if (!title || threadUi.threadUiState.title) return;
+    threadUi.updateThreadUiState({ title });
+  }, [session.importedPlan?.plan.title, threadUi.threadUiState.title, threadUi.updateThreadUiState]);
+
+  useEffect(() => {
     localStorage.setItem(THREAD_SNAPSHOTS_KEY, JSON.stringify(threadSnapshots));
   }, [threadSnapshots]);
 
