@@ -40,7 +40,7 @@ It currently passes too many raw fields from `useWorkspace`. The next architectu
 - `ProjectRail` - project navigation, real file tree, usage popover, and project actions.
 - `DiffViewer` - line Diff and conflict display.
 
-Known issue: `Conversation` is a shallow Module with a very wide Interface. Split it before adding more UI behavior.
+The old `Conversation.tsx` path has been removed. `ThreadCanvas` is now the central composition layer; continue moving runtime display logic into focused view models before adding more UI behavior.
 
 ### State Modules
 

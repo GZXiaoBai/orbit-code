@@ -327,7 +327,7 @@ function getMockResponse(system: string, _user: string): string {
   if (system.includes("PLANNER_AGENT")) {
     return JSON.stringify({
       title: "优化侧边栏及工作区加载指示器",
-      references: ["src/App.tsx", "src/components/Sidebar.tsx"],
+      references: ["src/App.tsx", "src/features/workbench/ProjectRail.tsx"],
       goals: [
         "优化侧边栏文件加载指示状态",
         "在主应用加载 SQLite 持久层时提供精致动效"

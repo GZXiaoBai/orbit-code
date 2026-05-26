@@ -62,7 +62,7 @@ This file is the current source of truth for implementation status. Historical h
 | Module | Status | Problem |
 | --- | --- | --- |
 | `src/state/useWorkspace.ts` | `improved, still broad` | Session/file-system/project/layout/approval/patch/agent Modules exist, but the coordinator still wires many props and workflow callbacks. |
-| `src/components/Conversation.tsx` | `improved, still partial` | Current thread UI is split into features, but runtime event rendering and composer interactions still need further view-model narrowing. |
+| `src/features/thread/ThreadCanvas.tsx` | `improved, still partial` | Replaced the legacy `Conversation.tsx` path; central thread now composes Plan summary, Agent timeline, composer, and thread menu from focused Modules. Runtime event rendering still needs further view-model narrowing. |
 | `src/components/thread/AgentTimeline.tsx` | `partial` | Owns timeline and patch refinement; copy now routes through i18n, but it still mixes sanitizer and Diff integration. |
 | `src/features/review/ReviewDock.tsx` | `improved, still partial` | Review Dock now consumes `ReviewDockQueueModel` and delegates to `CommandApprovalQueue`, `QuestionQueue`, `PatchReviewQueue`, `VerificationQueue`, and `TerminalRunList`. Command cards show command, args, reason, workspace, and permission-action chips; patch cards show sandbox/apply status. |
 | `src/runtime/toolRegistry.ts` | `partial` | Command tool aligns with structured args; patch writes are kept out of direct execution for Agent proposals. Needs more provider/tool error UX. |
@@ -73,4 +73,4 @@ This file is the current source of truth for implementation status. Historical h
 - `npm test -- --run`, `npm run build`, `cargo test --manifest-path src-tauri/Cargo.toml`, `npm run test:e2e`, and `npm run tauri build -- --debug` all pass for the claimed layer.
 - `AGENTS.md`, `docs/GEMINI_DEEPSEEK_HANDOFF.md`, and this matrix agree.
 - Any claimed feature has a concrete verification command or explicit manual-validation note.
-- Frontend refactors reduce `useWorkspace` and `Conversation` public Interfaces instead of only moving code around.
+- Frontend refactors reduce `useWorkspace`, `ThreadCanvas`, and Review Dock public Interfaces instead of only moving code around.

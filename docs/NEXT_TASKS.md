@@ -22,10 +22,11 @@ Status: major stabilization complete; keep shrinking architecture and adding dee
 
 Done:
 
-- Split `Conversation.tsx` into deeper view Modules:
+- Removed the legacy `Conversation.tsx` / `CommandApprovalCard` path.
+- Split the current thread surface into deeper view Modules:
+   - `ThreadCanvas`
    - `PlanSummary`
    - `AgentTimeline`
-   - `CommandApprovalCard`
    - `EmptyThreadState`
 - Added E2E coverage for:
    - Enter imports Plan.
