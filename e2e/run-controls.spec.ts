@@ -142,7 +142,7 @@ async function startFixtureBuild(page: import("@playwright/test").Page, plan = s
   await page.locator(".composer textarea").press("Enter");
   await expect(page.locator(".plan-card")).toBeVisible({ timeout: 5000 });
   await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
-  await page.getByRole("button", { name: /Agent Loop/ }).click();
+  await page.getByRole("button", { name: /开始执行|Agent Loop/ }).click();
   await page.getByRole("tab", { name: /变更|Changes/ }).click();
 }
 
@@ -367,7 +367,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(page.locator(".plan-card")).toBeVisible({ timeout: 5000 });
 
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
-    await page.getByRole("button", { name: /Agent Loop/ }).click();
+    await page.getByRole("button", { name: /开始执行|Agent Loop/ }).click();
     await expect(page.locator(".agent-collaboration-timeline")).toContainText("当前没有可用模型");
     await expect(page.locator(".dock-diff-card")).not.toBeVisible();
   });
@@ -393,7 +393,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(page.locator(".plan-card")).toBeVisible({ timeout: 5000 });
 
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
-    await page.getByRole("button", { name: /Agent Loop/ }).click();
+    await page.getByRole("button", { name: /开始执行|Agent Loop/ }).click();
 
     await page.getByRole("tab", { name: /变更|Changes/ }).click();
     await expect(page.locator(".approval-request-card", { hasText: "run_command" })).toBeVisible({ timeout: 10000 });
@@ -406,6 +406,8 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(page.locator(".dock-diff-card")).toBeVisible({ timeout: 10000 });
     await expect(page.locator(".dock-diff-card")).toContainText(/沙盒 已预演|沙盒 预演失败|Sandbox Previewed|Sandbox Preview failed/);
     await expect(page.locator(".dock-diff-card")).toContainText("AGENT_GUI_FIXTURE.md");
+    await expect(page.locator(".agent-collaboration-timeline")).toContainText(/Agent 提出|Agent proposed|Agent 提出了/);
+    await expect(page.locator(".agent-collaboration-timeline")).not.toContainText('"tool"');
 
     await page.locator(".dock-diff-card .apply-patch-action-btn").click();
     await expect.poll(() => page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_LOG__ || [])).toContain("apply_workspace_patches_transactional");
@@ -503,7 +505,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(page.locator(".run-control-bar")).toContainText(/暂未接入|not connected|unsupported/i);
     await page.locator(".composer textarea").fill(samplePlan);
     await page.locator(".composer textarea").press("Enter");
-    await page.getByRole("button", { name: /Agent Loop/ }).click();
+    await page.getByRole("button", { name: /开始执行|Agent Loop/ }).click();
     await expect(page.locator(".agent-collaboration-timeline")).toContainText(/Ollama 当前仅接入|Ollama/, { timeout: 10000 });
     await expect(page.locator(".dock-diff-card")).toHaveCount(0);
   });
@@ -524,7 +526,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(page.locator(".plan-card")).toBeVisible({ timeout: 5000 });
 
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
-    await page.getByRole("button", { name: /Agent Loop/ }).click();
+    await page.getByRole("button", { name: /开始执行|Agent Loop/ }).click();
 
     await page.getByRole("tab", { name: /变更|Changes/ }).click();
     const questionCard = page.locator(".question-request-card");
@@ -550,7 +552,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.locator(".composer textarea").fill(samplePlan);
     await page.locator(".composer textarea").press("Enter");
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
-    await page.getByRole("button", { name: /Agent Loop/ }).click();
+    await page.getByRole("button", { name: /开始执行|Agent Loop/ }).click();
 
     await page.getByRole("tab", { name: /变更|Changes/ }).click();
     await page.locator(".approval-request-card", { hasText: "run_command" }).getByRole("button", { name: /批准|Approve/ }).click();
@@ -592,7 +594,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(page.locator(".plan-card")).toBeVisible({ timeout: 5000 });
 
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
-    await page.getByRole("button", { name: /Agent Loop/ }).click();
+    await page.getByRole("button", { name: /开始执行|Agent Loop/ }).click();
 
     await page.getByRole("tab", { name: /变更|Changes/ }).click();
     const approval = page.locator(".approval-request-card", { hasText: "run_command" });

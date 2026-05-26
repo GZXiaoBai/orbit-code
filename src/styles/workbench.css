@@ -1127,7 +1127,7 @@
   white-space: pre-wrap;
 }
 
-.dock-diff-card .diff-viewer {
+.dock-diff-card .diff-viewer-card {
   border: 0;
   border-top: 1px solid var(--line);
   border-radius: 0;

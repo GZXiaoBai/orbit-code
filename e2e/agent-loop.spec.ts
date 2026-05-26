@@ -35,6 +35,7 @@ references: []`);
     await expect(nodes.first()).toBeVisible({ timeout: 8000 });
     await expect(timeline).toContainText(/计划已就绪|Plan Ready/);
     await expect(page.locator("button:has-text('Agent Loop')")).toHaveCount(0);
+    await expect(page.locator("button:has-text('开始执行')")).toHaveCount(0);
   });
 
   test("agent loop button exists and is clickable", async ({ page }) => {
@@ -64,8 +65,8 @@ references: []`);
 
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
 
-    // "Agent Loop" button should be visible
-    const loopBtn = page.locator("button:has-text('Agent Loop')");
+    // The localized Agent run button should be visible.
+    const loopBtn = page.getByRole("button", { name: /开始执行|Agent Loop/ });
     await expect(loopBtn).toBeVisible({ timeout: 5000 });
   });
 

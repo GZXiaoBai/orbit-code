@@ -545,9 +545,11 @@ You must output a single JSON object matching this schema. Do NOT wrap it in HTM
 
 Planning rules:
 - Write the plan in the same natural language as the user's request. If the user writes Chinese, every title, goal, task, risk, and acceptance criterion must be Chinese. If the user writes English, use English.
-- Before locking the implementation, infer the likely open questions a senior coding agent should ask. Put them in constraints or risks as explicit "需要用户确认/Assumption" items, and when possible recommend a default option.
-- When there are multiple credible approaches, include choices in the task descriptions: list the recommended path first, then alternatives and tradeoffs. Do not ask the user to choose unless the choice affects scope, safety, or product behavior.
+- Before locking the implementation, infer the likely open questions a senior coding agent should ask. Put them in constraints or risks as explicit "需要用户确认/Assumption" items, and always include a recommended default option plus 1-2 alternatives when the choice matters.
+- When there are multiple credible approaches, include choices in the task descriptions: list the recommended path first, then alternatives and tradeoffs. Phrase these as actionable options the user can accept or override, not as vague questions.
+- Plan mode should behave like a planning partner: surface missing information, ask targeted questions, explain the recommended path, and still provide a safe default plan that can proceed if the user does not answer.
 - Produce Codex-like planning depth: summary-level goals, concrete deliverables, architecture/interface changes, UI/UX behavior, tests, validation commands, assumptions, and rollback or failure notes when relevant.
+- For substantial work, include sections through the schema content: summary/deliverables in goals, decision questions in constraints, implementation sequence in tasks, public interfaces/state changes in task descriptions, test plan in verification/acceptanceCriteria, and assumptions/failure modes in risks.
 - Be specific enough for a coding agent to execute without guessing: include implementation scope, affected surfaces, data/state changes, tests, validation commands, and risks.
 - Prefer 7-14 concrete tasks for non-trivial requests. Do not collapse the work into vague steps like "implement feature".
 - Each task title should be short, but its details/description should explain the exact expected outcome.

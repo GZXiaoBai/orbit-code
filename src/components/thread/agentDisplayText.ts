@@ -1,4 +1,5 @@
 import type { AppCopy } from "../../i18n/copy";
+import { parseToolEnvelopes } from "../../domain/agentToolEnvelope";
 
 export function localizedAgentEventName(copy: AppCopy, name: string): string {
   const eventNames: Record<string, string> = {
@@ -37,6 +38,9 @@ export function localizedAgentEventName(copy: AppCopy, name: string): string {
 }
 
 export function localizedRuntimeText(copy: AppCopy, text: string): string {
+  const toolSummary = summarizeToolEnvelopeText(copy, text);
+  if (toolSummary) return toolSummary;
+
   const readableToolText = text
     .replace(/run_command:\s*\{[\s\S]*?\}/g, copy.language === "中" ? "等待审查台处理：命令" : "Waiting for command review")
     .replace(
@@ -90,4 +94,59 @@ export function localizedRuntimeText(copy: AppCopy, text: string): string {
     ["patch(es). No workspace files were changed.", "个补丁。当前工作区未被修改。"],
     ["No workspace files were changed.", "当前工作区未被修改。"],
   ].reduce((current, [from, to]) => current.split(from).join(to), readableToolText);
+}
+
+function summarizeToolEnvelopeText(copy: AppCopy, text: string): string | null {
+  const parsed = parseToolEnvelopes(text);
+  if (parsed.envelopes.length === 0) return null;
+
+  const envelope = parsed.envelopes[0];
+  const isZh = copy.language === "中";
+
+  if (envelope.tool === "run_command") {
+    const command = typeof envelope.params.command === "string" ? envelope.params.command : "command";
+    const args = Array.isArray(envelope.params.args) ? envelope.params.args.filter((arg): arg is string => typeof arg === "string") : [];
+    const reason = typeof envelope.params.reason === "string" ? envelope.params.reason.trim() : "";
+    const display = [command, ...args].join(" ");
+    return isZh
+      ? `Agent 请求运行命令：${display}${reason ? `。原因：${reason}` : ""}`
+      : `Agent requested a command: ${display}${reason ? `. Reason: ${reason}` : ""}`;
+  }
+
+  if (envelope.tool === "apply_patch") {
+    const patches = Array.isArray(envelope.params.patches) ? envelope.params.patches : [];
+    const files = patches
+      .map((patch) => typeof patch === "object" && patch && "path" in patch ? String((patch as { path?: unknown }).path || "") : "")
+      .filter(Boolean);
+    const preview = files.length ? `（${files.slice(0, 3).join("、")}${files.length > 3 ? " 等" : ""}）` : "";
+    return isZh
+      ? `Agent 提出补丁审查：${files.length || patches.length} 个文件${preview}`
+      : `Agent proposed a patch review for ${files.length || patches.length} file(s)${files.length ? ` (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", ..." : ""})` : ""}`;
+  }
+
+  if (envelope.tool === "ask_user") {
+    const question = typeof envelope.params.question === "string" ? envelope.params.question : "";
+    return isZh ? `Agent 正在询问：${question}` : `Agent is asking: ${question}`;
+  }
+
+  if (envelope.tool === "read_file") {
+    const path = typeof envelope.params.path === "string" ? envelope.params.path : "";
+    return isZh ? `Agent 准备读取文件：${path}` : `Agent is preparing to read: ${path}`;
+  }
+
+  if (envelope.tool === "search_code") {
+    const query = typeof envelope.params.query === "string" ? envelope.params.query : envelope.params.pattern;
+    return isZh ? `Agent 准备搜索代码：${typeof query === "string" ? query : ""}` : `Agent is preparing to search code: ${typeof query === "string" ? query : ""}`;
+  }
+
+  if (envelope.tool === "list_files") {
+    return isZh ? "Agent 准备读取项目文件列表" : "Agent is preparing to list project files";
+  }
+
+  if (envelope.tool === "done") {
+    const summary = typeof envelope.params.summary === "string" ? envelope.params.summary : "";
+    return summary || (isZh ? "Agent 已完成当前任务。" : "Agent finished the current task.");
+  }
+
+  return null;
 }
