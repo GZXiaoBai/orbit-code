@@ -943,6 +943,7 @@
   min-width: 0;
   display: grid;
   gap: 3px;
+  overflow: hidden;
 }
 
 .dock-task strong,
@@ -954,11 +955,13 @@
 }
 
 .dock-task strong {
+  display: block;
   overflow-wrap: anywhere;
   line-height: 1.35;
 }
 
 .dock-task header small {
+  display: block;
   min-width: 0;
   overflow: hidden;
   color: var(--text-muted);
