@@ -1,6 +1,6 @@
 # Next Tasks
 
-Last updated: 2026-05-25.
+Last updated: 2026-05-27.
 
 This task list is prepared for GPT, Gemini, or DeepSeek handoff. Work in order unless the user changes priority.
 
@@ -51,12 +51,20 @@ Done:
 - Replaced OS Keychain usage with an Orbit-owned encrypted credential vault; next manual smoke should verify restart, unlock, wrong passphrase, and model refresh.
 - Added smart Composer paste attachment classification for code blocks, YAML plans, long text, images, PDFs, and dropped files.
 - Added first-pass Provider adapter coverage for OpenRouter, xAI, Mistral, Groq, Qwen/DashScope, Kimi/Moonshot, SiliconFlow, and Zhipu/GLM.
+- Scoped Agent runs to `workspacePath + threadId + taskId + runSessionId`, so explicit continue no longer restarts from the first queued task.
+- Tightened DeepSeek-facing tool instructions and malformed-output recovery: one strict JSON tool call, structured command args/cwd, no fabricated tool results, bounded correction loops.
+- Improved Review Dock current-task scoping and terminal counts so historical runs do not pollute the active pending queue.
+- Added typed `ThreadEvent` projection and Review Dock approval grant scopes (`once / session / project`) to reduce cross-component state guessing.
+- Split official model capability fallback into `modelCapabilityCatalog`, with DeepSeek context/reasoning and Ollama discovery-only behavior covered by unit tests.
+- Improved dark-theme readability for disabled Agent action buttons, select checks, Agent timeline avatars, and task status controls.
+- Fixed new-thread isolation after session restore and added left-rail thread archive/delete actions with E2E coverage.
 
 Next:
 
 1. Extract `StreamingMessage` if the streaming surface grows beyond the current inline node.
 2. Move runtime/generated Agent status strings into an i18n-aware message layer.
-3. Add E2E coverage for:
+3. Decide whether approval grant scopes should persist across app restart; current implementation is session-memory only.
+4. Add E2E coverage for:
    - Send button imports Plan.
    - Real provider/key form flow with manual API smoke against OpenAI/Anthropic/Gemini/DeepSeek.
    - Composer paste/drop attachment chips and explicit YAML Plan import choice.
@@ -64,6 +72,8 @@ Next:
    - Task edit/delete/reorder flow.
    - Multi-file rollback UI and sandbox retry after a failed preview.
    - Verification approval reload recovery and terminal run completion after restored command execution.
+   - Real DeepSeek small-project smoke in `/Users/zhoujunjie/PersonalProjects/test for orbit`, using the scoped single-task run state, typed ThreadEvent storage, persisted grant scopes, and explicit continue flow.
+   - Explicit continue after restored verification approval and restored command completion.
 
 ## P2 - State Architecture
 
@@ -86,6 +96,10 @@ Done:
 - Patch proposal now runs a temp sandbox preview before Diff review; failed sandbox previews block real workspace apply.
 - Fixture E2E now covers approved transaction write, file preview refresh, and the post-patch verification command approval card.
 - Fixture E2E now also covers local-change conflict detection: no transaction write before resolution, then retry write after resolving.
+- Agent continuation now preserves the current run scope and returns the last approved/answered/applied/verified tool result to the same task instead of reselecting a queued task.
+- ThreadEvent is now written into session/thread snapshots as a serializable storage protocol, while legacy AgentEvent remains a compatibility projection for older UI consumers.
+- Session/project approval grants are persisted and restored; project grants survive thread creation/switching within the same workspace flow.
+- Context compaction now emits a scoped ThreadEvent-compatible timeline record instead of only changing the internal loop state.
 
 Next:
 
@@ -110,6 +124,6 @@ Next:
 
 1. Keep Ollama explicitly model-discovery-only in Build until chat/streaming relay is implemented.
 2. Run real provider-specific smoke tests manually when API keys are available; CI remains fixture-only.
-3. Finish GitHub publication once a repo-creation/push path is available (`gh` or a GitHub connector with create/push capability).
+3. GitHub publication is unblocked with authenticated `gh`; keep direct `main` pushes gated by the full verification suite.
 4. macOS debug packaging is verified; keep running it before desktop handoffs.
 5. Document Windows/Linux packaging as manual until verified.

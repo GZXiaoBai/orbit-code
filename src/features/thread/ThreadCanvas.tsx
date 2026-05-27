@@ -51,6 +51,13 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
     }
   }
 
+  function reviewHere() {
+    if (!workspace.layoutPreferences.reviewDockVisible) workspace.toggleReviewDock();
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("orbit:focus-review-dock"));
+    }, 80);
+  }
+
   return (
     <section className="thread-canvas" aria-label={copy.workbench.activeThread} onKeyDown={handleKeyDown}>
       <header className="thread-canvas-header">
@@ -105,6 +112,8 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
           agentLoopRunning={workspace.agentLoopRunning}
           agentLoopToolCalls={workspace.agentLoopToolCalls}
           onStartAgentLoop={isBuildMode ? workspace.startAgentLoop : undefined}
+          onContinueAgentRun={workspace.continueAgentRun}
+          canContinueAgentRun={Boolean(workspace.agentRunSession.canContinue)}
           onCancelAgentLoop={workspace.cancelAgentLoop}
           onRestartCollaboration={workspace.startCollaborationFlow}
           onApplyEventPatch={workspace.applyEventPatch}
@@ -118,11 +127,14 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
       <Composer
         copy={copy}
         onPlanImport={workspace.importPlan}
+        onBuildMessage={workspace.submitBuildMessage}
         runControls={workspace.runControls}
         onOpenSettings={onOpenSettings}
         workspaceRoot={workspace.workspaceRoot}
         projectPermissionPreset={workspace.projectSecurityOverride?.preset || workspace.effectiveSecurityPolicy.preset}
         onProjectPermissionChange={(preset) => void workspace.updateProjectSecurityOverride({ preset })}
+        reviewPendingCount={workspace.reviewDockModel.counts.changes}
+        onReviewHere={reviewHere}
       />
     </section>
   );

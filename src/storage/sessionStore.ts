@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentEvent } from "../domain/agentEvents";
+import type { ThreadEvent } from "../domain/threadEvents";
 import type { CodingPlan, ProviderSmokeRecord } from "../domain/types";
 import type { ModelCapability } from "../domain/types";
 import type { AgentRunSession } from "../domain/agentRunSession";
 import type { QuestionRequest } from "../domain/questionRequest";
 import type { TerminalRun } from "../domain/terminalRun";
-import type { ApprovalRequest } from "../state/useApprovalQueue";
+import type { ApprovalGrant, ApprovalRequest } from "../state/useApprovalQueue";
 import type { ImportedPlanState } from "../state/useWorkspace";
 import { isTauri } from "../utils/tauri";
 
@@ -29,8 +30,10 @@ export interface SessionState {
     smokeStatus?: Record<string, ProviderSmokeRecord>;
   };
   agentEvents: AgentEvent[];
+  threadEvents?: ThreadEvent[];
   agentRunSession?: AgentRunSession;
   approvalRequests?: ApprovalRequest[];
+  approvalGrants?: ApprovalGrant[];
   questionRequests?: QuestionRequest[];
   terminalRuns?: TerminalRun[];
   lastActiveAt: string;

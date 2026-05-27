@@ -17,6 +17,10 @@ export interface AgentEventPatch {
 
 export interface AgentEvent {
   id: string;
+  workspacePath?: string;
+  threadId?: string;
+  taskId?: string;
+  runSessionId?: string;
   role: "planner" | "coder" | "reviewer" | "verifier";
   name: string;
   status: "thinking" | "active" | "idle" | "done";

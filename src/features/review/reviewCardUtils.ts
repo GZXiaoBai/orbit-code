@@ -25,6 +25,7 @@ export function commandApprovalView(params: Record<string, unknown>, fallbackRea
     args,
     actions: commandPermissionActions(display),
     workspacePath: typeof params.workspacePath === "string" ? params.workspacePath : "",
+    cwd: typeof params.cwd === "string" ? params.cwd : "",
   };
 }
 

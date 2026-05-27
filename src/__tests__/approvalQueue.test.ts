@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { createApprovalRequest, recoverApprovalRequests, resolveApprovalRequest } from "../state/useApprovalQueue";
+import {
+  approvalGrantKey,
+  createApprovalRequest,
+  persistableApprovalGrants,
+  recoverApprovalGrants,
+  recoverApprovalRequests,
+  resolveApprovalRequest,
+  updateApprovalGrantScope,
+  type ApprovalGrant,
+} from "../state/useApprovalQueue";
 
 describe("approval queue reducers", () => {
   it("creates pending command approval requests", () => {
@@ -41,5 +50,64 @@ describe("approval queue reducers", () => {
 
     expect(recoverApprovalRequests([], [recovered])).toEqual([recovered]);
     expect(recoverApprovalRequests([live], [recovered])).toEqual([live]);
+  });
+
+  it("tracks grant scope on pending approvals", () => {
+    const request = createApprovalRequest("run_command", {
+      command: "npm",
+      args: ["test"],
+      workspacePath: "/tmp/project",
+      threadId: "thread-1",
+    });
+
+    const updated = updateApprovalGrantScope([request], request.id, "session");
+
+    expect(updated[0].grantScope).toBe("session");
+  });
+
+  it("builds stable command grant keys without transient scope fields", () => {
+    const first = approvalGrantKey("run_command", {
+      command: "npm",
+      args: ["run", "build"],
+      cwd: "orbit-mini-lab",
+      workspacePath: "/tmp/a",
+      threadId: "thread-a",
+      taskId: "task-a",
+    });
+    const second = approvalGrantKey("run_command", {
+      command: "npm",
+      args: ["run", "build"],
+      cwd: "orbit-mini-lab",
+      workspacePath: "/tmp/b",
+      threadId: "thread-b",
+      taskId: "task-b",
+    });
+
+    expect(first).toBe(second);
+  });
+
+  it("keeps only scoped grants that can be safely recovered", () => {
+    const validProject: ApprovalGrant = {
+      id: "project-grant",
+      tool: "run_command",
+      key: "run_command:npm",
+      workspacePath: "/tmp/project",
+      scope: "project",
+      createdAt: "2026-05-26T00:00:00.000Z",
+    };
+    const validSession: ApprovalGrant = {
+      ...validProject,
+      id: "session-grant",
+      threadId: "thread-1",
+      scope: "session",
+    };
+    const invalidSession: ApprovalGrant = {
+      ...validProject,
+      id: "invalid-session",
+      scope: "session",
+    };
+
+    expect(recoverApprovalGrants([validProject, validSession, invalidSession])).toEqual([validProject, validSession]);
+    expect(persistableApprovalGrants([validProject, validSession])).toEqual([validProject, validSession]);
   });
 });

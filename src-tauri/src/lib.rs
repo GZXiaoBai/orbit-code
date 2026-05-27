@@ -72,6 +72,10 @@ pub fn run() {
             db::load_session_state,
             commands::store_vault_credential,
             commands::unlock_credential_vault,
+            commands::enable_vault_auto_unlock,
+            commands::try_vault_auto_unlock,
+            commands::disable_vault_auto_unlock,
+            commands::is_vault_auto_unlock_enabled,
             commands::list_vault_credential_providers,
             commands::delete_vault_credential,
             commands::get_workspace_root,
@@ -363,11 +367,48 @@ mod tests {
             vec!["hello structured args".to_string()],
             "restricted".to_string(),
             Some(root),
+            None,
         );
 
         assert!(res.is_ok());
         let output = res.unwrap();
         assert!(output.contains("hello structured args"));
         assert!(output.contains("[exit_code: 0]"));
+    }
+
+    #[test]
+    fn test_run_command_sync_relative_cwd() {
+        let root = std::env::temp_dir().join(format!("orbit-cwd-test-{}", uuid::Uuid::new_v4()));
+        let child = root.join("orbit-mini-lab");
+        fs::create_dir_all(&child).unwrap();
+        let res = run_command_sync(
+            "pwd".to_string(),
+            vec![],
+            "none".to_string(),
+            Some(root.to_string_lossy().to_string()),
+            Some("orbit-mini-lab".to_string()),
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        assert!(res.is_ok());
+        let output = res.unwrap();
+        assert!(output.contains("orbit-mini-lab"));
+        assert!(output.contains("[exit_code: 0]"));
+    }
+
+    #[test]
+    fn test_run_command_sync_rejects_escaped_cwd() {
+        let root = std::env::temp_dir().join(format!("orbit-cwd-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let res = run_command_sync(
+            "pwd".to_string(),
+            vec![],
+            "none".to_string(),
+            Some(root.to_string_lossy().to_string()),
+            Some("..".to_string()),
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        assert!(res.is_err());
     }
 }

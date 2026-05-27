@@ -3,6 +3,12 @@ export interface ParsedCommand {
   args: string[];
 }
 
+export interface NormalizedCommand {
+  command: string;
+  args: string[];
+  cwd?: string;
+}
+
 export function parseCommandLine(input: string): ParsedCommand | null {
   const tokens: string[] = [];
   let current = "";
@@ -44,6 +50,29 @@ export function parseCommandLine(input: string): ParsedCommand | null {
   return {
     command: tokens[0],
     args: tokens.slice(1),
+  };
+}
+
+export function normalizeCommandWithCwd(input: string, preferredCwd?: string): NormalizedCommand | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  const cdMatch = trimmed.match(/^cd\s+((?:"[^"]+"|'[^']+'|[^\s&;]+))\s*&&\s*(.+)$/);
+  if (cdMatch) {
+    const parsedCwd = parseCommandLine(cdMatch[1])?.command;
+    const nextCommand = parseCommandLine(cdMatch[2]);
+    if (!parsedCwd || !nextCommand) return null;
+    return {
+      ...nextCommand,
+      cwd: preferredCwd && preferredCwd === parsedCwd ? preferredCwd : parsedCwd,
+    };
+  }
+
+  const parsed = parseCommandLine(trimmed);
+  if (!parsed) return null;
+  return {
+    ...parsed,
+    ...(preferredCwd ? { cwd: preferredCwd } : {}),
   };
 }
 

@@ -37,6 +37,11 @@ function App() {
   }, [language, theme]);
 
   useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    document.body.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       const mod = event.metaKey || event.ctrlKey;
       if (event.key === "Escape") {
@@ -81,6 +86,7 @@ function App() {
           providerSettings={workspace.providerSettings}
           apiKeys={workspace.apiKeys}
           credentialVaultProviders={workspace.credentialVaultProviders}
+          credentialVaultAutoUnlock={workspace.credentialVaultAutoUnlock}
           usageSnapshot={workspace.usageSnapshot}
           theme={theme}
           layoutPreferences={workspace.layoutPreferences}
@@ -93,6 +99,7 @@ function App() {
           onUpdateSettings={workspace.updateProviderSettings}
           onUpdateApiKey={workspace.updateApiKey}
           onUnlockCredentialVault={workspace.unlockCredentialVault}
+          onDisableCredentialVaultAutoUnlock={workspace.disableCredentialVaultAutoUnlock}
           onThemeChange={setTheme}
           onUpdateLayoutPreferences={workspace.updateLayoutPreferences}
           onTogglePinnedProject={workspace.togglePinnedProject}

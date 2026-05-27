@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-test.describe("Orbit Code — Agent Loop", () => {
+test.describe("Orbit Code — Agent run", () => {
   test("agent collaboration timeline activates after plan import", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
@@ -34,7 +34,7 @@ references: []`);
     const nodes = timeline.locator(".timeline-node");
     await expect(nodes.first()).toBeVisible({ timeout: 8000 });
     await expect(timeline).toContainText(/计划已就绪|Plan Ready/);
-    await expect(page.locator("button:has-text('Agent Loop')")).toHaveCount(0);
+    await expect(page.locator("button:has-text('Agent run')")).toHaveCount(0);
     await expect(page.locator("button:has-text('开始执行')")).toHaveCount(0);
   });
 
@@ -66,7 +66,7 @@ references: []`);
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
 
     // The localized Agent run button should be visible.
-    await expect(page.locator("button:has-text('Agent Loop')")).toHaveCount(0);
+    await expect(page.locator("button:has-text('Agent run')")).toHaveCount(0);
     const loopBtn = page.getByRole("button", { name: "开始执行" });
     await expect(loopBtn).toBeVisible({ timeout: 5000 });
   });

@@ -31,7 +31,9 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
   const model = workspace.reviewDockModel;
   const filePreview = useFilePreview(workspace.activeFilePath, workspace.activeFileContent);
   const tasks = workspace.importedPlan?.plan.tasks ?? [];
-  const terminalRuns = model.terminalRuns;
+  const terminalRuns = model.terminalRuns.length > 0
+    ? model.terminalRuns
+    : model.historyTerminalRuns;
   const taskStatusOptions: Array<{ value: TaskStatus; label: string }> = [
     { value: "queued", label: copy.workbench.taskStatus.queued },
     { value: "running", label: copy.workbench.taskStatus.running },
@@ -72,6 +74,23 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
     }
   }, [failedTerminalCount, model.counts.changes]);
 
+  useEffect(() => {
+    const focusReviewDock = () => {
+      setActiveTab("changes");
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const dock = document.querySelector(".review-dock");
+          const target = dock?.querySelector<HTMLElement>("[data-review-focus='pending'], .approval-request-card, .dock-diff-card, .dock-run-step");
+          target?.scrollIntoView({ block: "center", behavior: "smooth" });
+          target?.classList.add("review-focus-pulse");
+          window.setTimeout(() => target?.classList.remove("review-focus-pulse"), 1200);
+        });
+      });
+    };
+    window.addEventListener("orbit:focus-review-dock", focusReviewDock);
+    return () => window.removeEventListener("orbit:focus-review-dock", focusReviewDock);
+  }, []);
+
   return (
     <aside className="review-dock" aria-label={copy.workbench.reviewDock}>
       <header className="review-dock-header">
@@ -107,7 +126,7 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
               {tasks.map((task: PlanTask) => (
                 <article key={task.id} className="dock-task">
                   <header>
-                    <div>
+                    <div className="dock-task-title-block">
                       <strong>{task.title}</strong>
                       <small>{task.id}</small>
                     </div>
@@ -132,7 +151,7 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
         {activeTab === "changes" ? (
           <div className="dock-changes">
             {activeChangeSteps.map((step) => (
-              <article key={step.id} className={`dock-run-step dock-run-step-${step.status}`}>
+              <article key={step.id} className={`dock-run-step dock-run-step-${step.status}`} data-review-focus="pending">
                 <header>
                   <div>
                     <strong>{localizedAgentEventName(copy, step.title)}</strong>
@@ -150,6 +169,7 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
               approvals={model.commandApprovals}
               workspaceRoot={workspace.workspaceRoot}
               onResolve={workspace.resolveApproval}
+              onGrantScopeChange={workspace.updateApprovalGrantScope}
             />
 
             <QuestionQueue
@@ -166,23 +186,28 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
               onUpdatePatch={workspace.updateEventPatch}
             />
 
-            {model.appliedPatchReviews.length > 0 ? (
+            {(model.appliedPatchReviews.length > 0 || model.failedPatchReviews.length > 0 || model.historyPatchReviews.length > 0) ? (
               <div className="dock-applied-history">
                 <div className="dock-queue-heading">
                   <GitPullRequestArrow size={14} />
                   <strong>{copy.workbench.patchHistory}</strong>
                 </div>
-                {model.appliedPatchReviews.slice(-3).map((event) => (
-                  <article key={event.id} className="dock-run-step dock-run-step-done">
+                {[...model.appliedPatchReviews, ...model.failedPatchReviews, ...model.historyPatchReviews].slice(0, 4).map((event) => {
+                  const failed = event.patches?.every((patch) => !patch.applied && (patch.sandboxStatus === "failed" || patch.applyStatus === "failed"));
+                  return (
+                    <article key={event.id} className="dock-run-step dock-run-step-done">
                     <header>
                       <div>
                         <strong>{localizedAgentEventName(copy, event.name)}</strong>
                         <small>{event.patches?.map((patch) => patch.path).join(", ")}</small>
                       </div>
-                      <StatusBadge tone="success">{copy.diff.allApplied}</StatusBadge>
+                      <StatusBadge tone={failed ? "danger" : "success"}>
+                        {failed ? copy.workbench.patchFailed : copy.diff.allApplied}
+                      </StatusBadge>
                     </header>
                   </article>
-                ))}
+                  );
+                })}
               </div>
             ) : null}
 
@@ -191,6 +216,7 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
               approvals={model.verificationApprovals}
               workspaceRoot={workspace.workspaceRoot}
               onResolve={workspace.resolveApproval}
+              onGrantScopeChange={workspace.updateApprovalGrantScope}
             />
 
             {model.otherApprovals.length > 0 ? (
@@ -201,7 +227,7 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
             ) : null}
 
             {model.otherApprovals.map((request) => (
-              <article key={request.id} className="approval-request-card">
+                <article key={request.id} className="approval-request-card" data-review-focus="pending">
                 <header>
                   <div>
                     <strong>{localizedAgentEventName(copy, request.tool)}</strong>

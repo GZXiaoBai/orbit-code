@@ -13,6 +13,20 @@ describe("composer attachment classifier", () => {
     expect(result.attachment?.kind).toBe("code");
   });
 
+  it("turns single-line code into attachment context instead of corrupting the composer", () => {
+    const result = classifyPastedText("const total = items.reduce((sum, item) => sum + item.price, 0);");
+
+    expect(result.action).toBe("attach");
+    expect(result.attachment?.kind).toBe("code");
+  });
+
+  it("turns JSON snippets into code attachment context", () => {
+    const result = classifyPastedText('{\n  "scripts": {\n    "test": "vitest run"\n  }\n}');
+
+    expect(result.action).toBe("attach");
+    expect(result.attachment?.kind).toBe("code");
+  });
+
   it("turns YAML plans into explicit plan attachments", () => {
     const result = classifyPastedText("version: 1\ntasks:\n  - id: t1\n    title: Fix");
 

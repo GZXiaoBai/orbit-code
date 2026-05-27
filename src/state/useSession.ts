@@ -16,7 +16,8 @@ import type { LLMProvider } from "../services/llmService";
 import type { AgentRunSession } from "../domain/agentRunSession";
 import type { QuestionRequest } from "../domain/questionRequest";
 import type { TerminalRun } from "../domain/terminalRun";
-import type { ApprovalRequest } from "./useApprovalQueue";
+import type { ThreadEvent } from "../domain/threadEvents";
+import type { ApprovalGrant, ApprovalRequest } from "./useApprovalQueue";
 import { parseCodingPlan } from "../domain/planSchema";
 import { tauriWorkspaceStorage } from "../storage/tauriStorage";
 import { keychainStorage } from "../storage/keychain";
@@ -66,13 +67,16 @@ export interface SessionState {
   providerSettings: ProviderSettings;
   apiKeys: Record<string, string>;
   credentialVaultProviders: string[];
+  credentialVaultAutoUnlock: boolean;
   isRealLLMActive: boolean;
   activeLLMConfig: { provider: LLMProvider; model: string; url?: string } | null;
   activeTitle: string | null;
   outputFiles: string[];
   loadedAgentEvents: any[] | null;
+  loadedThreadEvents: ThreadEvent[] | null;
   loadedAgentRunSession: AgentRunSession | null;
   loadedApprovalRequests: ApprovalRequest[] | null;
+  loadedApprovalGrants: ApprovalGrant[] | null;
   loadedQuestionRequests: QuestionRequest[] | null;
   loadedTerminalRuns: TerminalRun[] | null;
 
@@ -84,8 +88,9 @@ export interface SessionState {
   deleteTask: (taskId: string) => void;
   moveTask: (taskId: string, direction: "up" | "down") => void;
   updateProviderSettings: (newSettings: ProviderSettings) => Promise<void>;
-  updateApiKey: (providerId: string, key: string, passphrase: string) => Promise<void>;
-  unlockCredentialVault: (passphrase: string) => Promise<string[]>;
+  updateApiKey: (providerId: string, key: string, passphrase: string, rememberDevice?: boolean) => Promise<void>;
+  unlockCredentialVault: (passphrase: string, rememberDevice?: boolean) => Promise<string[]>;
+  disableCredentialVaultAutoUnlock: () => Promise<void>;
 }
 
 const defaultProviderSettings: ProviderSettings = {
@@ -162,11 +167,14 @@ export function useSession(): SessionState {
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>(normalizeProviderSettings(defaultProviderSettings));
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [credentialVaultProviders, setCredentialVaultProviders] = useState<string[]>([]);
+  const [credentialVaultAutoUnlock, setCredentialVaultAutoUnlock] = useState(false);
   const [isRealLLMActive, setIsRealLLMActive] = useState(false);
   const [activeLLMConfig, setActiveLLMConfig] = useState<{ provider: LLMProvider; model: string; url?: string } | null>(null);
   const [loadedAgentEvents, setLoadedAgentEvents] = useState<any[] | null>(null);
+  const [loadedThreadEvents, setLoadedThreadEvents] = useState<ThreadEvent[] | null>(null);
   const [loadedAgentRunSession, setLoadedAgentRunSession] = useState<AgentRunSession | null>(null);
   const [loadedApprovalRequests, setLoadedApprovalRequests] = useState<ApprovalRequest[] | null>(null);
+  const [loadedApprovalGrants, setLoadedApprovalGrants] = useState<ApprovalGrant[] | null>(null);
   const [loadedQuestionRequests, setLoadedQuestionRequests] = useState<QuestionRequest[] | null>(null);
   const [loadedTerminalRuns, setLoadedTerminalRuns] = useState<TerminalRun[] | null>(null);
 
@@ -208,6 +216,9 @@ export function useSession(): SessionState {
           if (session.providerSettings) {
             setProviderSettings(normalizeProviderSettings(session.providerSettings as ProviderSettings));
           }
+          if (session.threadEvents && session.threadEvents.length > 0) {
+            setLoadedThreadEvents(session.threadEvents);
+          }
           if (session.agentEvents && session.agentEvents.length > 0) {
             setLoadedAgentEvents(session.agentEvents);
           }
@@ -216,6 +227,9 @@ export function useSession(): SessionState {
           }
           if (session.approvalRequests) {
             setLoadedApprovalRequests(session.approvalRequests);
+          }
+          if (session.approvalGrants) {
+            setLoadedApprovalGrants(session.approvalGrants);
           }
           if (session.questionRequests) {
             setLoadedQuestionRequests(session.questionRequests);
@@ -247,9 +261,21 @@ export function useSession(): SessionState {
           }
         }
 
+        const autoUnlockEnabled = await keychainStorage.isAutoUnlockEnabled().catch(() => false);
+        setCredentialVaultAutoUnlock(autoUnlockEnabled);
+        const autoUnlockedProviders = autoUnlockEnabled
+          ? await keychainStorage.tryAutoUnlock().catch((err) => {
+            console.warn("Credential vault auto-unlock failed:", err);
+            return [] as string[];
+          })
+          : [];
+        if (autoUnlockedProviders.length > 0) {
+          setApiKeys(Object.fromEntries(autoUnlockedProviders.map((provider) => [provider, "__vault_unlocked__"])));
+        } else {
+          setApiKeys({});
+        }
         const savedProviders = await keychainStorage.listSavedProviders();
         setCredentialVaultProviders(savedProviders);
-        setApiKeys({});
       } catch (err) {
         console.error("Failed to load workspace data:", err);
       } finally {
@@ -337,7 +363,6 @@ export function useSession(): SessionState {
   }, []);
 
   const importPlan = useCallback(async (source: string, fileName = "pasted-plan") => {
-    setIsLoading(true);
     const result = parseCodingPlan(source);
 
     if (!result.ok) {
@@ -447,17 +472,26 @@ export function useSession(): SessionState {
     }
   }, []);
 
-  const unlockCredentialVault = useCallback(async (passphrase: string) => {
-    const providers = await keychainStorage.unlock(passphrase);
+  const unlockCredentialVault = useCallback(async (passphrase: string, rememberDevice = false) => {
+    const providers = rememberDevice
+      ? await keychainStorage.enableAutoUnlock(passphrase)
+      : await keychainStorage.unlock(passphrase);
     setCredentialVaultProviders(providers);
     setApiKeys(Object.fromEntries(providers.map((provider) => [provider, "__vault_unlocked__"])));
+    if (rememberDevice) setCredentialVaultAutoUnlock(true);
     return providers;
   }, []);
 
-  const updateApiKey = useCallback(async (providerId: string, key: string, passphrase: string) => {
-    await keychainStorage.saveApiKey(providerId, key, passphrase);
+  const updateApiKey = useCallback(async (providerId: string, key: string, passphrase: string, rememberDevice = false) => {
+    await keychainStorage.saveApiKey(providerId, key, passphrase, rememberDevice);
     setCredentialVaultProviders((prev) => [...new Set([...prev, providerId])]);
     setApiKeys((prev) => ({ ...prev, [providerId]: "__vault_unlocked__" }));
+    if (rememberDevice) setCredentialVaultAutoUnlock(true);
+  }, []);
+
+  const disableCredentialVaultAutoUnlock = useCallback(async () => {
+    await keychainStorage.disableAutoUnlock();
+    setCredentialVaultAutoUnlock(false);
   }, []);
 
   const activeTitle = importedPlan?.plan.title ?? null;
@@ -478,13 +512,16 @@ export function useSession(): SessionState {
     providerSettings,
     apiKeys,
     credentialVaultProviders,
+    credentialVaultAutoUnlock,
     isRealLLMActive,
     activeLLMConfig,
     activeTitle,
     outputFiles,
     loadedAgentEvents,
+    loadedThreadEvents,
     loadedAgentRunSession,
     loadedApprovalRequests,
+    loadedApprovalGrants,
     loadedQuestionRequests,
     loadedTerminalRuns,
     importPlan,
@@ -497,6 +534,7 @@ export function useSession(): SessionState {
     updateProviderSettings,
     updateApiKey,
     unlockCredentialVault,
+    disableCredentialVaultAutoUnlock,
   };
 }
 

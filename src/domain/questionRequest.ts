@@ -2,6 +2,8 @@ export type QuestionRequestStatus = "pending" | "answered" | "cancelled";
 
 export interface QuestionRequest {
   id: string;
+  workspacePath?: string;
+  threadId?: string;
   taskId: string;
   question: string;
   status: QuestionRequestStatus;
@@ -11,6 +13,8 @@ export interface QuestionRequest {
 }
 
 export function createQuestionRequest(input: {
+  workspacePath?: string;
+  threadId?: string;
   taskId: string;
   question: string;
   at?: string;
@@ -18,6 +22,8 @@ export function createQuestionRequest(input: {
   const createdAt = input.at || new Date().toISOString();
   return {
     id: `question-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    workspacePath: input.workspacePath,
+    threadId: input.threadId,
     taskId: input.taskId,
     question: input.question,
     status: "pending",

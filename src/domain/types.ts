@@ -69,6 +69,8 @@ export interface LayoutPreferences {
   density: DensityMode;
   settingsSection: string;
   composerPinned: boolean;
+  projectRailWidth?: number;
+  reviewDockWidth?: number;
 }
 
 export interface ProjectMenuState {

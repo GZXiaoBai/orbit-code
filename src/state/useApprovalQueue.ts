@@ -2,15 +2,30 @@ import { useCallback, useRef, useState } from "react";
 import type { ToolParams } from "../domain/agentLoop";
 
 export type ApprovalStatus = "pending" | "approved" | "denied" | "cancelled";
+export type ApprovalGrantScope = "once" | "session" | "project";
 
 export interface ApprovalRequest {
   id: string;
+  workspacePath?: string;
+  threadId?: string;
+  taskId?: string;
   tool: string;
   params: ToolParams;
   reason: string;
+  grantScope: ApprovalGrantScope;
   status: ApprovalStatus;
   createdAt: string;
   resolvedAt?: string;
+}
+
+export interface ApprovalGrant {
+  id: string;
+  tool: string;
+  key: string;
+  workspacePath?: string;
+  threadId?: string;
+  scope: Exclude<ApprovalGrantScope, "once">;
+  createdAt: string;
 }
 
 export type ApprovalCreatedCallback = (request: ApprovalRequest) => void;
@@ -22,16 +37,68 @@ interface PendingResolver {
 export function createApprovalRequest(
   tool: string,
   params: ToolParams,
-  reason = ""
+  reason = "",
+  grantScope: ApprovalGrantScope = "once",
 ): ApprovalRequest {
+  const workspacePath = typeof params.workspacePath === "string" ? params.workspacePath : undefined;
+  const threadId = typeof params.threadId === "string" ? params.threadId : undefined;
+  const taskId = typeof params.taskId === "string" ? params.taskId : undefined;
   return {
     id: `approval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    workspacePath,
+    threadId,
+    taskId,
     tool,
     params,
     reason,
+    grantScope,
     status: "pending",
     createdAt: new Date().toISOString(),
   };
+}
+
+function normalizeApprovalRequest(request: ApprovalRequest): ApprovalRequest {
+  return {
+    ...request,
+    grantScope: request.grantScope || "once",
+  };
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !["workspacePath", "threadId", "taskId", "sourceEventId"].includes(key))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function approvalGrantKey(tool: string, params: ToolParams): string {
+  if (tool === "run_command") {
+    const command = typeof params.command === "string" ? params.command : "";
+    const args = Array.isArray(params.args) ? params.args.filter((arg): arg is string => typeof arg === "string") : [];
+    const cwd = typeof params.cwd === "string" ? params.cwd : "";
+    return `${tool}:${command}\u0000${args.join("\u0000")}\u0000${cwd}`;
+  }
+  return `${tool}:${stableStringify(params)}`;
+}
+
+function grantMatchesRequest(grant: ApprovalGrant, request: ApprovalRequest): boolean {
+  if (grant.tool !== request.tool || grant.key !== approvalGrantKey(request.tool, request.params)) return false;
+  if (grant.scope === "project") {
+    return Boolean(grant.workspacePath && request.workspacePath && grant.workspacePath === request.workspacePath);
+  }
+  return Boolean(
+    grant.workspacePath
+      && request.workspacePath
+      && grant.workspacePath === request.workspacePath
+      && grant.threadId
+      && request.threadId
+      && grant.threadId === request.threadId,
+  );
 }
 
 export function resolveApprovalRequest(
@@ -49,15 +116,39 @@ export function resolveApprovalRequest(
   });
 }
 
+export function updateApprovalGrantScope(
+  requests: ApprovalRequest[],
+  id: string,
+  grantScope: ApprovalGrantScope,
+): ApprovalRequest[] {
+  return requests.map((request) =>
+    request.id === id && request.status === "pending"
+      ? { ...request, grantScope }
+      : request
+  );
+}
+
 export function recoverApprovalRequests(
   current: ApprovalRequest[],
   recovered: ApprovalRequest[],
 ): ApprovalRequest[] {
-  return current.length > 0 ? current : recovered;
+  return current.length > 0 ? current : recovered.map(normalizeApprovalRequest);
 }
 
-export function useApprovalQueue(initialRequests: ApprovalRequest[] = []) {
-  const [requests, setRequests] = useState<ApprovalRequest[]>(initialRequests);
+export function recoverApprovalGrants(recovered: ApprovalGrant[] = []): ApprovalGrant[] {
+  return recovered.filter((grant) =>
+    (grant.scope === "session" && Boolean(grant.workspacePath && grant.threadId))
+    || (grant.scope === "project" && Boolean(grant.workspacePath))
+  );
+}
+
+export function persistableApprovalGrants(grants: ApprovalGrant[]): ApprovalGrant[] {
+  return grants.filter((grant) => grant.scope === "session" || grant.scope === "project");
+}
+
+export function useApprovalQueue(initialRequests: ApprovalRequest[] = [], initialGrants: ApprovalGrant[] = []) {
+  const [requests, setRequests] = useState<ApprovalRequest[]>(initialRequests.map(normalizeApprovalRequest));
+  const [grants, setGrants] = useState<ApprovalGrant[]>(recoverApprovalGrants(initialGrants));
   const resolversRef = useRef(new Map<string, PendingResolver>());
 
   const requestApproval = useCallback((
@@ -67,22 +158,45 @@ export function useApprovalQueue(initialRequests: ApprovalRequest[] = []) {
     onCreated?: ApprovalCreatedCallback
   ) => {
     const request = createApprovalRequest(tool, params, reason);
+    if (grants.some((grant) => grantMatchesRequest(grant, request))) {
+      return Promise.resolve(true);
+    }
+
     onCreated?.(request);
     setRequests((prev) => [request, ...prev]);
 
     return new Promise<boolean>((resolve) => {
       resolversRef.current.set(request.id, { resolve });
     });
-  }, []);
+  }, [grants]);
 
   const resolveApproval = useCallback((id: string, approved: boolean) => {
+    const request = requests.find((item) => item.id === id);
     const resolver = resolversRef.current.get(id);
     if (resolver) {
       resolver.resolve(approved);
       resolversRef.current.delete(id);
     }
+    if (approved && request && (request.grantScope || "once") !== "once") {
+      setGrants((prev) => [
+        {
+          id: `grant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          tool: request.tool,
+          key: approvalGrantKey(request.tool, request.params),
+          workspacePath: request.workspacePath,
+          threadId: request.threadId,
+          scope: (request.grantScope || "once") as Exclude<ApprovalGrantScope, "once">,
+          createdAt: new Date().toISOString(),
+        },
+        ...prev,
+      ]);
+    }
     setRequests((prev) => resolveApprovalRequest(prev, id, approved));
     return Boolean(resolver);
+  }, [requests]);
+
+  const updateGrantScope = useCallback((id: string, grantScope: ApprovalGrantScope) => {
+    setRequests((prev) => updateApprovalGrantScope(prev, id, grantScope));
   }, []);
 
   const cancelPendingApprovals = useCallback(() => {
@@ -97,8 +211,12 @@ export function useApprovalQueue(initialRequests: ApprovalRequest[] = []) {
     );
   }, []);
 
-  const recoverApprovals = useCallback((nextRequests: ApprovalRequest[]) => {
-    setRequests((prev) => recoverApprovalRequests(prev, nextRequests));
+  const recoverApprovals = useCallback((nextRequests: ApprovalRequest[], replace = false) => {
+    setRequests((prev) => replace ? nextRequests : recoverApprovalRequests(prev, nextRequests));
+  }, []);
+
+  const recoverGrants = useCallback((nextGrants: ApprovalGrant[], replace = false) => {
+    setGrants((prev) => replace ? recoverApprovalGrants(nextGrants) : [...recoverApprovalGrants(nextGrants), ...prev]);
   }, []);
 
   return {
@@ -106,7 +224,10 @@ export function useApprovalQueue(initialRequests: ApprovalRequest[] = []) {
     pendingApprovals: requests.filter((request) => request.status === "pending"),
     requestApproval,
     resolveApproval,
+    updateGrantScope,
     cancelPendingApprovals,
     recoverApprovals,
+    recoverGrants,
+    approvalGrants: persistableApprovalGrants(grants),
   };
 }

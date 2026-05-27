@@ -1,6 +1,7 @@
 import type { ModelCapability, ModelProviderConfig, ReasoningEffort } from "../domain/types";
 import { findProvider, providerRegistry } from "../providers/providerRegistry";
 import { fallbackCapability, isOpenAICompatibleProvider } from "../providers/providerAdapters";
+import { capabilityFromOfficialCatalog, inferReasoningLevelsFromModel } from "../providers/modelCapabilityCatalog";
 import type { ProviderConfig, ProviderSettings } from "./useSession";
 
 export interface RunModelOption {
@@ -12,15 +13,6 @@ export interface RunModelOption {
   source: "recommended" | "custom" | "default";
   capability?: ModelCapability;
 }
-
-const modelContextByPattern: Array<{ providerId?: string; pattern: RegExp; maxContextTokens: number; maxOutputTokens?: number; reasoningLevels?: ReasoningEffort[] }> = [
-  { providerId: "deepseek", pattern: /deepseek-v4-(flash|pro)/i, maxContextTokens: 1_000_000, maxOutputTokens: 384_000, reasoningLevels: ["auto", "balanced", "high", "max"] },
-  { providerId: "deepseek", pattern: /deepseek-reasoner/i, maxContextTokens: 128_000, maxOutputTokens: 64_000, reasoningLevels: ["balanced", "deep"] },
-  { providerId: "deepseek", pattern: /deepseek-chat/i, maxContextTokens: 128_000, maxOutputTokens: 8_000, reasoningLevels: ["fast", "balanced"] },
-  { providerId: "openai", pattern: /gpt-5/i, maxContextTokens: 400_000, reasoningLevels: ["auto", "fast", "balanced", "deep"] },
-  { providerId: "anthropic", pattern: /claude/i, maxContextTokens: 200_000, reasoningLevels: ["auto", "balanced", "deep"] },
-  { providerId: "google", pattern: /gemini-2\.5/i, maxContextTokens: 1_000_000, reasoningLevels: ["auto", "fast", "balanced", "deep"] },
-];
 
 export type NormalizedProviderConfig = Required<Pick<ProviderConfig, "enabledModels" | "customModels" | "importedModels" | "modelCapabilities">> & ProviderConfig;
 
@@ -60,10 +52,16 @@ export function getProviderConfig(settings: ProviderSettings, providerId: string
   return normalizeProviderConfig(provider, settings.configs[providerId]);
 }
 
-export function buildRunModelOptions(settings: ProviderSettings, apiKeys: Record<string, string> = {}): RunModelOption[] {
+export function buildRunModelOptions(
+  settings: ProviderSettings,
+  apiKeys: Record<string, string> = {},
+  savedCredentialProviders: string[] = [],
+): RunModelOption[] {
+  const savedCredentialSet = new Set(savedCredentialProviders);
   return providerRegistry.flatMap((provider) => {
-    if (!provider.capabilities.local && !apiKeys[provider.id]) return [];
     const config = normalizeProviderConfig(provider, settings.configs[provider.id]);
+    const hasImportedModelState = config.importedModels.length > 0 || config.customModels.length > 0 || config.enabledModels.length > 0;
+    if (!provider.capabilities.local && !apiKeys[provider.id] && !savedCredentialSet.has(provider.id) && !hasImportedModelState) return [];
     const modelPool = uniqueModels([...config.importedModels, ...config.customModels]);
     const enabledModels = config.enabledModels.filter((model) => modelPool.includes(model));
     return enabledModels.map((model) => ({
@@ -86,9 +84,15 @@ export function resolveModelSelection(
   settings: ProviderSettings,
   apiKeys: Record<string, string> = {},
   preferred?: { providerId?: string; model?: string },
+  savedCredentialProviders: string[] = [],
 ): RunModelOption | null {
-  const options = buildRunModelOptions(settings, apiKeys);
+  const options = buildRunModelOptions(settings, apiKeys, savedCredentialProviders);
   if (options.length === 0) return null;
+
+  const activeProviderMatch = options.find((option) => option.providerId === settings.activeProviderId);
+  if (preferred?.providerId === "fixture" && settings.activeProviderId && settings.activeProviderId !== "fixture" && activeProviderMatch) {
+    return activeProviderMatch;
+  }
 
   const preferredMatch = options.find((option) =>
     option.providerId === preferred?.providerId && option.model === preferred?.model
@@ -98,7 +102,6 @@ export function resolveModelSelection(
   const preferredProviderMatch = options.find((option) => option.providerId === preferred?.providerId);
   if (preferredProviderMatch) return preferredProviderMatch;
 
-  const activeProviderMatch = options.find((option) => option.providerId === settings.activeProviderId);
   return activeProviderMatch || options[0];
 }
 
@@ -140,19 +143,22 @@ export function setModelEnabled(
 
 export function inferModelCapability(providerId: string, model: string): ModelCapability {
   const provider = findProvider(providerId) || providerRegistry[0];
-  const tableMatch = modelContextByPattern.find((entry) =>
-    (!entry.providerId || entry.providerId === providerId) && entry.pattern.test(model)
-  );
+  const official = capabilityFromOfficialCatalog(providerId, model);
   const adapterFallback = fallbackCapability(providerId, model);
+  const buildSupported = official?.buildSupported ?? adapterFallback.buildSupported;
   return {
-    streaming: provider.capabilities.streaming,
-    reasoningLevels: tableMatch?.reasoningLevels || adapterFallback.reasoningLevels || inferReasoningEfforts(providerId, model),
-    toolCalls: provider.capabilities.toolCalls,
+    streaming: official?.streaming ?? provider.capabilities.streaming,
+    reasoningLevels: official?.reasoningLevels || adapterFallback.reasoningLevels || inferReasoningEfforts(providerId, model),
+    toolCalls: official?.toolCalls ?? provider.capabilities.toolCalls,
     local: provider.capabilities.local,
-    buildSupported: providerId === "fixture" || providerId === "anthropic" || providerId === "google" || isOpenAICompatibleProvider(providerId),
-    maxContextTokens: tableMatch?.maxContextTokens || adapterFallback.maxContextTokens || provider.capabilities.maxContextTokens,
-    maxOutputTokens: tableMatch?.maxOutputTokens || adapterFallback.maxOutputTokens,
-    capabilitySource: tableMatch ? "officialTable" : adapterFallback.capabilitySource,
+    buildSupported: buildSupported && (
+      provider.capabilities.toolCalls
+      || isOpenAICompatibleProvider(providerId)
+      || providerId === "fixture"
+    ),
+    maxContextTokens: official?.maxContextTokens || adapterFallback.maxContextTokens || provider.capabilities.maxContextTokens,
+    maxOutputTokens: official?.maxOutputTokens || adapterFallback.maxOutputTokens,
+    capabilitySource: official?.capabilitySource || adapterFallback.capabilitySource,
   };
 }
 
@@ -208,15 +214,5 @@ export function addCustomModel(settings: ProviderSettings, providerId: string, m
 }
 
 export function inferReasoningEfforts(providerId: string, model: string): ReasoningEffort[] {
-  const key = `${providerId} ${model}`.toLowerCase();
-
-  if (!model) return ["auto"];
-  if (providerId === "fixture") return ["auto", "balanced"];
-  if (/(reasoner|thinking|o1|o3|o4|gpt-5|opus|pro|max)/.test(key)) {
-    return ["balanced", "deep"];
-  }
-  if (/(flash|mini|haiku|nano|small|lite|turbo)/.test(key)) {
-    return ["fast", "balanced"];
-  }
-  return ["fast", "balanced", "deep"];
+  return inferReasoningLevelsFromModel(providerId, model);
 }

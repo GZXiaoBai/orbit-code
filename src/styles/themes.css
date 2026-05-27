@@ -44,7 +44,15 @@
   border-color: var(--line-strong);
 }
 
-[data-theme="light"] .agent-loop-btn { color: #fff; }
+[data-theme="light"] .agent-loop-status {
+  background: color-mix(in srgb, var(--text-primary) 92%, var(--surface));
+  color: #fff;
+}
+
+[data-theme="light"] .agent-loop-btn,
+[data-theme="light"] .agent-loop-btn:hover {
+  color: #fff;
+}
 
 [data-theme="light"] .brand-mark { color: #fff; }
 
@@ -58,7 +66,7 @@
 [data-theme="light"] .thread-actions-menu,
 [data-theme="light"] .project-permission-menu,
 [data-theme="light"] .command-palette {
-  background: rgba(250, 250, 247, 0.995);
+  background: rgb(250, 250, 247);
 }
 
 [data-theme="light"] .model-search,

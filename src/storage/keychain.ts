@@ -4,7 +4,7 @@ import { isTauri } from "../utils/tauri";
 export const ORBIT_CODE_VAULT_PREFIX = "credential.vault.";
 
 export const credentialVaultStorage = {
-  async saveApiKey(providerId: string, apiKey: string, passphrase: string): Promise<void> {
+  async saveApiKey(providerId: string, apiKey: string, passphrase: string, rememberDevice = false): Promise<void> {
     if (!isTauri()) {
       console.warn(`[CredentialVault] Non-Tauri environment: API Key for "${providerId}" will NOT be persisted.`);
       return;
@@ -13,12 +13,33 @@ export const credentialVaultStorage = {
       provider: providerId,
       secret: apiKey,
       passphrase,
+      rememberDevice,
     });
   },
 
   async unlock(passphrase: string): Promise<string[]> {
     if (!isTauri()) return [];
     return invoke<string[]>("unlock_credential_vault", { passphrase });
+  },
+
+  async enableAutoUnlock(passphrase: string): Promise<string[]> {
+    if (!isTauri()) return [];
+    return invoke<string[]>("enable_vault_auto_unlock", { passphrase });
+  },
+
+  async tryAutoUnlock(): Promise<string[]> {
+    if (!isTauri()) return [];
+    return invoke<string[]>("try_vault_auto_unlock");
+  },
+
+  async disableAutoUnlock(): Promise<void> {
+    if (!isTauri()) return;
+    await invoke("disable_vault_auto_unlock");
+  },
+
+  async isAutoUnlockEnabled(): Promise<boolean> {
+    if (!isTauri()) return false;
+    return invoke<boolean>("is_vault_auto_unlock_enabled");
   },
 
   async listSavedProviders(): Promise<string[]> {

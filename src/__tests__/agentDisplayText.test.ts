@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { copy } from "../i18n/copy";
-import { localizedRuntimeText } from "../components/thread/agentDisplayText";
+import { compactRuntimeTextForTimeline, localizedRuntimeText } from "../components/thread/agentDisplayText";
 
 describe("agent display text", () => {
   it("summarizes raw run_command tool JSON for the thread", () => {
@@ -21,5 +21,31 @@ describe("agent display text", () => {
 
     expect(text).toBe("Agent 提出补丁审查：2 个文件（src/App.tsx、src/App.css）");
     expect(text).not.toContain("apply_patch");
+  });
+
+  it("collapses long tool output in the central timeline", () => {
+    const text = compactRuntimeTextForTimeline(
+      copy.zh,
+      `读取到文件内容：\n${"export const noisy = true;\n".repeat(80)}`,
+      160,
+    );
+
+    expect(text.length).toBeLessThan(260);
+    expect(text).toContain("已折叠较长输出");
+  });
+
+  it("removes model-fabricated tool result blocks from timeline text", () => {
+    const text = compactRuntimeTextForTimeline(
+      copy.zh,
+      [
+        "准备继续。",
+        "[Tool run_command result]:",
+        "workspace: /Users/li/uni/workspace",
+        "package.json exists",
+      ].join("\n"),
+    );
+
+    expect(text).toContain("已忽略模型伪造的工具结果");
+    expect(text).not.toContain("/Users/li/uni/workspace");
   });
 });

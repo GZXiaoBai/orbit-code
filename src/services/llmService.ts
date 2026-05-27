@@ -168,6 +168,9 @@ const getApiUrl = (provider: LLMProvider, model: string, baseUrl?: string): stri
 };
 
 function getFixtureResponse(userPrompt: string): string {
+  if (/final-summary-only continuation/i.test(userPrompt)) {
+    return '{"tool":"done","params":{"summary":"Fixture final summary: Review Dock patches were applied earlier and verification passed."}}';
+  }
   if (userPrompt.includes("ASK_USER_FIXTURE") && !userPrompt.includes("[Tool ask_user result]")) {
     return '{"tool":"ask_user","params":{"question":"Which implementation path should the fixture continue with?"}}';
   }
@@ -181,6 +184,15 @@ function getFixtureResponse(userPrompt: string): string {
     return '{"tool":"run_command","params":{"command":"npm","args":["test","--","--run"],"reason":"Run the test suite before proposing file changes."}}';
   }
   if (!userPrompt.includes("[Tool apply_patch result]")) {
+    if (
+      userPrompt.includes("MALFORMED_PATCH_FIXTURE")
+      && !userPrompt.includes("Patch proposals must use a strict apply_patch tool envelope")
+    ) {
+      return [
+        "太好了，我现在提出补丁，等待审查台审查。",
+        '<补丁> { "patches": [{ "path": "AGENT_GUI_FIXTURE.md", "oldContent": "", "newContent": "# Fixture Patch\\n\\nThis malformed fixture should be rejected before review.\\n" }] }',
+      ].join("\n");
+    }
     return '{"tool":"apply_patch","params":{"patches":[{"path":"AGENT_GUI_FIXTURE.md","oldContent":"","newContent":"# Fixture Patch\\n\\nThis file was proposed by the offline fixture provider.\\n"}]}}';
   }
   return '{"tool":"done","params":{"summary":"Fixture run completed after command approval and patch proposal."}}';

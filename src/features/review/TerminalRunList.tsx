@@ -4,8 +4,9 @@ import type { AppCopy } from "../../i18n/copy";
 import { EmptyState, StatusBadge } from "../../ui/primitives";
 import { localizedRuntimeText } from "../../components/thread/agentDisplayText";
 
-function terminalStatusLabel(copy: AppCopy, run: TerminalRun): string {
+export function terminalStatusLabel(copy: AppCopy, run: TerminalRun): string {
   if (run.status === "running") return copy.terminal.executing;
+  if (run.exitCode !== null && run.exitCode !== 0) return copy.terminal.failed;
   if (run.status === "failed") return copy.terminal.failed;
   if (run.status === "cancelled") return copy.terminal.cancelled;
   return copy.terminal.ready;
@@ -25,7 +26,10 @@ function terminalMeta(copy: AppCopy, run: TerminalRun): string {
   const exit = run.exitCode !== null
     ? copy.language === "中" ? `退出码 ${run.exitCode}` : `exit ${run.exitCode}`
     : "";
-  return [timeRange, exit].filter(Boolean).join(" · ");
+  const cwd = run.cwd
+    ? copy.language === "中" ? `目录 ${run.cwd}` : `cwd ${run.cwd}`
+    : "";
+  return [timeRange, cwd, exit].filter(Boolean).join(" · ");
 }
 
 export function TerminalRunList({
@@ -38,10 +42,15 @@ export function TerminalRunList({
   if (runs.length === 0) {
     return <EmptyState icon={<TerminalSquare size={22} />} title={copy.terminal.waiting.trim()} />;
   }
+  const orderedRuns = [...runs].sort((a, b) => {
+    const aTime = a.completedAt || a.startedAt || "";
+    const bTime = b.completedAt || b.startedAt || "";
+    return bTime.localeCompare(aTime);
+  });
 
   return (
     <div className="dock-terminal-list">
-      {runs.map((run) => (
+      {orderedRuns.map((run, index) => (
         <section key={run.id} className="dock-terminal">
           <header>
             <TerminalSquare size={15} />
@@ -54,7 +63,10 @@ export function TerminalRunList({
             {terminalMeta(copy, run)}
           </small>
           {run.reason ? <small className="terminal-run-reason">{localizedRuntimeText(copy, run.reason)}</small> : null}
-          <pre>{localizedRuntimeText(copy, run.output || copy.terminal.waiting)}</pre>
+          <details className="terminal-output-details" open={index === 0 || run.status === "running"}>
+            <summary>{copy.language === "中" ? "命令输出" : "Command output"}</summary>
+            <pre>{localizedRuntimeText(copy, run.output || copy.terminal.waiting)}</pre>
+          </details>
         </section>
       ))}
     </div>

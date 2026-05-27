@@ -31,7 +31,7 @@ export function PatchReviewQueue({
         const sandboxPath = event.patches?.find((patch) => patch.sandboxPath)?.sandboxPath;
         const compactSandboxPath = sandboxPath ? compactPath(sandboxPath) : "";
         return (
-          <section key={event.id} className="dock-diff-card">
+          <section key={event.id} className="dock-diff-card" data-review-focus="pending">
             <header>
               <div>
                 <GitPullRequestArrow size={15} />

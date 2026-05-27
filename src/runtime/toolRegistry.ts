@@ -99,11 +99,12 @@ export const toolDefinitions: Record<ToolName, Omit<ToolDefinition, "execute">> 
   },
   run_command: {
     name: "run_command",
-    description: "Execute a command in the workspace. Use for building, testing, linting. Prefer args over shell strings.",
+    description: "Execute a command in the workspace. Use for building, testing, linting. Prefer args over shell strings. Use cwd for a workspace subdirectory.",
     parameters: {
       command: { type: "string", description: "Executable or shell command to run", required: true },
       args: { type: "string[]", description: "Arguments passed to the executable", required: false },
       reason: { type: "string", description: "Why this command is needed", required: true },
+      cwd: { type: "string", description: "Optional workspace-relative directory to run in, for example orbit-mini-lab", required: false },
     },
     requiresApproval: true,
   },
@@ -137,13 +138,20 @@ export const toolDefinitions: Record<ToolName, Omit<ToolDefinition, "execute">> 
 async function runCommandSyncFallback(params: ToolParams, context: ToolExecutionContext): Promise<string> {
   let command = asString(params.command);
   let args = asStringArray(params.args);
+  const cwd = asString(params.cwd);
   if (!command) return "Error: command is required";
+  if (command === "cd" || /[;&|`$<>]/.test(command)) {
+    return "Error: run_command must use a single executable and args. Do not use shell operators or cd; pass cwd for workspace subdirectories.";
+  }
   if (args.length === 0 && /\s/.test(command)) {
     const parsed = parseCommandLine(command);
     if (parsed) {
       command = parsed.command;
       args = parsed.args;
     }
+  }
+  if (command === "cd") {
+    return "Error: run_command cannot execute cd. Use {\"cwd\":\"relative/subdir\"} with the real command instead.";
   }
   if (!isTauri()) return "Desktop runtime required for command execution.";
   try {
@@ -152,6 +160,7 @@ async function runCommandSyncFallback(params: ToolParams, context: ToolExecution
       args,
       sandboxMode: context.sandboxMode || "none",
       workspacePath: context.workspacePath || "",
+      cwd,
     });
   } catch (e: any) {
     return `Error running command: ${e?.message || String(e)}`;
@@ -198,6 +207,7 @@ Rules:
 - ALWAYS use read_file before modifying a file to see its current content.
 - Use search_code to find relevant code before making changes.
 - For run_command, prefer {"command":"npm","args":["test","--","--run"],"reason":"verify changes"} instead of one shell string.
+- If a command must run inside a project subdirectory, pass cwd, e.g. {"tool":"run_command","params":{"command":"npm","args":["install"],"cwd":"orbit-mini-lab","reason":"install dependencies inside the generated app"}}. Never use "cd ... && ...".
 - For apply_patch, pass {"patches":[{"path":"relative/file","oldContent":"...","newContent":"..."}]}. It creates a review item; the user writes it after reviewing the diff. After apply_patch, stop and wait for review; do not call done yet.
 - After the user applies changes and starts verification, use run_command to run tests.
 - If you need user input, use ask_user.

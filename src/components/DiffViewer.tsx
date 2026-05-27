@@ -9,6 +9,7 @@ interface DiffPatch {
   newContent: string;
   applied: boolean;
   sandboxStatus?: "idle" | "sandboxing" | "sandboxed" | "failed";
+  applyStatus?: "proposed" | "approved" | "applied" | "failed";
   hasConflict?: boolean;
   conflictContent?: string;
   conflictResolved?: boolean;
@@ -278,6 +279,7 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
 
   const allApplied = patches.every((p) => p.applied);
   const hasUnpreviewedPatch = patches.some((p) => !p.applied && p.sandboxStatus !== "sandboxed");
+  const hasFailedPreview = patches.some((p) => !p.applied && (p.sandboxStatus === "failed" || p.applyStatus === "failed"));
 
   const handleApply = async () => {
     setApplying(true);
@@ -406,6 +408,9 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
           newContent: resolvedText,
           hasConflict: false,
           conflictResolved: true,
+          conflictContent: undefined,
+          applyStatus: "proposed",
+          sandboxStatus: "sandboxed",
         });
       }
     };
@@ -549,6 +554,11 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
           <div className="applied-badge-container warning">
             <AlertCircle size={14} className="warning-icon" style={{ color: "#f87171", marginRight: 6 }} />
             <span className="diff-conflict-warning-text">{copy.diff.resolveBeforeApply}</span>
+          </div>
+        ) : hasFailedPreview ? (
+          <div className="applied-badge-container warning">
+            <AlertCircle size={14} className="warning-icon" style={{ color: "#f87171", marginRight: 6 }} />
+            <span className="diff-conflict-warning-text">{copy.diff.previewFailed}</span>
           </div>
         ) : hasUnpreviewedPatch ? (
           <div className="applied-badge-container warning">

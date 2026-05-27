@@ -23,9 +23,16 @@ function looksLikePlan(text: string) {
 
 function looksLikeCode(text: string) {
   const trimmed = text.trim();
-  if (/^```[\s\S]*```$/m.test(trimmed)) return true;
+  const lines = trimmed.split("\n");
+  if (/```/.test(trimmed)) return true;
+  if (/^(diff --git|@@\s|---\s|\+\+\+\s)/m.test(trimmed)) return true;
+  if (/^\s*[{[][\s\S]*[}\]]\s*$/.test(trimmed) && lines.length >= 2) return true;
+  if (/^<([a-z][\w-]*)(\s|>)[\s\S]*<\/\1>$/i.test(trimmed)) return true;
   if (/(^|\n)\s*(import|export|fn|class|interface|type|const|let|var|def|func)\s+/m.test(trimmed)) return true;
-  return /[{};]/.test(trimmed) && trimmed.split("\n").length >= 4;
+  if (/^\s*(const|let|var|return|await|if|for|while)\b.+[;{}]\s*$/m.test(trimmed)) return true;
+  const indentedCodeLines = lines.filter((line) => /^( {2,}|\t)\S/.test(line)).length;
+  if (lines.length >= 3 && indentedCodeLines >= 2) return true;
+  return /[{};]/.test(trimmed) && lines.length >= 4;
 }
 
 export function classifyPastedText(text: string): PasteClassification {

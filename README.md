@@ -62,7 +62,8 @@ npm run tauri build -- --debug
 
 Orbit Code is local-first, but it is still a tool that can inspect and change source code. The default safety model is:
 
-- API keys are encrypted into local SQLite with an Orbit credential-vault passphrase. The passphrase is not persisted, so the vault must be unlocked again after restart.
+- API keys are encrypted into local SQLite with an Orbit credential-vault passphrase. The passphrase is not persisted by default.
+- A trusted-device auto-unlock option can be enabled on personal machines. It uses a local encrypted unlock cache protected by filesystem permissions, and can be disabled from Settings.
 - File and patch operations go through Rust workspace path validation.
 - Multi-file writes use transactional patch application and stale-write checks.
 - Commands and writes are reviewed in Review Dock before execution.

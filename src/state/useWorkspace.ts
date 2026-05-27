@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { AgentEvent } from "../domain/agentEvents";
+import type { AgentRunSession } from "../domain/agentRunSession";
+import type { QuestionRequest } from "../domain/questionRequest";
+import type { TerminalRun } from "../domain/terminalRun";
+import type { ThreadEvent } from "../domain/threadEvents";
+import { buildAgentEventsFromThreadEvents, buildThreadEvents, normalizeStoredThreadEvents, serializeThreadEvents } from "../domain/threadEvents";
 import type { PermissionAction, PermissionDecision, PermissionPreset, ProjectSecurityOverride } from "../domain/types";
 import { mergeRunSteps } from "../domain/runSteps";
 import { sessionStore } from "../storage/sessionStore";
@@ -18,11 +24,13 @@ import { useLayoutPreferences } from "./useLayoutPreferences";
 import { useProjectActions } from "./useProjectActions";
 import { useThreadUiState } from "./useThreadUiState";
 import type { ImportedPlanState } from "./useSession";
-import { formatCommandForDisplay, parseCommandLine } from "../runtime/commandParser";
+import { formatCommandForDisplay } from "../runtime/commandParser";
+import { selectVerificationCommand } from "../runtime/verificationCommand";
 import { buildEffectiveSecurityPolicy } from "../runtime/securityPolicy";
 import { buildUsageSnapshot } from "./usageSnapshot";
 import { buildReviewDockModel } from "../features/review/reviewDockModel";
-import type { ApprovalRequest } from "./useApprovalQueue";
+import type { ApprovalGrant, ApprovalRequest } from "./useApprovalQueue";
+import { isTauri } from "../utils/tauri";
 
 export type { AgentEvent } from "../domain/agentEvents";
 export type { ImportedPlanState, ImportErrorState, ProviderSettings } from "./useSession";
@@ -32,6 +40,12 @@ const THREAD_SNAPSHOTS_KEY = "orbit-code.thread-snapshots.v1";
 interface ThreadSnapshot {
   importedPlan: ImportedPlanState | null;
   agentEvents: AgentEvent[];
+  threadEvents?: ThreadEvent[];
+  agentRunSession?: AgentRunSession | null;
+  approvalRequests?: ApprovalRequest[];
+  approvalGrants?: ApprovalGrant[];
+  questionRequests?: QuestionRequest[];
+  terminalRuns?: TerminalRun[];
   updatedAt: string;
 }
 
@@ -42,6 +56,18 @@ function loadThreadSnapshots(): Record<string, ThreadSnapshot> {
     return JSON.parse(raw) as Record<string, ThreadSnapshot>;
   } catch {
     return {};
+  }
+}
+
+async function readPackageScripts(workspacePath: string, cwd?: string): Promise<Record<string, string> | undefined> {
+  if (!isTauri() || !workspacePath) return undefined;
+  const packagePath = cwd ? `${cwd.replace(/\/+$/, "")}/package.json` : "package.json";
+  try {
+    const raw = await invoke<string>("read_workspace_file", { path: packagePath, workspacePath });
+    const parsed = JSON.parse(raw) as { scripts?: Record<string, string> };
+    return parsed.scripts;
+  } catch {
+    return undefined;
   }
 }
 
@@ -57,7 +83,15 @@ export function useWorkspace() {
   const healingAttemptsRef = useRef(healingAttempts);
   const timerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const restoredWaitNoticeRef = useRef(false);
+  const restoredInitialSessionEventsRef = useRef(false);
   const restoredRecentWorkspaceRef = useRef(false);
+  const markVerificationCompletedForContinueRef = useRef<((taskId: string, exitCode: number | null, outputSnippet?: string, scope?: { workspacePath?: string; threadId?: string }) => void) | null>(null);
+  const recoverAgentRunSessionRef = useRef<((session: AgentRunSession | null) => void) | null>(null);
+  const recoverTerminalRunsRef = useRef<((runs: TerminalRun[], replace?: boolean) => void) | null>(null);
+  const agentRunSessionRef = useRef<AgentRunSession | null>(null);
+  const approvalRequestsRef = useRef<ApprovalRequest[]>([]);
+  const questionRequestsRef = useRef<QuestionRequest[]>([]);
+  const terminalRunsRef = useRef<TerminalRun[]>([]);
 
   useEffect(() => { agentEventsRef.current = agentEvents; }, [agentEvents]);
   useEffect(() => { isRealLLMActiveRef.current = session.isRealLLMActive; }, [session.isRealLLMActive]);
@@ -72,10 +106,17 @@ export function useWorkspace() {
   }, []);
 
   useEffect(() => {
+    if (restoredInitialSessionEventsRef.current) return;
+    if (session.loadedThreadEvents && session.loadedThreadEvents.length > 0 && agentEvents.length === 0) {
+      restoredInitialSessionEventsRef.current = true;
+      setAgentEvents(buildAgentEventsFromThreadEvents(session.loadedThreadEvents));
+      return;
+    }
     if (session.loadedAgentEvents && session.loadedAgentEvents.length > 0 && agentEvents.length === 0) {
+      restoredInitialSessionEventsRef.current = true;
       setAgentEvents(session.loadedAgentEvents as AgentEvent[]);
     }
-  }, [session.loadedAgentEvents]);
+  }, [agentEvents.length, session.loadedAgentEvents, session.loadedThreadEvents]);
 
   const addAgentEvent = useCallback((event: AgentEvent) => {
     setAgentEvents((prev) => [...prev, event]);
@@ -88,7 +129,7 @@ export function useWorkspace() {
   const projectStore = useProjectStore();
   const layout = useLayoutPreferences();
   const projectActions = useProjectActions(projectStore.recentProjects);
-  const runControls = useRunControls(session.providerSettings, session.apiKeys);
+  const runControls = useRunControls(session.providerSettings, session.apiKeys, session.credentialVaultProviders);
 
   useEffect(() => {
     if (session.loadedQuestionRequests && session.loadedQuestionRequests.length > 0) {
@@ -101,6 +142,12 @@ export function useWorkspace() {
       approvalQueue.recoverApprovals(session.loadedApprovalRequests);
     }
   }, [approvalQueue.recoverApprovals, session.loadedApprovalRequests]);
+
+  useEffect(() => {
+    if (session.loadedApprovalGrants && session.loadedApprovalGrants.length > 0) {
+      approvalQueue.recoverGrants(session.loadedApprovalGrants);
+    }
+  }, [approvalQueue.recoverGrants, session.loadedApprovalGrants]);
 
   const startCollaborationFlow = useCallback(async (plan: ImportedPlanState) => {
     const task = plan?.plan.tasks.find(t => t.status !== "done" && t.status !== "verified");
@@ -251,7 +298,7 @@ export function useWorkspace() {
     }
   }, [session.providerSettings.agent?.autoSelfHeal]);
 
-  const handleCommandComplete = useCallback((taskId: string, exitCode: number | null) => {
+  const handleCommandComplete = useCallback((taskId: string, exitCode: number | null, run?: TerminalRun) => {
     if (exitCode === 0) {
       setAgentEvents(prev => prev.map(e => {
         if (e.role === "verifier") {
@@ -288,6 +335,11 @@ export function useWorkspace() {
         }));
       }
     }
+    const outputSnippet = (terminalLogsRef.current[taskId] || "").split("\n").slice(-40).join("\n");
+    markVerificationCompletedForContinueRef.current?.(taskId, exitCode, outputSnippet, {
+      workspacePath: run?.workspacePath,
+      threadId: run?.threadId,
+    });
   }, [triggerSelfHealing]);
 
   const fs = useFileSystem(session.providerSettings, session.updateTask, handleCommandComplete, session.loadedTerminalRuns || []);
@@ -311,17 +363,34 @@ export function useWorkspace() {
       [threadId]: {
         importedPlan: session.importedPlan,
         agentEvents: agentEventsRef.current,
+        threadEvents: serializeThreadEvents(buildThreadEvents(agentEventsRef.current)),
+        agentRunSession: agentRunSessionRef.current,
+        approvalRequests: approvalRequestsRef.current,
+        approvalGrants: approvalQueue.approvalGrants,
+        questionRequests: questionRequestsRef.current,
+        terminalRuns: terminalRunsRef.current,
         updatedAt: new Date().toISOString(),
       },
     }));
-  }, [session.importedPlan, threadUi.threadId]);
+  }, [approvalQueue.approvalGrants, session.importedPlan, threadUi.threadId]);
 
   const restoreThreadSnapshot = useCallback((threadId: string) => {
     const snapshot = threadSnapshots[threadId];
     approvalQueue.cancelPendingApprovals();
     questionQueue.cancelPendingQuestions();
     session.restoreImportedPlan(snapshot?.importedPlan ?? null);
-    setAgentEvents(snapshot?.agentEvents ?? []);
+    setAgentEvents(buildAgentEventsFromThreadEvents(normalizeStoredThreadEvents({
+      threadEvents: snapshot?.threadEvents,
+      agentEvents: snapshot?.agentEvents,
+    })));
+    approvalQueue.recoverApprovals(snapshot?.approvalRequests ?? [], true);
+    approvalQueue.recoverGrants([
+      ...approvalQueue.approvalGrants.filter((grant) => grant.scope === "project"),
+      ...(snapshot?.approvalGrants ?? []),
+    ], true);
+    questionQueue.recoverQuestions(snapshot?.questionRequests ?? [], true);
+    recoverTerminalRunsRef.current?.(snapshot?.terminalRuns ?? [], true);
+    recoverAgentRunSessionRef.current?.(snapshot?.agentRunSession ?? null);
   }, [approvalQueue, questionQueue, session, threadSnapshots]);
 
   const createThread = useCallback(() => {
@@ -329,6 +398,11 @@ export function useWorkspace() {
     const nextThreadId = threadUi.createThread();
     approvalQueue.cancelPendingApprovals();
     questionQueue.cancelPendingQuestions();
+    approvalQueue.recoverApprovals([], true);
+    approvalQueue.recoverGrants(approvalQueue.approvalGrants.filter((grant) => grant.scope === "project"), true);
+    questionQueue.recoverQuestions([], true);
+    recoverTerminalRunsRef.current?.([], true);
+    recoverAgentRunSessionRef.current?.(null);
     session.restoreImportedPlan(null);
     setAgentEvents([]);
     return nextThreadId;
@@ -340,6 +414,49 @@ export function useWorkspace() {
     threadUi.switchThread(nextThreadId);
     restoreThreadSnapshot(nextThreadId);
   }, [persistCurrentThreadSnapshot, restoreThreadSnapshot, threadUi]);
+
+  const openFallbackThread = useCallback((removedThreadId: string) => {
+    const fallback = threadUi.threadList.find((thread) => thread.threadId !== removedThreadId);
+    if (fallback) {
+      threadUi.switchThread(fallback.threadId);
+      restoreThreadSnapshot(fallback.threadId);
+      return;
+    }
+    const nextThreadId = threadUi.createThread();
+    restoreThreadSnapshot(nextThreadId);
+  }, [restoreThreadSnapshot, threadUi]);
+
+  const togglePinnedThreadById = useCallback((targetThreadId: string) => {
+    threadUi.togglePinnedThreadById(targetThreadId);
+  }, [threadUi]);
+
+  const renameThreadById = useCallback((targetThreadId: string, title: string) => {
+    threadUi.renameThreadById(targetThreadId, title);
+  }, [threadUi]);
+
+  const archiveThreadById = useCallback((targetThreadId: string, archived = true) => {
+    if (!targetThreadId) return;
+    const isActiveThread = targetThreadId === threadUi.threadId;
+    if (isActiveThread) persistCurrentThreadSnapshot(targetThreadId);
+    threadUi.archiveThreadById(targetThreadId, archived);
+    if (isActiveThread && archived) {
+      openFallbackThread(targetThreadId);
+    }
+  }, [openFallbackThread, persistCurrentThreadSnapshot, threadUi]);
+
+  const deleteThreadById = useCallback((targetThreadId: string) => {
+    if (!targetThreadId) return;
+    const isActiveThread = targetThreadId === threadUi.threadId;
+    setThreadSnapshots((prev) => {
+      const next = { ...prev };
+      delete next[targetThreadId];
+      return next;
+    });
+    threadUi.deleteThread(targetThreadId);
+    if (isActiveThread) {
+      openFallbackThread(targetThreadId);
+    }
+  }, [openFallbackThread, threadUi]);
 
   useEffect(() => {
     const resumeKind = session.loadedAgentRunSession?.resumeKind;
@@ -358,7 +475,7 @@ export function useWorkspace() {
       role: "reviewer",
       name: "Recovered Waiting State",
       status: "idle",
-      message: `已恢复上次未完成的等待操作：${resumeKind}。请在 Review Dock 中继续处理。`,
+      message: `已恢复等待操作：${resumeKind}。请在 Review Dock 中继续处理。`,
       timestamp: new Date().toLocaleTimeString(),
     });
   }, [addAgentEvent, session.loadedAgentEvents, session.loadedAgentRunSession?.resumeKind]);
@@ -428,11 +545,30 @@ export function useWorkspace() {
     setWorkspaceRoot,
   ]);
 
-  const requestPostPatchVerification = useCallback((eventId: string) => {
-    const task = session.importedPlan?.plan.tasks.find(t => t.status !== "done" && t.status !== "verified" && t.verification?.some(Boolean))
-      ?? session.importedPlan?.plan.tasks.find(t => t.verification?.some(Boolean));
-    const rawCommand = task?.verification?.find(Boolean);
-    if (!task || !rawCommand) {
+  const requestPostPatchVerification = useCallback(async (eventId: string) => {
+    const event = agentEventsRef.current.find((item) => item.id === eventId);
+    const patchPaths = event?.patches?.map((patch) => patch.path).filter(Boolean) || [];
+    const patchTopDirs = Array.from(new Set(
+      patchPaths
+        .map((path) => path.split("/")[0])
+        .filter((segment) => segment && segment !== "." && !segment.includes("..")),
+    ));
+    const cwd = patchTopDirs.length === 1 && patchPaths.every((path) => path.includes("/"))
+      ? patchTopDirs[0]
+      : undefined;
+    const activeTaskId = agentRunSessionRef.current?.taskId;
+    const task = (
+      activeTaskId
+        ? session.importedPlan?.plan.tasks.find(t => t.id === activeTaskId && t.verification?.some(Boolean))
+        : session.importedPlan?.plan.tasks.find(t => t.status !== "done" && t.status !== "verified" && t.verification?.some(Boolean))
+    ) ?? session.importedPlan?.plan.tasks.find(t => t.verification?.some(Boolean));
+    const packageScripts = await readPackageScripts(fs.workspaceRoot, cwd);
+    const parsed = selectVerificationCommand({
+      planCommands: task?.verification?.filter(Boolean) || [],
+      cwd,
+      packageScripts,
+    });
+    if (!task || !parsed) {
       addAgentEvent({
         id: `verify-missing-${Date.now()}`,
         role: "verifier",
@@ -444,13 +580,14 @@ export function useWorkspace() {
       return;
     }
 
-    const parsed = parseCommandLine(rawCommand);
-    if (!parsed) return;
     const displayCommand = formatCommandForDisplay(parsed.command, parsed.args);
     const reason = `补丁 ${eventId} 已写入，运行验证命令确认当前任务：${task.title}`;
 
     addAgentEvent({
       id: `verify-request-${Date.now()}`,
+      workspacePath: fs.workspaceRoot,
+      threadId: threadUi.threadId,
+      taskId: task.id,
       role: "verifier",
       name: "Verification Approval",
       status: "thinking",
@@ -461,14 +598,19 @@ export function useWorkspace() {
     approvalQueue.requestApproval("run_command", {
       command: parsed.command,
       args: parsed.args,
+      ...(parsed.cwd ? { cwd: parsed.cwd } : {}),
       reason,
       taskId: task.id,
       sourceEventId: eventId,
+      threadId: threadUi.threadId,
       workspacePath: fs.workspaceRoot,
     }, reason).then((approved) => {
       if (!approved) {
         addAgentEvent({
           id: `verify-denied-${Date.now()}`,
+          workspacePath: fs.workspaceRoot,
+          threadId: threadUi.threadId,
+          taskId: task.id,
           role: "verifier",
           name: "Verification Denied",
           status: "done",
@@ -479,6 +621,9 @@ export function useWorkspace() {
       }
       addAgentEvent({
         id: `verify-approved-${Date.now()}`,
+        workspacePath: fs.workspaceRoot,
+        threadId: threadUi.threadId,
+        taskId: task.id,
         role: "verifier",
         name: "Verification Approval",
         status: "done",
@@ -487,22 +632,15 @@ export function useWorkspace() {
       });
       fs.executeStructuredCommand({
         taskId: task.id,
+        threadId: threadUi.threadId,
         command: parsed.command,
         args: parsed.args,
         reason,
         workspacePath: fs.workspaceRoot,
+        cwd: parsed.cwd,
       });
     });
-  }, [addAgentEvent, approvalQueue, fs, session.importedPlan]);
-
-  const patchWorkflow = usePatchWorkflow({
-    agentEventsRef,
-    setAgentEvents,
-    fs,
-    isRealLLMActiveRef,
-    activeLLMConfigRef,
-    onPatchApplied: requestPostPatchVerification,
-  });
+  }, [addAgentEvent, approvalQueue, fs, session.importedPlan, threadUi.threadId]);
 
   const agentRun = useAgentRun({
     importedPlan: session.importedPlan,
@@ -511,6 +649,7 @@ export function useWorkspace() {
     apiKeys: session.apiKeys,
     runControls,
     workspaceRoot: fs.workspaceRoot,
+    threadId: threadUi.threadId,
     securitySettings: session.providerSettings.security,
     projectSecurityOverride,
     requestApproval: approvalQueue.requestApproval,
@@ -522,12 +661,60 @@ export function useWorkspace() {
     initialAgentRunSession: session.loadedAgentRunSession,
   });
 
+  useEffect(() => { approvalRequestsRef.current = approvalQueue.approvalRequests; }, [approvalQueue.approvalRequests]);
+  useEffect(() => { questionRequestsRef.current = questionQueue.questionRequests; }, [questionQueue.questionRequests]);
+  useEffect(() => { terminalRunsRef.current = fs.terminalRuns; }, [fs.terminalRuns]);
+  useEffect(() => { agentRunSessionRef.current = agentRun.agentRunSession; }, [agentRun.agentRunSession]);
+
+  useEffect(() => {
+    recoverAgentRunSessionRef.current = agentRun.recoverAgentRunSession;
+    recoverTerminalRunsRef.current = fs.recoverTerminalRuns;
+    return () => {
+      recoverAgentRunSessionRef.current = null;
+      recoverTerminalRunsRef.current = null;
+    };
+  }, [agentRun.recoverAgentRunSession, fs.recoverTerminalRuns]);
+
+  useEffect(() => {
+    markVerificationCompletedForContinueRef.current = agentRun.markVerificationCompletedForContinue;
+    return () => {
+      markVerificationCompletedForContinueRef.current = null;
+    };
+  }, [agentRun.markVerificationCompletedForContinue]);
+
+  const patchWorkflow = usePatchWorkflow({
+    agentEventsRef,
+    setAgentEvents,
+    fs,
+    isRealLLMActiveRef,
+    activeLLMConfigRef,
+    onPatchApplied: (eventId) => {
+      void requestPostPatchVerification(eventId);
+      const event = agentEventsRef.current.find((item) => item.id === eventId);
+      const patchPaths = event?.patches?.map((patch) => patch.path).filter(Boolean) || [];
+      const activeTaskId = agentRunSessionRef.current?.taskId;
+      const task = (
+        activeTaskId
+          ? session.importedPlan?.plan.tasks.find(t => t.id === activeTaskId && t.verification?.some(Boolean))
+          : session.importedPlan?.plan.tasks.find(t => t.status !== "done" && t.status !== "verified" && t.verification?.some(Boolean))
+      ) ?? session.importedPlan?.plan.tasks.find(t => t.verification?.some(Boolean));
+      const verification = task?.verification?.filter(Boolean).join(" && ");
+      agentRun.markPatchAppliedForContinue(eventId, [
+        patchPaths.length ? `Applied files: ${patchPaths.join(", ")}.` : "",
+        verification ? `Verification approval queued for: ${verification}.` : "No verification command was available in the plan.",
+      ].filter(Boolean).join(" "));
+    },
+  });
+
   const reviewDockModel = useMemo(() => buildReviewDockModel({
     approvals: approvalQueue.approvalRequests,
     questions: questionQueue.questionRequests,
     events: agentEvents,
     terminalRuns: fs.terminalRuns,
-  }), [agentEvents, approvalQueue.approvalRequests, fs.terminalRuns, questionQueue.questionRequests]);
+    workspacePath: fs.workspaceRoot,
+    threadId: threadUi.threadId,
+    taskId: agentRun.agentRunSession.taskId,
+  }), [agentEvents, agentRun.agentRunSession.taskId, approvalQueue.approvalRequests, fs.terminalRuns, fs.workspaceRoot, questionQueue.questionRequests, threadUi.threadId]);
 
   const resolveRecoveredApprovalAction = useCallback((request: ApprovalRequest, approved: boolean) => {
     const tool = request.tool;
@@ -539,9 +726,13 @@ export function useWorkspace() {
       : agentRun.agentRunSession.taskId || session.importedPlan?.plan.tasks[0]?.id || request.id;
     const reason = typeof params.reason === "string" ? params.reason : request.reason;
     const workspacePath = typeof params.workspacePath === "string" ? params.workspacePath : fs.workspaceRoot;
+    const cwd = typeof params.cwd === "string" ? params.cwd : undefined;
 
     addAgentEvent({
       id: `recovered-approval-${Date.now()}`,
+      workspacePath,
+      threadId: request.threadId || agentRun.agentRunSession.threadId || threadUi.threadId,
+      taskId,
       role: "reviewer",
       name: approved ? "Recovered Approval Granted" : "Recovered Approval Denied",
       status: "done",
@@ -551,15 +742,35 @@ export function useWorkspace() {
       timestamp: new Date().toLocaleTimeString(),
     });
 
-    if (!approved || tool !== "run_command" || !command) return;
+    if (!approved) {
+      agentRun.markRecoveredActionForContinue(
+        "approval",
+        { type: "approval", payloadId: request.id },
+        `Denied ${tool}: ${JSON.stringify(params)}`,
+        "恢复的审批已被拒绝。点击“继续执行”后，Agent 会把拒绝结果纳入下一步规划。",
+      );
+      return;
+    }
+    if (tool !== "run_command" || !command) {
+      agentRun.markRecoveredActionForContinue(
+        "approval",
+        { type: "approval", payloadId: request.id },
+        `Approved ${tool}: ${JSON.stringify(params)}`,
+        "恢复的审批已通过。点击“继续执行”后，Agent 会继续当前任务。",
+      );
+      return;
+    }
     fs.executeStructuredCommand({
       taskId,
+      threadId: request.threadId || agentRun.agentRunSession.threadId || threadUi.threadId,
+      approvalId: request.id,
       command,
       args,
       reason,
       workspacePath,
+      cwd,
     });
-  }, [addAgentEvent, agentRun.agentRunSession.taskId, fs, session.importedPlan?.plan.tasks]);
+  }, [addAgentEvent, agentRun, fs, session.importedPlan?.plan.tasks, threadUi.threadId]);
 
   const resolveApproval = useCallback((id: string, approved: boolean) => {
     const request = approvalQueue.approvalRequests.find((item) => item.id === id);
@@ -574,13 +785,22 @@ export function useWorkspace() {
     if (!question || hadLiveResolver) return;
     addAgentEvent({
       id: `recovered-question-${Date.now()}`,
+      workspacePath: question.workspacePath || fs.workspaceRoot,
+      threadId: question.threadId || threadUi.threadId,
+      taskId: question.taskId,
       role: "planner",
       name: "Recovered Question Answered",
       status: "done",
       message: `你已回答恢复的问题：${answer}`,
       timestamp: new Date().toLocaleTimeString(),
     });
-  }, [addAgentEvent, questionQueue]);
+    agentRun.markRecoveredActionForContinue(
+      "question",
+      { type: "question", payloadId: id },
+      `User answered: ${answer}`,
+      "恢复的问题已回答。点击“继续执行”后，Agent 会继续当前任务。",
+    );
+  }, [addAgentEvent, agentRun, fs.workspaceRoot, questionQueue, threadUi.threadId]);
 
   const cancelQuestion = useCallback((id: string) => {
     const question = questionQueue.questionRequests.find((item) => item.id === id);
@@ -588,13 +808,22 @@ export function useWorkspace() {
     if (!question || hadLiveResolver) return;
     addAgentEvent({
       id: `recovered-question-cancel-${Date.now()}`,
+      workspacePath: question.workspacePath || fs.workspaceRoot,
+      threadId: question.threadId || threadUi.threadId,
+      taskId: question.taskId,
       role: "planner",
       name: "Recovered Question Cancelled",
       status: "done",
       message: "你取消了恢复的问题。",
       timestamp: new Date().toLocaleTimeString(),
     });
-  }, [addAgentEvent, questionQueue]);
+    agentRun.markRecoveredActionForContinue(
+      "question",
+      { type: "question", payloadId: id },
+      "User cancelled question.",
+      "恢复的问题已取消。点击“继续执行”后，Agent 会收到取消结果并重新规划。",
+    );
+  }, [addAgentEvent, agentRun, fs.workspaceRoot, questionQueue, threadUi.threadId]);
 
   useEffect(() => {
     if (session.isLoading) return;
@@ -605,8 +834,10 @@ export function useWorkspace() {
         importedPlan: session.importedPlan,
         providerSettings: session.providerSettings,
         agentEvents,
+        threadEvents: serializeThreadEvents(buildThreadEvents(agentEvents)),
         agentRunSession: agentRun.agentRunSession,
         approvalRequests: approvalQueue.approvalRequests,
+        approvalGrants: approvalQueue.approvalGrants,
         questionRequests: questionQueue.questionRequests,
         terminalRuns: fs.terminalRuns,
         lastActiveAt: new Date().toISOString(),
@@ -617,7 +848,7 @@ export function useWorkspace() {
 
   useEffect(() => {
     persistCurrentThreadSnapshot();
-  }, [agentEvents, persistCurrentThreadSnapshot, session.importedPlan]);
+  }, [agentEvents, approvalQueue.approvalGrants, approvalQueue.approvalRequests, fs.terminalRuns, persistCurrentThreadSnapshot, questionQueue.questionRequests, session.importedPlan]);
 
   return {
     // From session
@@ -627,6 +858,7 @@ export function useWorkspace() {
     providerSettings: session.providerSettings,
     apiKeys: session.apiKeys,
     credentialVaultProviders: session.credentialVaultProviders,
+    credentialVaultAutoUnlock: session.credentialVaultAutoUnlock,
     isRealLLMActive: session.isRealLLMActive,
     activeLLMConfig: session.activeLLMConfig,
     runControls,
@@ -644,6 +876,7 @@ export function useWorkspace() {
     updateProviderSettings: session.updateProviderSettings,
     updateApiKey: session.updateApiKey,
     unlockCredentialVault: session.unlockCredentialVault,
+    disableCredentialVaultAutoUnlock: session.disableCredentialVaultAutoUnlock,
     effectiveSecurityPolicy,
     projectSecurityOverride,
     updateProjectSecurityOverride,
@@ -675,6 +908,8 @@ export function useWorkspace() {
     agentLoopToolCalls: agentRun.agentLoopToolCalls,
     agentLoopRunning: agentRun.agentLoopRunning,
     startAgentLoop: agentRun.startAgentLoop,
+    continueAgentRun: agentRun.continueAgentRun,
+    submitBuildMessage: agentRun.submitBuildMessage,
     cancelAgentLoop: agentRun.cancelAgentLoop,
     buildEmbeddings: embeddingIndex.buildEmbeddings,
     embeddingBuildProgress: embeddingIndex.embeddingBuildProgress,
@@ -690,6 +925,7 @@ export function useWorkspace() {
     approvalRequests: approvalQueue.approvalRequests,
     pendingApprovals: approvalQueue.pendingApprovals,
     resolveApproval,
+    updateApprovalGrantScope: approvalQueue.updateGrantScope,
     recentProjects: projectStore.recentProjects,
     visibleProjects: projectActions.visibleProjects,
     archivedProjects: projectActions.archivedProjects,
@@ -714,6 +950,10 @@ export function useWorkspace() {
     updateThreadUiState: threadUi.updateThreadUiState,
     togglePinnedThread: threadUi.togglePinnedThread,
     renameThread: threadUi.renameThread,
-    archiveThread: threadUi.archiveThread,
+    archiveThread: (archived = true) => archiveThreadById(threadUi.threadId, archived),
+    togglePinnedThreadById,
+    renameThreadById,
+    archiveThreadById,
+    deleteThreadById,
   };
 }

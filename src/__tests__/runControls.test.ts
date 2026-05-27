@@ -27,12 +27,31 @@ describe("run controls", () => {
   it("imports API-provided models and exposes only those with credentials", () => {
     const settings = setImportedModels(emptySettings, "openai", ["gpt-5", "gpt-5-mini"]);
 
-    expect(buildRunModelOptions(settings)).toHaveLength(0);
+    expect(buildRunModelOptions(settings).map((option) => option.id)).toEqual([
+      "openai:gpt-5",
+      "openai:gpt-5-mini",
+    ]);
     expect(defaultModelForProvider("openai", settings, { openai: "sk-test" })).toBe("gpt-5");
     expect(buildRunModelOptions(settings, { openai: "sk-test" }).map((option) => option.id)).toEqual([
       "openai:gpt-5",
       "openai:gpt-5-mini",
     ]);
+  });
+
+  it("keeps imported models visible when a credential vault is locked", () => {
+    const settings = setImportedModels(emptySettings, "deepseek", ["deepseek-v4-pro"]);
+    const options = buildRunModelOptions(settings);
+    const selection = resolveModelSelection(settings, {}, { providerId: "deepseek" });
+
+    expect(options.map((option) => option.id)).toEqual(["deepseek:deepseek-v4-pro"]);
+    expect(selection?.model).toBe("deepseek-v4-pro");
+  });
+
+  it("does not let stale fixture selection override an imported active provider", () => {
+    const settings = setImportedModels(emptySettings, "deepseek", ["deepseek-v4-flash"]);
+    const selection = resolveModelSelection(settings, {}, { providerId: "fixture", model: "fixture-coder" });
+
+    expect(selection?.id).toBe("deepseek:deepseek-v4-flash");
   });
 
   it("keeps custom models selectable after import", () => {
@@ -78,6 +97,12 @@ describe("run controls", () => {
 
     expect(options[0]?.capability?.buildSupported).toBe(true);
     expect(options[0]?.capability?.maxContextTokens).toBeGreaterThanOrEqual(400_000);
+  });
+
+  it("gates Build by model capability instead of a narrow provider whitelist", () => {
+    for (const providerId of ["xai", "mistral", "groq", "qwen", "kimi", "siliconflow", "zhipu"]) {
+      expect(inferModelCapability(providerId, `${providerId}-model`).buildSupported).toBe(true);
+    }
   });
 
   it("validates reasoning effort values", () => {

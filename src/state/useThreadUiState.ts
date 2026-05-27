@@ -72,6 +72,14 @@ export function useThreadUiState(workspacePath: string, title: string) {
     setThreadUiStateMap((prev) => upsertThreadUiState(prev, threadId, { ...patch, workspacePath }));
   }, [threadId, workspacePath]);
 
+  const updateThreadUiStateById = useCallback((targetThreadId: string, patch: Partial<ThreadUiState>) => {
+    if (!targetThreadId) return;
+    setThreadUiStateMap((prev) => upsertThreadUiState(prev, targetThreadId, {
+      ...patch,
+      workspacePath: patch.workspacePath ?? prev[targetThreadId]?.workspacePath ?? workspacePath,
+    }));
+  }, [workspacePath]);
+
   const togglePinnedThread = useCallback(() => {
     setThreadUiStateMap((prev) => upsertThreadUiState(prev, threadId, {
       workspacePath,
@@ -79,13 +87,38 @@ export function useThreadUiState(workspacePath: string, title: string) {
     }));
   }, [threadId, workspacePath]);
 
+  const togglePinnedThreadById = useCallback((targetThreadId: string) => {
+    if (!targetThreadId) return;
+    setThreadUiStateMap((prev) => upsertThreadUiState(prev, targetThreadId, {
+      workspacePath: prev[targetThreadId]?.workspacePath ?? workspacePath,
+      pinned: !prev[targetThreadId]?.pinned,
+    }));
+  }, [workspacePath]);
+
   const renameThread = useCallback((title: string) => {
     updateThreadUiState({ title: title.trim() || undefined });
   }, [updateThreadUiState]);
 
+  const renameThreadById = useCallback((targetThreadId: string, title: string) => {
+    updateThreadUiStateById(targetThreadId, { title: title.trim() || undefined });
+  }, [updateThreadUiStateById]);
+
   const archiveThread = useCallback((archived = true) => {
     updateThreadUiState({ archived });
   }, [updateThreadUiState]);
+
+  const archiveThreadById = useCallback((targetThreadId: string, archived = true) => {
+    updateThreadUiStateById(targetThreadId, { archived });
+  }, [updateThreadUiStateById]);
+
+  const deleteThread = useCallback((targetThreadId: string) => {
+    if (!targetThreadId) return;
+    setThreadUiStateMap((prev) => {
+      const next = { ...prev };
+      delete next[targetThreadId];
+      return next;
+    });
+  }, []);
 
   const switchThread = useCallback((nextThreadId: string) => {
     if (!workspacePath) return;
@@ -108,9 +141,14 @@ export function useThreadUiState(workspacePath: string, title: string) {
     threadList,
     threadsByProject,
     updateThreadUiState,
+    updateThreadUiStateById,
     togglePinnedThread,
+    togglePinnedThreadById,
     renameThread,
+    renameThreadById,
     archiveThread,
+    archiveThreadById,
+    deleteThread,
     switchThread,
     createThread,
   };

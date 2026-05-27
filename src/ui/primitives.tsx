@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 
 export interface SelectMenuOption {
   value: string;
@@ -134,6 +134,7 @@ export function SelectMenu({
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<"above" | "below">("above");
+  const [popoverTheme, setPopoverTheme] = useState<"light" | "dark">("dark");
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({});
   const [activeIndex, setActiveIndex] = useState(() => Math.max(0, options.findIndex((option) => option.value === value)));
   const selected = options.find((option) => option.value === value) || options[0];
@@ -141,6 +142,11 @@ export function SelectMenu({
   const updatePlacement = () => {
     const rect = rootRef.current?.getBoundingClientRect();
     if (!rect) return;
+    const themeRoot = rootRef.current?.closest("[data-theme]");
+    const themeValue = themeRoot?.getAttribute("data-theme")
+      || document.body.getAttribute("data-theme")
+      || document.documentElement.getAttribute("data-theme");
+    const nextTheme = themeValue === "light" ? "light" : "dark";
 
     const viewportPadding = 14;
     const optionHeight = 42;
@@ -149,19 +155,23 @@ export function SelectMenu({
       Math.max(46, options.length * optionHeight + 12),
       window.innerHeight - viewportPadding * 2,
     );
-    const menuWidth = Math.min(Math.max(rect.width, 220), window.innerWidth - viewportPadding * 2);
+    const menuWidth = Math.min(Math.max(rect.width, size === "compact" ? 180 : 220), window.innerWidth - viewportPadding * 2);
     const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
     const spaceAbove = rect.top - viewportPadding;
     const nextPlacement = spaceBelow >= menuHeight || spaceBelow >= spaceAbove ? "below" : "above";
     const top = nextPlacement === "below"
       ? Math.min(rect.bottom + 8, window.innerHeight - menuHeight - viewportPadding)
       : Math.max(viewportPadding, rect.top - menuHeight - 8);
+    const preferredLeft = rect.left + menuWidth > window.innerWidth - viewportPadding
+      ? rect.right - menuWidth
+      : rect.left;
     const left = Math.min(
-      Math.max(viewportPadding, rect.right - menuWidth),
+      Math.max(viewportPadding, preferredLeft),
       window.innerWidth - menuWidth - viewportPadding,
     );
 
     setPlacement(nextPlacement);
+    setPopoverTheme(nextTheme);
     setPopoverStyle({
       top,
       left,
@@ -252,7 +262,7 @@ export function SelectMenu({
       {open ? createPortal(
         <div
           ref={popoverRef}
-          className={`ui-select-popover ui-select-popover-${placement}`}
+          className={`ui-select-popover ui-select-popover-${placement} ui-select-popover-${popoverTheme}`}
           role="listbox"
           id={`${id}-listbox`}
           aria-label={ariaLabel}
@@ -269,7 +279,10 @@ export function SelectMenu({
               onMouseEnter={() => setActiveIndex(index)}
               onClick={() => commit(option)}
             >
-              <span>{option.label}</span>
+              <span className="ui-select-option-main">
+                <span>{option.label}</span>
+                {option.value === value ? <Check className="ui-select-check" size={14} aria-hidden="true" /> : null}
+              </span>
               {option.description ? <small>{option.description}</small> : null}
             </button>
           ))}

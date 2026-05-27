@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { parseCommandLine } from "../runtime/commandParser";
 import { invokeDesktop, isDesktopRuntime } from "../runtime/desktopGateway";
 import { isTauri } from "../utils/tauri";
@@ -15,14 +15,25 @@ const LEGACY_ACTIVE_WORKSPACE_KEY = "agent-gui.active-workspace.v1";
 function readStoredWorkspaceRoot(): string {
   if (typeof window === "undefined") return "";
   try {
-    return (
+    return normalizeStoredWorkspaceRoot(
       window.localStorage.getItem(ACTIVE_WORKSPACE_KEY) ||
       window.localStorage.getItem(LEGACY_ACTIVE_WORKSPACE_KEY) ||
-      ""
+      "",
     );
   } catch {
     return "";
   }
+}
+
+export function normalizeStoredWorkspaceRoot(path: string): string {
+  const normalized = path.trim().replace(/[\\/]+$/, "");
+  if (!normalized) return "";
+  const separator = normalized.includes("\\") ? "\\" : "/";
+  const parts = normalized.split(/[\\/]/).filter(Boolean);
+  if (parts[parts.length - 1] !== "src-tauri") return normalized;
+  if (parts.length <= 1) return normalized;
+  const parent = normalized.slice(0, -(separator + "src-tauri").length);
+  return parent || separator;
 }
 
 function storeWorkspaceRoot(path: string): void {
@@ -59,26 +70,44 @@ export interface FileSystemState {
   refreshFileTree: () => Promise<void>;
   executeCommand: (taskId: string, rawCommand: string) => void;
   executeStructuredCommand: (input: {
+    workspacePath?: string;
+    threadId?: string;
     taskId: string;
+    approvalId?: string;
     command: string;
     args?: string[];
     reason?: string;
-    workspacePath?: string;
+    cwd?: string;
   }) => void;
   recordTerminalResult: (input: {
+    workspacePath?: string;
+    threadId?: string;
     taskId: string;
+    approvalId?: string;
+    cwd?: string;
     command: string;
     args?: string[];
     reason?: string;
     output: string;
     exitCode?: number | null;
   }) => string;
+  recoverTerminalRuns: (runs: TerminalRun[], replace?: boolean) => void;
+}
+
+export function terminalRunLooksLikeVerification(run?: TerminalRun): boolean {
+  if (!run) return false;
+  const haystack = [
+    run.reason,
+    run.command,
+    ...(run.args || []),
+  ].join(" ");
+  return /\bverify\b|\bverification\b|验证|校验/i.test(haystack);
 }
 
 export function useFileSystem(
   providerSettings: { sandboxMode?: string; security?: { sandboxMode?: string } },
   updateTask: (taskId: string, updates: any) => void,
-  onCommandComplete: (taskId: string, exitCode: number | null) => void,
+  onCommandComplete: (taskId: string, exitCode: number | null, run?: TerminalRun) => void,
   initialTerminalRuns: TerminalRun[] = [],
 ): FileSystemState {
   const [workspaceRoot, setWorkspaceRootState] = useState("");
@@ -89,6 +118,11 @@ export function useFileSystem(
   const [terminalLogs, setTerminalLogs] = useState<Record<string, string>>({});
   const [terminalRuns, setTerminalRuns] = useState<TerminalRun[]>(initialTerminalRuns);
   const [commandStatus, setCommandStatus] = useState<Record<string, { running: boolean; exitCode: number | null }>>({});
+  const terminalRunsRef = useRef<TerminalRun[]>(initialTerminalRuns);
+
+  useEffect(() => {
+    terminalRunsRef.current = terminalRuns;
+  }, [terminalRuns]);
 
   useEffect(() => {
     async function loadWorkspace() {
@@ -130,7 +164,11 @@ export function useFileSystem(
 
   useEffect(() => {
     if (initialTerminalRuns.length === 0) return;
-    setTerminalRuns((prev) => (prev.length > 0 ? prev : initialTerminalRuns));
+    setTerminalRuns((prev) => {
+      const next = prev.length > 0 ? prev : initialTerminalRuns;
+      terminalRunsRef.current = next;
+      return next;
+    });
   }, [initialTerminalRuns]);
 
   const viewFile = useCallback(async (path: string) => {
@@ -198,24 +236,38 @@ export function useFileSystem(
   }, [workspaceRoot]);
 
   const executeStructuredCommand = useCallback((input: {
+    workspacePath?: string;
+    threadId?: string;
     taskId: string;
+    approvalId?: string;
     command: string;
     args?: string[];
     reason?: string;
-    workspacePath?: string;
+    cwd?: string;
   }) => {
     const { taskId, command } = input;
     const args = input.args || [];
     const commandWorkspacePath = input.workspacePath || workspaceRoot;
     setTerminalLogs((prev) => ({ ...prev, [taskId]: "" }));
-    setTerminalRuns((prev) => [...prev, createTerminalRun({ taskId, command, args, reason: input.reason })]);
+    const run = createTerminalRun({
+      workspacePath: commandWorkspacePath,
+      threadId: input.threadId,
+      taskId,
+      approvalId: input.approvalId,
+      cwd: input.cwd,
+      command,
+      args,
+      reason: input.reason,
+    });
+    terminalRunsRef.current = [...terminalRunsRef.current, run];
+    setTerminalRuns(terminalRunsRef.current);
     setCommandStatus((prev) => ({ ...prev, [taskId]: { running: true, exitCode: null } }));
     updateTask(taskId, { status: "running" });
 
     if (isDesktopRuntime()) {
       const sandbox = providerSettings.security?.sandboxMode || providerSettings.sandboxMode || "none";
       invokeDesktop("run_command_async", {
-        taskId, command, args, sandboxMode: sandbox, workspacePath: commandWorkspacePath,
+        taskId, command, args, sandboxMode: sandbox, workspacePath: commandWorkspacePath, cwd: input.cwd || "",
       }).catch((err) => {
         setTerminalLogs((prev) => ({ ...prev, [taskId]: (prev[taskId] || "") + `Failed to execute: ${err}\n` }));
         setCommandStatus((prev) => ({ ...prev, [taskId]: { running: false, exitCode: 1 } }));
@@ -238,7 +290,11 @@ export function useFileSystem(
   }, [executeStructuredCommand]);
 
   const recordTerminalResult = useCallback((input: {
+    workspacePath?: string;
+    threadId?: string;
     taskId: string;
+    approvalId?: string;
+    cwd?: string;
     command: string;
     args?: string[];
     reason?: string;
@@ -246,7 +302,11 @@ export function useFileSystem(
     exitCode?: number | null;
   }) => {
     const run = createTerminalRun({
+      workspacePath: input.workspacePath || workspaceRoot,
+      threadId: input.threadId,
       taskId: input.taskId,
+      approvalId: input.approvalId,
+      cwd: input.cwd,
       command: input.command,
       args: input.args || [],
       reason: input.reason,
@@ -254,10 +314,30 @@ export function useFileSystem(
       exitCode: input.exitCode ?? null,
       status: input.exitCode === 0 ? "done" : "failed",
     });
-    setTerminalRuns((prev) => [...prev, run]);
+    terminalRunsRef.current = [...terminalRunsRef.current, run];
+    setTerminalRuns(terminalRunsRef.current);
     setTerminalLogs((prev) => ({ ...prev, [input.taskId]: input.output }));
     setCommandStatus((prev) => ({ ...prev, [input.taskId]: { running: false, exitCode: input.exitCode ?? null } }));
     return run.id;
+  }, [workspaceRoot]);
+
+  const recoverTerminalRuns = useCallback((runs: TerminalRun[], replace = false) => {
+    terminalRunsRef.current = replace ? runs : terminalRunsRef.current.length > 0 ? terminalRunsRef.current : runs;
+    setTerminalRuns(terminalRunsRef.current);
+    setTerminalLogs((prev) => {
+      if (!replace && Object.keys(prev).length > 0) return prev;
+      return runs.reduce<Record<string, string>>((logs, run) => {
+        if (run.output) logs[run.taskId] = run.output;
+        return logs;
+      }, {});
+    });
+    setCommandStatus((prev) => {
+      if (!replace && Object.keys(prev).length > 0) return prev;
+      return runs.reduce<Record<string, { running: boolean; exitCode: number | null }>>((statuses, run) => {
+        statuses[run.taskId] = { running: run.status === "running", exitCode: run.exitCode };
+        return statuses;
+      }, {});
+    });
   }, []);
 
   useEffect(() => {
@@ -280,23 +360,31 @@ export function useFileSystem(
               [taskId]: (prev[taskId] || "") + text,
             }));
             if (text) {
-              setTerminalRuns((prev) => appendTerminalOutput(prev, taskId, text));
+              terminalRunsRef.current = appendTerminalOutput(terminalRunsRef.current, taskId, text);
+              setTerminalRuns(terminalRunsRef.current);
             }
 
             if (done) {
-              setTerminalRuns((prev) => completeTerminalRun(prev, taskId, exitCode));
+              const runningRun = [...terminalRunsRef.current]
+                .reverse()
+                .find((run) => run.taskId === taskId && run.status === "running");
+              terminalRunsRef.current = completeTerminalRun(terminalRunsRef.current, taskId, exitCode);
+              const completedRun = runningRun
+                ? terminalRunsRef.current.find((run) => run.id === runningRun.id)
+                : terminalRunsRef.current.find((run) => run.taskId === taskId);
+              setTerminalRuns(terminalRunsRef.current);
               setCommandStatus((prev) => ({
                 ...prev,
                 [taskId]: { running: false, exitCode },
               }));
 
-              if (exitCode === 0) {
-                updateTask(taskId, { status: "done" });
-              } else {
-                updateTask(taskId, { status: "blocked" });
-              }
+              updateTask(taskId, {
+                status: exitCode === 0
+                  ? (terminalRunLooksLikeVerification(completedRun) ? "verified" : "review")
+                  : "blocked",
+              });
 
-              onCommandComplete(taskId, exitCode);
+              onCommandComplete(taskId, exitCode, completedRun);
             }
           }
         );
@@ -318,6 +406,6 @@ export function useFileSystem(
     workspaceFiles, activeFilePath, activeFileContent,
     terminalLogs, commandStatus,
     terminalRuns,
-    viewFile, setWorkspaceRoot, refreshFileTree, executeCommand, executeStructuredCommand, recordTerminalResult,
+    viewFile, setWorkspaceRoot, refreshFileTree, executeCommand, executeStructuredCommand, recordTerminalResult, recoverTerminalRuns,
   };
 }

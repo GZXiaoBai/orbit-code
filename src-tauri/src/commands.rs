@@ -6,8 +6,9 @@
 //! ## Credential Management
 //! | Command | Params | Returns | Description |
 //! |---------|--------|---------|-------------|
-//! | `store_vault_credential` | provider:String, secret:String, passphrase:String | `()` | Encrypt an API key into Orbit's local credential vault |
+//! | `store_vault_credential` | provider:String, secret:String, passphrase:String, remember_device?:bool | `()` | Encrypt an API key into Orbit's local credential vault |
 //! | `unlock_credential_vault` | passphrase:String | `Vec<String>` | Unlock stored provider credentials for the current process |
+//! | `enable_vault_auto_unlock` | passphrase:String | `Vec<String>` | Enable trusted-device auto-unlock on personal devices |
 //!
 //! ## File Operations
 //! | Command | Params | Returns | Description |
@@ -70,7 +71,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 /* ==========================================================================
 Greet
@@ -86,6 +87,8 @@ pub fn greet(name: &str) -> String {
 ========================================================================== */
 
 const VAULT_KEY_PREFIX: &str = "credential.vault.";
+const VAULT_AUTO_UNLOCK_KEY: &str = "credential.vault.auto_unlock";
+const VAULT_AUTO_UNLOCK_DEVICE_KEY_FILE: &str = "orbit-device-unlock.key";
 
 static CREDENTIAL_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
@@ -101,6 +104,18 @@ struct EncryptedCredentialEnvelope {
     salt: String,
     nonce: String,
     ciphertext: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TrustedDeviceEnvelope {
+    version: u8,
+    nonce: String,
+    ciphertext: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TrustedDevicePayload {
+    providers: HashMap<String, String>,
 }
 
 fn vault_key(provider: &str) -> String {
@@ -154,32 +169,8 @@ fn decrypt_secret(envelope: &EncryptedCredentialEnvelope, passphrase: &str) -> R
     String::from_utf8(plaintext).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub fn store_vault_credential(
-    app: AppHandle,
-    provider: String,
-    secret: String,
-    passphrase: String,
-) -> Result<(), String> {
-    if provider.trim().is_empty() {
-        return Err("Provider is required".to_string());
-    }
-    if secret.trim().is_empty() {
-        return Err("API key is required".to_string());
-    }
-    let envelope = encrypt_secret(&provider, &secret, &passphrase)?;
-    let raw = serde_json::to_string(&envelope).map_err(|e| e.to_string())?;
-    db::db_set(app, vault_key(&provider), raw)?;
-    credential_cache()
-        .lock()
-        .map_err(|e| e.to_string())?
-        .insert(provider, secret);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn unlock_credential_vault(app: AppHandle, passphrase: String) -> Result<Vec<String>, String> {
-    let conn = db::get_connection(&app)?;
+fn load_credentials_with_passphrase(app: &AppHandle, passphrase: &str) -> Result<HashMap<String, String>, String> {
+    let conn = db::get_connection(app)?;
     let mut stmt = conn
         .prepare("SELECT key, value FROM kv_store WHERE key LIKE ?1")
         .map_err(|e| e.to_string())?;
@@ -189,17 +180,175 @@ pub fn unlock_credential_vault(app: AppHandle, passphrase: String) -> Result<Vec
         })
         .map_err(|e| e.to_string())?;
 
-    let mut unlocked = Vec::new();
-    let mut cache = credential_cache().lock().map_err(|e| e.to_string())?;
+    let mut providers = HashMap::new();
     for row in rows {
         let (key, value) = row.map_err(|e| e.to_string())?;
+        if key == VAULT_AUTO_UNLOCK_KEY {
+            continue;
+        }
         let provider = key.trim_start_matches(VAULT_KEY_PREFIX).to_string();
         let envelope = serde_json::from_str::<EncryptedCredentialEnvelope>(&value).map_err(|e| e.to_string())?;
-        let secret = decrypt_secret(&envelope, &passphrase)?;
+        providers.insert(provider, decrypt_secret(&envelope, passphrase)?);
+    }
+    Ok(providers)
+}
+
+fn trusted_device_key_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join(VAULT_AUTO_UNLOCK_DEVICE_KEY_FILE))
+}
+
+fn load_or_create_trusted_device_key(app: &AppHandle) -> Result<[u8; 32], String> {
+    let key_path = trusted_device_key_path(app)?;
+    if key_path.exists() {
+        let raw = fs::read_to_string(&key_path).map_err(|e| e.to_string())?;
+        let decoded = BASE64.decode(raw.trim()).map_err(|e| e.to_string())?;
+        if decoded.len() != 32 {
+            return Err("Trusted-device unlock key is invalid".to_string());
+        }
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&decoded);
+        return Ok(key);
+    }
+
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    fs::write(&key_path, BASE64.encode(key)).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = fs::Permissions::from_mode(0o600);
+        fs::set_permissions(&key_path, permissions).map_err(|e| e.to_string())?;
+    }
+    Ok(key)
+}
+
+fn encrypt_trusted_device_payload(app: &AppHandle, providers: &HashMap<String, String>) -> Result<TrustedDeviceEnvelope, String> {
+    let key = load_or_create_trusted_device_key(app)?;
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| e.to_string())?;
+    let payload = TrustedDevicePayload {
+        providers: providers.clone(),
+    };
+    let raw = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce_bytes), raw.as_ref())
+        .map_err(|e| e.to_string())?;
+    Ok(TrustedDeviceEnvelope {
+        version: 1,
+        nonce: BASE64.encode(nonce_bytes),
+        ciphertext: BASE64.encode(ciphertext),
+    })
+}
+
+fn decrypt_trusted_device_payload(app: &AppHandle, raw_envelope: &str) -> Result<TrustedDevicePayload, String> {
+    let key = load_or_create_trusted_device_key(app)?;
+    let envelope = serde_json::from_str::<TrustedDeviceEnvelope>(raw_envelope).map_err(|e| e.to_string())?;
+    let nonce = BASE64.decode(&envelope.nonce).map_err(|e| e.to_string())?;
+    let ciphertext = BASE64.decode(&envelope.ciphertext).map_err(|e| e.to_string())?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| e.to_string())?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .map_err(|_| "Unable to unlock trusted-device credential cache.".to_string())?;
+    serde_json::from_slice::<TrustedDevicePayload>(&plaintext).map_err(|e| e.to_string())
+}
+
+fn save_trusted_device_cache(app: &AppHandle, providers: &HashMap<String, String>) -> Result<(), String> {
+    let envelope = encrypt_trusted_device_payload(app, providers)?;
+    let raw = serde_json::to_string(&envelope).map_err(|e| e.to_string())?;
+    db::db_set(app.clone(), VAULT_AUTO_UNLOCK_KEY.to_string(), raw)
+}
+
+fn trusted_device_cache_exists(app: &AppHandle) -> bool {
+    db::db_get(app.clone(), VAULT_AUTO_UNLOCK_KEY.to_string())
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+#[tauri::command]
+pub fn store_vault_credential(
+    app: AppHandle,
+    provider: String,
+    secret: String,
+    passphrase: String,
+    remember_device: Option<bool>,
+) -> Result<(), String> {
+    if provider.trim().is_empty() {
+        return Err("Provider is required".to_string());
+    }
+    if secret.trim().is_empty() {
+        return Err("API key is required".to_string());
+    }
+    let envelope = encrypt_secret(&provider, &secret, &passphrase)?;
+    let raw = serde_json::to_string(&envelope).map_err(|e| e.to_string())?;
+    db::db_set(app.clone(), vault_key(&provider), raw)?;
+    credential_cache()
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(provider, secret);
+    if remember_device.unwrap_or(false) || trusted_device_cache_exists(&app) {
+        let providers = load_credentials_with_passphrase(&app, &passphrase)?;
+        save_trusted_device_cache(&app, &providers)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn unlock_credential_vault(app: AppHandle, passphrase: String) -> Result<Vec<String>, String> {
+    let providers = load_credentials_with_passphrase(&app, &passphrase)?;
+    let mut cache = credential_cache().lock().map_err(|e| e.to_string())?;
+    let mut unlocked = Vec::new();
+    for (provider, secret) in providers {
         cache.insert(provider.clone(), secret);
         unlocked.push(provider);
     }
     Ok(unlocked)
+}
+
+#[tauri::command]
+pub fn enable_vault_auto_unlock(app: AppHandle, passphrase: String) -> Result<Vec<String>, String> {
+    let providers = load_credentials_with_passphrase(&app, &passphrase)?;
+    save_trusted_device_cache(&app, &providers)?;
+    let mut cache = credential_cache().lock().map_err(|e| e.to_string())?;
+    let mut unlocked = Vec::new();
+    for (provider, secret) in providers {
+        cache.insert(provider.clone(), secret);
+        unlocked.push(provider);
+    }
+    Ok(unlocked)
+}
+
+#[tauri::command]
+pub fn try_vault_auto_unlock(app: AppHandle) -> Result<Vec<String>, String> {
+    let Some(raw) = db::db_get(app.clone(), VAULT_AUTO_UNLOCK_KEY.to_string())? else {
+        return Ok(Vec::new());
+    };
+    let payload = decrypt_trusted_device_payload(&app, &raw)?;
+    let mut cache = credential_cache().lock().map_err(|e| e.to_string())?;
+    let mut unlocked = Vec::new();
+    for (provider, secret) in payload.providers {
+        cache.insert(provider.clone(), secret);
+        unlocked.push(provider);
+    }
+    Ok(unlocked)
+}
+
+#[tauri::command]
+pub fn disable_vault_auto_unlock(app: AppHandle) -> Result<(), String> {
+    db::db_delete(app.clone(), VAULT_AUTO_UNLOCK_KEY.to_string())?;
+    let key_path = trusted_device_key_path(&app)?;
+    if key_path.exists() {
+        fs::remove_file(key_path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn is_vault_auto_unlock_enabled(app: AppHandle) -> Result<bool, String> {
+    Ok(trusted_device_cache_exists(&app))
 }
 
 #[tauri::command]
@@ -213,7 +362,11 @@ pub fn list_vault_credential_providers(app: AppHandle) -> Result<Vec<String>, St
         .map_err(|e| e.to_string())?;
     let mut providers = Vec::new();
     for row in rows {
-        providers.push(row.map_err(|e| e.to_string())?.trim_start_matches(VAULT_KEY_PREFIX).to_string());
+        let key = row.map_err(|e| e.to_string())?;
+        if key == VAULT_AUTO_UNLOCK_KEY {
+            continue;
+        }
+        providers.push(key.trim_start_matches(VAULT_KEY_PREFIX).to_string());
     }
     Ok(providers)
 }
@@ -248,9 +401,24 @@ static WORKSPACE_ROOT: OnceLock<Mutex<PathBuf>> = OnceLock::new();
 
 fn workspace_root_cell() -> &'static Mutex<PathBuf> {
     WORKSPACE_ROOT.get_or_init(|| {
-        let default_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        #[cfg(test)]
+        let default_root = current_dir;
+        #[cfg(not(test))]
+        let default_root = default_workspace_root(current_dir);
         Mutex::new(default_root)
     })
+}
+
+fn default_workspace_root(current_dir: PathBuf) -> PathBuf {
+    if current_dir.file_name().and_then(|name| name.to_str()) == Some("src-tauri") {
+        if let Some(parent) = current_dir.parent() {
+            if parent.join("package.json").is_file() || parent.join(".git").exists() {
+                return parent.to_path_buf();
+            }
+        }
+    }
+    current_dir
 }
 
 fn get_active_workspace_root() -> Result<PathBuf, String> {
@@ -274,6 +442,33 @@ fn resolve_workspace_root(workspace_path: Option<String>) -> Result<PathBuf, Str
         }
         _ => get_active_workspace_root(),
     }
+}
+
+fn resolve_command_cwd(workspace_root: &Path, cwd: Option<String>) -> Result<PathBuf, String> {
+    let Some(cwd) = cwd else {
+        return workspace_root.canonicalize().map_err(|e| e.to_string());
+    };
+    let trimmed = cwd.trim();
+    if trimmed.is_empty() || trimmed == "." {
+        return workspace_root.canonicalize().map_err(|e| e.to_string());
+    }
+    let relative = PathBuf::from(trimmed);
+    if relative.is_absolute() {
+        return Err("Command cwd must be relative to the workspace".to_string());
+    }
+    let target = workspace_root.join(relative);
+    assert_workspace_child(
+        workspace_root,
+        &target,
+        "Access Denied: Command cwd escapes workspace",
+    )?;
+    let canonical = target
+        .canonicalize()
+        .map_err(|e| format!("Command cwd not found: {}", e))?;
+    if !canonical.is_dir() {
+        return Err("Command cwd must be a directory".to_string());
+    }
+    Ok(canonical)
 }
 
 fn assert_workspace_child(root: &Path, target: &Path, message: &str) -> Result<(), String> {
@@ -364,12 +559,29 @@ pub fn run_command_async(
     args: Vec<String>,
     sandbox_mode: String,
     workspace_path: Option<String>,
+    cwd: Option<String>,
 ) -> Result<(), String> {
     thread::spawn(move || {
-        let current_dir = match resolve_workspace_root(workspace_path) {
+        let workspace_root = match resolve_workspace_root(workspace_path) {
             Ok(d) => d,
             Err(e) => {
                 let err_msg = format!("workspace root failed: {}\n", e);
+                let _ = app.emit(
+                    "command-output",
+                    serde_json::json!({
+                        "taskId": task_id,
+                        "text": err_msg,
+                        "done": true,
+                        "exitCode": Some(1)
+                    }),
+                );
+                return;
+            }
+        };
+        let current_dir = match resolve_command_cwd(&workspace_root, cwd) {
+            Ok(d) => d,
+            Err(e) => {
+                let err_msg = format!("command cwd failed: {}\n", e);
                 let _ = app.emit(
                     "command-output",
                     serde_json::json!({
@@ -615,8 +827,10 @@ pub fn run_command_sync(
     args: Vec<String>,
     sandbox_mode: String,
     workspace_path: Option<String>,
+    cwd: Option<String>,
 ) -> Result<String, String> {
-    let current_dir = resolve_workspace_root(workspace_path)?;
+    let workspace_root = resolve_workspace_root(workspace_path)?;
+    let current_dir = resolve_command_cwd(&workspace_root, cwd)?;
     let canonical_dir = current_dir.canonicalize().map_err(|e| e.to_string())?;
 
     let mut cmd = Command::new(&command);
@@ -1486,6 +1700,24 @@ pub async fn call_llm_api_streaming(
 #[cfg(test)]
 mod provider_tests {
     use super::*;
+
+    #[test]
+    fn tauri_dev_defaults_to_frontend_project_root() {
+        let temp = std::env::temp_dir().join(format!("orbit-root-test-{}", uuid::Uuid::new_v4()));
+        let src_tauri = temp.join("src-tauri");
+        std::fs::create_dir_all(&src_tauri).unwrap();
+        std::fs::write(temp.join("package.json"), "{}").unwrap();
+
+        assert_eq!(default_workspace_root(src_tauri), temp);
+    }
+
+    #[test]
+    fn non_tauri_dirs_stay_as_workspace_root() {
+        let temp = std::env::temp_dir().join(format!("orbit-root-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).unwrap();
+
+        assert_eq!(default_workspace_root(temp.clone()), temp);
+    }
 
     #[test]
     fn credential_vault_encrypts_and_rejects_wrong_passphrase() {

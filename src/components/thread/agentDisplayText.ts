@@ -22,6 +22,9 @@ export function localizedAgentEventName(copy: AppCopy, name: string): string {
     "Verification Denied": copy.workbench.agentEventNames.verificationDenied,
     "Run Guard": copy.workbench.agentEventNames.runGuard,
     "Agent Error": copy.workbench.agentEventNames.agentError,
+    "Waiting For Continue": copy.workbench.agentEventNames.waitingForContinue,
+    "Continue Agent": copy.workbench.agentEventNames.continueAgent,
+    "Final Summary": copy.workbench.agentEventNames.finalSummary,
     run_command: copy.security.command,
     apply_patch: copy.security.write,
     ask_user: copy.workbench.agentEventNames.question,
@@ -94,6 +97,22 @@ export function localizedRuntimeText(copy: AppCopy, text: string): string {
     ["patch(es). No workspace files were changed.", "个补丁。当前工作区未被修改。"],
     ["No workspace files were changed.", "当前工作区未被修改。"],
   ].reduce((current, [from, to]) => current.split(from).join(to), readableToolText);
+}
+
+export function compactRuntimeTextForTimeline(copy: AppCopy, text: string, maxLength = 900): string {
+  const localized = localizedRuntimeText(copy, text).trim();
+  const withoutFabricatedToolResult = localized
+    .replace(/\[Tool\s+[^\]]+\s+result\]:[\s\S]*?(?=\n\s*\{"tool"|$)/gi, copy.language === "中" ? "已忽略模型伪造的工具结果。" : "Ignored model-fabricated tool result.")
+    .trim();
+  const normalized = withoutFabricatedToolResult.replace(/\n{3,}/g, "\n\n");
+  const lineCount = normalized.split("\n").length;
+
+  if (normalized.length <= maxLength && lineCount <= 18) return normalized;
+
+  const suffix = copy.language === "中"
+    ? "…\n已折叠较长输出；完整命令输出、Diff 或文件内容请在审查台查看。"
+    : "…\nLong output collapsed; inspect full command output, diff, or file content in Review Dock.";
+  return `${normalized.slice(0, maxLength).trimEnd()}${suffix}`;
 }
 
 function summarizeToolEnvelopeText(copy: AppCopy, text: string): string | null {

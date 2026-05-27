@@ -26,9 +26,10 @@ export function useQuestionQueue(initialRequests: QuestionRequest[] = []) {
   const requestQuestion = useCallback((
     question: string,
     taskId: string,
+    scope?: { workspacePath?: string; threadId?: string },
     onCreated?: QuestionCreatedCallback,
   ) => {
-    const request = createQuestionRequest({ taskId, question });
+    const request = createQuestionRequest({ taskId, question, workspacePath: scope?.workspacePath, threadId: scope?.threadId });
     onCreated?.(request);
     setRequests((prev) => [request, ...prev]);
 
@@ -69,8 +70,8 @@ export function useQuestionQueue(initialRequests: QuestionRequest[] = []) {
     );
   }, []);
 
-  const recoverQuestions = useCallback((nextRequests: QuestionRequest[]) => {
-    setRequests((prev) => recoverQuestionRequests(prev, nextRequests));
+  const recoverQuestions = useCallback((nextRequests: QuestionRequest[], replace = false) => {
+    setRequests((prev) => replace ? nextRequests : recoverQuestionRequests(prev, nextRequests));
   }, []);
 
   return {

@@ -45,6 +45,7 @@ interface SettingsWorkspaceProps {
   providerSettings: ProviderSettings;
   apiKeys: Record<string, string>;
   credentialVaultProviders: string[];
+  credentialVaultAutoUnlock: boolean;
   usageSnapshot: UsageSnapshot;
   theme: Theme;
   layoutPreferences: LayoutPreferences;
@@ -54,8 +55,9 @@ interface SettingsWorkspaceProps {
   activeSection: string;
   onSectionChange: (section: string) => void;
   onUpdateSettings: (settings: ProviderSettings) => Promise<void> | void;
-  onUpdateApiKey: (providerId: string, key: string, passphrase: string) => Promise<void> | void;
-  onUnlockCredentialVault: (passphrase: string) => Promise<string[]> | string[];
+  onUpdateApiKey: (providerId: string, key: string, passphrase: string, rememberDevice?: boolean) => Promise<void> | void;
+  onUnlockCredentialVault: (passphrase: string, rememberDevice?: boolean) => Promise<string[]> | string[];
+  onDisableCredentialVaultAutoUnlock: () => Promise<void> | void;
   onThemeChange: (theme: Theme) => void;
   onUpdateLayoutPreferences: (patch: Partial<LayoutPreferences>) => void;
   onTogglePinnedProject: (workspacePath: string) => void;
@@ -93,6 +95,7 @@ export function SettingsWorkspace({
   providerSettings,
   apiKeys,
   credentialVaultProviders,
+  credentialVaultAutoUnlock,
   usageSnapshot,
   theme,
   layoutPreferences,
@@ -104,6 +107,7 @@ export function SettingsWorkspace({
   onUpdateSettings,
   onUpdateApiKey,
   onUnlockCredentialVault,
+  onDisableCredentialVaultAutoUnlock,
   onThemeChange,
   onUpdateLayoutPreferences,
   onTogglePinnedProject,
@@ -116,11 +120,16 @@ export function SettingsWorkspace({
   const [draftSettings, setDraftSettings] = useState(providerSettings);
   const [localApiKeys, setLocalApiKeys] = useState<Record<string, string>>({});
   const [vaultPassphrase, setVaultPassphrase] = useState("");
+  const [rememberVaultUnlock, setRememberVaultUnlock] = useState(false);
   const [vaultMessage, setVaultMessage] = useState("");
   const [activeProviderId, setActiveProviderId] = useState(providerSettings.activeProviderId || providerRegistry[0].id);
   const [modelSearch, setModelSearch] = useState("");
   const [customModel, setCustomModel] = useState("");
   const [importStates, setImportStates] = useState<Record<string, { state: ImportState; message?: string }>>({});
+
+  useEffect(() => {
+    if (credentialVaultAutoUnlock) setRememberVaultUnlock(true);
+  }, [credentialVaultAutoUnlock]);
 
   useEffect(() => {
     setDraftSettings(providerSettings);
@@ -161,10 +170,17 @@ export function SettingsWorkspace({
   const vaultCopy = {
     passphrase: copy.language === "中" ? "Orbit 凭据库主密码" : "Orbit credential vault passphrase",
     passphraseHelp: copy.language === "中"
-      ? "API Key 会加密存入本地 SQLite；主密码不会保存，重启后需要再次解锁。"
-      : "API keys are encrypted into local SQLite. The passphrase is never saved and is required again after restart.",
+      ? "API Key 会加密存入本地 SQLite。可选择信任此设备，之后自动解锁；关闭后重启仍需主密码。"
+      : "API keys are encrypted into local SQLite. You may trust this device for automatic unlock; otherwise restart requires the passphrase.",
     unlock: copy.language === "中" ? "解锁凭据库" : "Unlock vault",
+    remember: copy.language === "中" ? "信任此设备，重启后自动解锁" : "Trust this device and auto-unlock after restart",
+    rememberHelp: copy.language === "中"
+      ? "会在本机保存一个受文件权限保护的解锁缓存。方便本机使用，但不适合共享电脑。"
+      : "Stores a local unlock cache protected by file permissions. Convenient on your own Mac, not recommended on shared machines.",
+    remembered: copy.language === "中" ? "已启用本设备自动解锁" : "Trusted-device auto-unlock enabled",
+    forget: copy.language === "中" ? "关闭本设备自动解锁" : "Disable auto-unlock",
     locked: copy.language === "中" ? "已保存密钥，当前未解锁" : "Saved key, currently locked",
+    savedUnlocked: copy.language === "中" ? "已保存密钥，凭据库已解锁" : "Saved key, vault unlocked",
     unlocked: copy.language === "中" ? "凭据库已解锁" : "Vault unlocked",
     required: copy.language === "中" ? "请输入凭据库主密码，用于加密或解锁 API Key。" : "Enter the vault passphrase to encrypt or unlock API keys.",
   };
@@ -207,15 +223,15 @@ export function SettingsWorkspace({
     }
 
     if (typedKey) {
-      await onUpdateApiKey(providerId, typedKey, passphrase);
-      setVaultMessage(vaultCopy.unlocked);
+      await onUpdateApiKey(providerId, typedKey, passphrase, rememberVaultUnlock);
+      setVaultMessage(rememberVaultUnlock ? vaultCopy.remembered : vaultCopy.unlocked);
       return true;
     }
 
     if (credentialVaultProviders.includes(providerId)) {
-      const providers = await onUnlockCredentialVault(passphrase);
+      const providers = await onUnlockCredentialVault(passphrase, rememberVaultUnlock);
       const unlocked = Array.isArray(providers) ? providers.includes(providerId) : true;
-      setVaultMessage(unlocked ? vaultCopy.unlocked : vaultCopy.locked);
+      setVaultMessage(unlocked ? (rememberVaultUnlock ? vaultCopy.remembered : vaultCopy.unlocked) : vaultCopy.locked);
       return unlocked;
     }
 
@@ -365,7 +381,12 @@ export function SettingsWorkspace({
                   <button
                     key={provider.id}
                     className={`provider-import-item ${activeProviderId === provider.id ? "active" : ""}`}
-                    onClick={() => setActiveProviderId(provider.id)}
+                    onClick={() => {
+                      setActiveProviderId(provider.id);
+                      if (provider.capabilities.local || imported || detectedKey) {
+                        commitSettings({ ...draftSettings, activeProviderId: provider.id });
+                      }
+                    }}
                   >
                     <span className="provider-import-icon"><Sparkles size={15} /></span>
                     <span>
@@ -414,7 +435,9 @@ export function SettingsWorkspace({
                         type="password"
                         value={localApiKeys[activeProvider.id] || ""}
                         onChange={(event) => setLocalApiKeys((prev) => ({ ...prev, [activeProvider.id]: event.target.value }))}
-                        placeholder={activeProviderHasVaultCredential ? vaultCopy.locked : `${copy.settingsModal.apiKeyPlaceholderPrefix} ${activeProvider.apiKeyName || "API Key"}`}
+                        placeholder={activeProviderHasVaultCredential
+                          ? apiKeys[activeProvider.id] ? vaultCopy.savedUnlocked : vaultCopy.locked
+                          : `${copy.settingsModal.apiKeyPlaceholderPrefix} ${activeProvider.apiKeyName || "API Key"}`}
                       />
                     </div>
                     <div className="setting-field">
@@ -427,6 +450,28 @@ export function SettingsWorkspace({
                       />
                       <div className="security-notice"><ShieldAlert size={12} /><span>{vaultCopy.passphraseHelp}</span></div>
                     </div>
+                    <button
+                      type="button"
+                      className={`settings-toggle-row vault-remember-row ${rememberVaultUnlock ? "active" : ""}`}
+                      onClick={() => setRememberVaultUnlock((value) => !value)}
+                    >
+                      <span><strong>{vaultCopy.remember}</strong><small>{vaultCopy.rememberHelp}</small></span>
+                      <span className="model-switch" aria-hidden="true">{rememberVaultUnlock ? <Check size={14} /> : null}</span>
+                    </button>
+                    {credentialVaultAutoUnlock ? (
+                      <button
+                        type="button"
+                        className="btn danger-lite"
+                        onClick={() => {
+                          void onDisableCredentialVaultAutoUnlock();
+                          setRememberVaultUnlock(false);
+                          setVaultMessage(vaultCopy.locked);
+                        }}
+                      >
+                        <ShieldAlert size={14} />
+                        {vaultCopy.forget}
+                      </button>
+                    ) : null}
                     {activeProviderHasVaultCredential && !apiKeys[activeProvider.id] ? (
                       <button type="button" className="btn" onClick={() => void ensureProviderCredential(activeProvider.id)}>
                         <ShieldCheck size={14} />

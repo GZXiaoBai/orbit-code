@@ -4,6 +4,7 @@ import {
   Image as ImageIcon,
   Paperclip,
   Plus,
+  GitPullRequestArrow,
   X,
 } from "lucide-react";
 import { useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
@@ -17,26 +18,36 @@ import { attachmentFromFile, classifyPastedText, formatAttachmentContext } from 
 interface ComposerProps {
   copy: AppCopy;
   onPlanImport: (source: string, fileName?: string) => Promise<boolean> | boolean;
+  onBuildMessage?: (source: string) => Promise<boolean> | boolean;
   runControls?: RunControlsState;
   onOpenSettings?: (section?: string) => void;
   workspaceRoot?: string;
   projectPermissionPreset?: PermissionPreset;
   onProjectPermissionChange?: (preset: PermissionPreset) => void;
+  reviewPendingCount?: number;
+  onReviewHere?: () => void;
 }
 
 export function Composer({
   copy,
   onPlanImport,
+  onBuildMessage,
   runControls,
   onOpenSettings,
   workspaceRoot,
   projectPermissionPreset = "askBeforeAction",
   onProjectPermissionChange,
+  reviewPendingCount = 0,
+  onReviewHere,
 }: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
+  const isBuildMode = runControls?.mode === "build";
+  const placeholder = isBuildMode
+    ? copy.composer.buildPlaceholder
+    : copy.composer.planPlaceholder;
 
   async function handleFileImport(file: File) {
     const attachment = await attachmentFromFile(file, "file-picker");
@@ -50,8 +61,10 @@ export function Composer({
   async function submitDraft() {
     if (!draft.trim() && attachments.length === 0) return;
     const source = `${draft.trim()}${formatAttachmentContext(attachments)}`;
-    const imported = await onPlanImport(source, "composer-input.md");
-    if (imported) {
+    const handled = runControls?.mode === "build" && onBuildMessage
+      ? await onBuildMessage(source)
+      : await onPlanImport(source, "composer-input.md");
+    if (handled) {
       setDraft("");
       setAttachments([]);
     }
@@ -129,13 +142,22 @@ export function Composer({
       }}
       onDrop={(event) => void handleDrop(event)}
     >
+      {reviewPendingCount > 0 && onReviewHere ? (
+        <div className="composer-review-strip">
+          <span>{copy.workbench.pendingReviewItems.replace("{count}", String(reviewPendingCount))}</span>
+          <button type="button" onClick={onReviewHere} title={copy.workbench.reviewHereHint}>
+            <GitPullRequestArrow size={14} />
+            {copy.workbench.reviewHere}
+          </button>
+        </div>
+      ) : null}
       <div className="composer-input-shell">
         <textarea
           value={draft}
           onChange={(event) => setDraft(event.currentTarget.value)}
           onKeyDown={handleKeyDown}
           onPaste={(event) => void handlePaste(event)}
-          placeholder={copy.composer.placeholder}
+          placeholder={placeholder}
         />
         <button className="send-button" type="submit" aria-label={copy.workbench.send}>
           <ArrowUp size={18} />

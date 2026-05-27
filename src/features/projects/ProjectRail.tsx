@@ -23,20 +23,22 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
   const [manualOpen, setManualOpen] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
   const [menuState, setMenuState] = useState<ProjectMenuState | null>(null);
+  const [threadMenuId, setThreadMenuId] = useState<string | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
   const fileTree = useFileTree(workspace.workspaceRoot, workspace.workspaceFiles, workspace.activeFilePath);
 
   useEffect(() => {
-    if (!menuState) return;
+    if (!menuState && !threadMenuId) return;
 
     const closeOnOutside = (event: PointerEvent) => {
       const target = event.target as Element | null;
       if (menuRef.current?.contains(target as Node)) return;
       if (target?.closest("[data-project-menu-trigger='true']")) return;
-      setMenuState(null);
+      if (target?.closest("[data-thread-row-menu-trigger='true']")) return;
+      closeProjectMenu();
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuState(null);
+      if (event.key === "Escape") closeProjectMenu();
     };
 
     document.addEventListener("pointerdown", closeOnOutside, true);
@@ -45,9 +47,12 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
       document.removeEventListener("pointerdown", closeOnOutside, true);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [menuState]);
+  }, [menuState, threadMenuId]);
 
-  const closeProjectMenu = () => setMenuState(null);
+  const closeProjectMenu = () => {
+    setMenuState(null);
+    setThreadMenuId(null);
+  };
 
   const selectProject = async (workspacePath: string) => {
     closeProjectMenu();
@@ -55,11 +60,18 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
   };
 
   const openButtonMenu = (workspacePath: string) => {
+    setThreadMenuId(null);
     setMenuState((current) => toggleButtonProjectMenu(current, workspacePath));
   };
 
   const openContextMenu = (workspacePath: string, x: number, y: number) => {
+    setThreadMenuId(null);
     setMenuState(openContextProjectMenu(workspacePath, x, y));
+  };
+
+  const openThreadMenu = (threadId: string) => {
+    setMenuState(null);
+    setThreadMenuId((current) => current === threadId ? null : threadId);
   };
 
   const openFolder = async () => {
@@ -212,17 +224,55 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
           </header>
           <div className="project-thread-list">
             {workspace.threadList.map((thread) => (
-              <button
+              <div
                 key={thread.threadId}
-                type="button"
-                className={workspace.threadId === thread.threadId ? "active" : ""}
-                onClick={() => workspace.switchThread(thread.threadId)}
-                title={thread.title || copy.workbench.untitledThread}
+                className={`project-thread-row ${workspace.threadId === thread.threadId ? "active" : ""}`}
               >
-                <MessageSquare size={13} />
-                <span>{thread.title || copy.workbench.untitledThread}</span>
-                <small>{formatThreadAge(thread.updatedAt)}</small>
-              </button>
+                <button
+                  type="button"
+                  className={`project-thread-select ${workspace.threadId === thread.threadId ? "active" : ""}`}
+                  onClick={() => workspace.switchThread(thread.threadId)}
+                  title={thread.title || copy.workbench.untitledThread}
+                >
+                  <MessageSquare size={13} />
+                  <span>{thread.title || copy.workbench.untitledThread}</span>
+                  <small>{formatThreadAge(thread.updatedAt)}</small>
+                </button>
+                <button
+                  type="button"
+                  className="thread-row-more-button"
+                  aria-label={copy.workbench.threadActions}
+                  aria-expanded={threadMenuId === thread.threadId}
+                  data-thread-row-menu-trigger="true"
+                  onClick={() => openThreadMenu(thread.threadId)}
+                >
+                  <MoreHorizontal size={13} />
+                </button>
+                {threadMenuId === thread.threadId ? (
+                  <div ref={menuRef} className="project-context-menu thread-row-menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => { workspace.togglePinnedThreadById(thread.threadId); closeProjectMenu(); }}>
+                      <Pin size={15} />
+                      {thread.pinned ? copy.workbench.unpinThread : copy.workbench.pinThread}
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => {
+                      const name = window.prompt(copy.workbench.renameThread, thread.title || copy.workbench.untitledThread);
+                      if (name !== null) workspace.renameThreadById(thread.threadId, name);
+                      closeProjectMenu();
+                    }}>
+                      <Pencil size={15} />
+                      {copy.workbench.renameThread}
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => { workspace.archiveThreadById(thread.threadId, true); closeProjectMenu(); }}>
+                      <Archive size={15} />
+                      {copy.workbench.archiveThread}
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => { workspace.deleteThreadById(thread.threadId); closeProjectMenu(); }}>
+                      <Trash2 size={15} />
+                      {copy.workbench.removeThread}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             ))}
           </div>
         </section>

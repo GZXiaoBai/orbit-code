@@ -8,7 +8,14 @@ export const defaultLayoutPreferences: LayoutPreferences = {
   density: "compact",
   settingsSection: "general",
   composerPinned: true,
+  projectRailWidth: 274,
+  reviewDockWidth: 360,
 };
+
+function clampWidth(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== "number" || Number.isNaN(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
 
 function loadLayoutPreferences(): LayoutPreferences {
   try {
@@ -22,6 +29,8 @@ function loadLayoutPreferences(): LayoutPreferences {
       reviewDockVisible: parsed.reviewDockVisible !== false,
       settingsSection: typeof parsed.settingsSection === "string" ? parsed.settingsSection : defaultLayoutPreferences.settingsSection,
       composerPinned: parsed.composerPinned !== false,
+      projectRailWidth: clampWidth(parsed.projectRailWidth, defaultLayoutPreferences.projectRailWidth || 274, 220, 460),
+      reviewDockWidth: clampWidth(parsed.reviewDockWidth, defaultLayoutPreferences.reviewDockWidth || 360, 300, 620),
     };
   } catch {
     return defaultLayoutPreferences;

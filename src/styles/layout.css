@@ -645,6 +645,17 @@
   text-align: left;
 }
 
+.settings-toggle-row:hover,
+.model-toggle-row:hover {
+  background: color-mix(in srgb, var(--surface-2) 82%, var(--bg-primary));
+  border-color: var(--line-strong);
+}
+
+.settings-toggle-row.active {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line-strong));
+}
+
 .settings-toggle-row strong,
 .project-override-row strong {
   display: block;
@@ -1396,11 +1407,26 @@
   border: 1px solid var(--line-strong);
   border-radius: 999px;
   background: color-mix(in srgb, var(--bg-primary) 52%, transparent);
-  color: var(--bg-primary);
+  color: transparent;
+  transition: background var(--motion-menu), border-color var(--motion-menu), color var(--motion-menu);
 }
 
-.model-toggle-row.enabled .model-switch {
+.model-toggle-row.enabled .model-switch,
+.settings-toggle-row.active .model-switch {
   justify-items: end;
   padding-right: 3px;
   background: var(--text-primary);
+  border-color: var(--text-primary);
+  color: var(--bg-primary);
+}
+
+[data-theme="dark"] .model-toggle-row.enabled .model-switch,
+[data-theme="dark"] .settings-toggle-row.active .model-switch {
+  background: color-mix(in srgb, var(--text-primary) 92%, var(--accent));
+  border-color: color-mix(in srgb, var(--text-primary) 78%, var(--accent));
+  color: #101010;
+}
+
+.model-switch svg {
+  stroke-width: 3;
 }

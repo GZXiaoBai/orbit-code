@@ -14,7 +14,8 @@ export function PlanSummary({ copy, importedPlan, importError }: PlanSummaryProp
   return (
     <>
       {importError ? (
-        <section className="plan-card error">
+        <section className="plan-card plan-message error">
+          <div className="message-author">{copy.invalidPlan}</div>
           <h3>{copy.invalidPlan}</h3>
           <ul>
             {importError.errors.map((error) => (
@@ -25,10 +26,10 @@ export function PlanSummary({ copy, importedPlan, importError }: PlanSummaryProp
       ) : null}
 
       {plan ? (
-        <section className="plan-card plan-card-compact">
+        <section className="plan-card plan-card-compact plan-message">
+          <div className="message-author">{copy.planImported}</div>
           <div className="plan-card-header">
             <div>
-              <span>{copy.planImported}</span>
               <h3>{plan.title}</h3>
             </div>
             <strong>{plan.tasks.length}</strong>

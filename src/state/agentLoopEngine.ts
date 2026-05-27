@@ -35,14 +35,60 @@ Follow these rules strictly:
 4. STOP after apply_patch and wait for the user to review and apply the patch in the Review Dock.
 5. AFTER the user applies patches and explicitly starts verification, verify by running tests.
 6. Use ask_user ONLY when you truly need input.
+7. NEVER invent tool results. Do not write "[Tool ... result]" sections yourself; Orbit will provide real tool results after executing approved tools.
+8. For commands inside a generated app or subdirectory, use run_command.cwd. Never use "cd ... && ...".
+9. Do not ask whether patches were reviewed unless Orbit has returned a real apply_patch result first.
+10. Keep apply_patch small and reviewable: include at most 3 files per apply_patch call. For generated projects, send config files first, then wait; after the user applies and continues, send source files in later apply_patch calls.
+11. Never try to create an entire app in one apply_patch. Large JSON tool calls can be truncated and will be rejected.
 
-You MUST output tool calls in this exact format on a single line:
+You MUST output exactly one complete JSON tool call at a time:
 {"tool": "tool_name", "params": {"param1": "value1"}}
 
-You can also comment/explain with text around tool calls.
+Do not wrap the JSON in Markdown. Do not output prose before or after a tool call.
 When COMPLETELY done, output: {"tool": "done", "params": {"summary": "what you accomplished"}}
 
 IMPORTANT: Always read a file before modifying it. Always search for related code before making changes.`;
+
+function invalidRunCommandMessage(params: ToolParams): string | null {
+  const command = typeof params.command === "string" ? params.command.trim() : "";
+  if (!command) return "Invalid run_command: command is required.";
+  if (command === "cd" || /[;&|`$<>]/.test(command)) {
+    return [
+      "Invalid run_command: use one executable plus args; do not use shell operators or cd.",
+      "If the command belongs in a subdirectory, pass cwd, for example:",
+      '{"tool":"run_command","params":{"command":"npm","args":["install"],"cwd":"orbit-mini-lab","reason":"install dependencies in the generated app"}}',
+    ].join("\n");
+  }
+  return null;
+}
+
+export function stripFabricatedToolResults(text: string): string {
+  const withoutXmlBlocks = text.replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, "");
+  const lines = withoutXmlBlocks.split("\n");
+  const kept: string[] = [];
+  let skippingFabricatedResult = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^\[Tool\s+[a-z_]+\s+result\]:/i.test(trimmed) || /^#?\s*Tool ran without output or errors/i.test(trimmed)) {
+      skippingFabricatedResult = true;
+      continue;
+    }
+    if (skippingFabricatedResult) {
+      if (!trimmed) {
+        skippingFabricatedResult = false;
+      }
+      if (trimmed.startsWith('{"tool"')) {
+        skippingFabricatedResult = false;
+        kept.push(line);
+      }
+      continue;
+    }
+    kept.push(line);
+  }
+
+  return kept.join("\n").trim();
+}
 
 export function parseToolCallsFromText(text: string): Array<{ id: string; name: string; params: ToolParams }> {
   const parsed = parseToolEnvelopes(text);
@@ -53,13 +99,20 @@ export function parseToolCallsFromText(text: string): Array<{ id: string; name: 
   }));
 }
 
+export function doneSummaryClaimsUncreatedPatch(summary: string, patchProposalCreated: boolean): boolean {
+  const claimsPatchOrFiles = /(patch|patches|diff|review dock|审查台|补丁|文件修改|created .*file|updated .*file|waiting for .*review|等待.*审查)/i.test(summary);
+  return claimsPatchOrFiles && !patchProposalCreated;
+}
+
 export interface AgentLoopCallbacks {
   onPhaseChange: (phase: AgentLoopPhase, message: string) => void;
+  onIteration?: (iteration: number, summary: string) => void;
   onToolCall: (toolCall: ToolCall) => void;
   onToolResult: (toolCallId: string, result: string) => void;
   onRequestApproval: (tool: string, params: ToolParams) => Promise<boolean>;
   onAskUser?: (question: string, params: ToolParams) => Promise<string | null>;
   onPatchProposed?: (params: ToolParams) => Promise<string>;
+  onContextCompaction?: (state: ContextCompactionState) => void;
   getWorkspacePath?: () => string;
   getSecuritySettings?: () => { global?: SecuritySettings; project?: ProjectSecurityOverride };
   getCommandSandboxMode?: () => string | undefined;
@@ -84,6 +137,9 @@ export class AgentLoopEngine {
   private contextCompaction: ContextCompactionState | undefined;
   private threadId: string = "default";
   private lastToolParseErrors: string[] = [];
+  private consecutiveInvalidToolResponses: number = 0;
+  private patchProposalCreated: boolean = false;
+  private finalSummaryOnly: boolean = false;
 
   constructor(callbacks: AgentLoopCallbacks) {
     this.callbacks = callbacks;
@@ -154,13 +210,19 @@ export class AgentLoopEngine {
     model: string,
     baseUrl?: string,
     threadId?: string,
-    options?: LLMRequestOptions
+    options?: LLMRequestOptions,
+    resumeContext?: string,
   ): Promise<string> {
     this.isRunning = true;
     this.iteration = 0;
     this.maxIterations = this.callbacks.getMaxIterations?.() || this.maxIterations;
     this.messages = [];
     this.threadId = threadId || `thread-${Date.now()}`;
+    this.finalSummaryOnly = Boolean(resumeContext && /final-summary pass|final summary pass|最终总结/i.test(resumeContext));
+    this.patchProposalCreated = Boolean(
+      this.finalSummaryOnly ||
+      (resumeContext && /patch proposal .*applied|patch .*applied|补丁.*写入/i.test(resumeContext))
+    );
 
     try {
       // Phase 1: Planning with smart context
@@ -197,15 +259,35 @@ export class AgentLoopEngine {
 
       const taskDescription = `Task: ${task.title}\nDescription: ${task.description}\nFiles hint: ${(task.filesHint || []).join(", ")}`;
       const fullSystemPrompt = AGENT_LOOP_SYSTEM_PROMPT + "\n" + buildToolsPrompt();
-      const initialUserPrompt = `${taskDescription}\n${projectContext}\n\n${codeContext}\n\nBegin by reading relevant files and searching for related code. Then implement the changes.`;
+      const resumePrompt = resumeContext
+        ? `\n\nRecovered continuation context:\n${resumeContext}\n\nContinue from this recovered user action. Do not assume unapproved commands or patches already ran. Do not repeat already completed tool calls unless the context says they failed. If the context says an approval or verification is already pending in Review Dock, do not create a duplicate; summarize the waiting state or proceed only after a new user result is available.`
+        : "";
+      const initialUserPrompt = this.finalSummaryOnly
+        ? `${taskDescription}\n${resumePrompt}\n\nThis is a final-summary-only continuation. Do not read files, search code, list files, run commands, or propose patches. Return the required strict done tool call now.`
+        : `${taskDescription}\n${projectContext}\n\n${codeContext}${resumePrompt}\n\nBegin by reading relevant files and searching for related code. Then implement the changes.`;
+      const patchChunkingPrompt = [
+        "Patch chunking rule:",
+        "- If you need to create or update multiple files, do NOT emit one huge apply_patch.",
+        "- Emit at most 3 files in this apply_patch call.",
+        "- Prefer the next coherent chunk only: package/config files first; then app source files; then tests/README.",
+        "- After apply_patch, stop. Orbit will ask the user to review/apply it and then continue the run.",
+        "- Your JSON must be complete. If content is long, split it across later apply_patch calls rather than risking truncation.",
+      ].join("\n");
 
       const conversation: Array<{ role: "user" | "assistant"; content: string }> = [
-        { role: "user", content: initialUserPrompt },
+        { role: "user", content: this.finalSummaryOnly ? initialUserPrompt : `${initialUserPrompt}\n\n${patchChunkingPrompt}` },
       ];
 
       // Main loop: Reasoning + Acting
       while (this.iteration < this.maxIterations && this.isRunning) {
         this.iteration++;
+        this.callbacks.onIteration?.(
+          this.iteration,
+          conversation
+            .slice(-4)
+            .map((message) => `${message.role}: ${message.content.slice(0, 300)}`)
+            .join("\n\n"),
+        );
 
         if (this.callbacks.shouldCancel()) {
           this.setPhase("cancelled", "Task cancelled by user");
@@ -252,30 +334,72 @@ export class AgentLoopEngine {
           throw e;
         }
 
-        conversation.push({ role: "assistant", content: llmResponse });
+        const safeLlmResponse = stripFabricatedToolResults(llmResponse);
+        conversation.push({ role: "assistant", content: safeLlmResponse || llmResponse });
 
         // Parse tool calls from response
-        const toolCalls = this.parseToolCalls(llmResponse);
+        const toolCalls = this.parseToolCalls(safeLlmResponse || llmResponse);
 
         if (toolCalls.length === 0) {
+          this.consecutiveInvalidToolResponses += 1;
+          if (this.consecutiveInvalidToolResponses >= 3) {
+            const detail = this.lastToolParseErrors.length > 0
+              ? this.lastToolParseErrors.join("\n")
+              : safeLlmResponse.slice(0, 900);
+            const message = [
+              "Agent could not produce a valid strict JSON tool call after 3 correction attempts.",
+              "Nothing unsafe was executed.",
+              "Suggested recovery: click Replan, reduce the task scope, or switch to a model with stronger tool-call behavior.",
+              detail ? `Last model output/errors:\n${detail}` : "",
+            ].filter(Boolean).join("\n");
+            this.setPhase("error", message);
+            this.callbacks.onError(message);
+            this.isRunning = false;
+            return message;
+          }
+          this.setPhase(
+            "planning",
+            this.lastToolParseErrors.length > 0
+              ? `工具调用格式无效，已要求模型修正（第 ${this.consecutiveInvalidToolResponses} 次）。`
+              : `模型没有返回工具调用，已要求模型继续使用工具（第 ${this.consecutiveInvalidToolResponses} 次）。`,
+          );
           // No tool call found — might be pure text, ask LLM to use tools
           conversation.push({
             role: "user",
             content: this.lastToolParseErrors.length > 0
-              ? `Your tool call JSON was invalid and nothing was executed. Fix it and return exactly one strict JSON object on a single line.\nErrors:\n${this.lastToolParseErrors.join("\n")}`
+              ? [
+                "Your tool call JSON was invalid and nothing was executed.",
+                "Return exactly one complete JSON object and no prose.",
+                "If you are proposing patches, include at most 3 small files in this apply_patch call.",
+                "Do not include the whole project in one JSON response; split remaining files into later apply_patch calls after Review Dock.",
+                `Errors:\n${this.lastToolParseErrors.join("\n")}`,
+              ].join("\n")
               : "Please use a strict JSON tool call on one line to proceed. Available tools: read_file, search_code, list_files, apply_patch, run_command, ask_user.",
           });
           continue;
         }
+        this.consecutiveInvalidToolResponses = 0;
 
         let allDone = false;
+        let needsToolCorrection = false;
         const toolResults: Array<{ id: string; name: ToolName; result: string }> = [];
 
         for (const tc of toolCalls) {
           const toolName = tc.name as ToolName;
           if (toolName === "done") {
-            allDone = true;
             const summary = typeof tc.params.summary === "string" ? tc.params.summary : "Task completed";
+            const invalidDone = this.invalidDoneSummary(summary);
+            if (invalidDone) {
+              this.consecutiveInvalidToolResponses += 1;
+              this.setPhase("planning", `完成声明缺少真实工具状态，已要求模型修正（第 ${this.consecutiveInvalidToolResponses} 次）。`);
+              conversation.push({
+                role: "user",
+                content: invalidDone,
+              });
+              needsToolCorrection = true;
+              break;
+            }
+            allDone = true;
             this.setPhase("done", summary);
             this.callbacks.onDone(summary, [...this.tokenRecords]);
             this.isRunning = false;
@@ -295,6 +419,14 @@ export class AgentLoopEngine {
               result: answer ? `User answered: ${answer}` : "User cancelled question.",
             });
             continue;
+          }
+
+          if (toolName === "run_command") {
+            const invalid = invalidRunCommandMessage(tc.params);
+            if (invalid) {
+              toolResults.push({ id: tc.id, name: toolName, result: invalid });
+              continue;
+            }
           }
 
           // Check approval for dangerous tools
@@ -323,7 +455,15 @@ export class AgentLoopEngine {
               this.setPhase("waiting_approval", `${toolName}: ${JSON.stringify(tc.params)}`);
               const approved = await this.callbacks.onRequestApproval(toolName, tc.params);
               if (!approved) {
-                toolResults.push({ id: tc.id, name: toolName, result: "User denied this action." });
+                toolResults.push({
+                  id: tc.id,
+                  name: toolName,
+                  result: [
+                    "User denied this action.",
+                    `Denied params: ${JSON.stringify(tc.params)}`,
+                    "Do not retry the same action. Replan around the denial, fix the workspace/cwd/patch approach if relevant, and explain the corrected next step before requesting another risky action.",
+                  ].join("\n"),
+                });
                 continue;
               }
             }
@@ -341,6 +481,7 @@ export class AgentLoopEngine {
           try {
             if (toolName === "apply_patch" && this.callbacks.onPatchProposed) {
               result = await this.callbacks.onPatchProposed(tc.params);
+              this.patchProposalCreated = true;
             } else {
               result = await executeToolCall(toolName, tc.params, {
                 workspacePath: this.callbacks.getWorkspacePath?.() || "",
@@ -362,6 +503,7 @@ export class AgentLoopEngine {
         }
 
         if (allDone) break;
+        if (needsToolCorrection) continue;
 
         // Feed tool results back into conversation
         if (toolResults.length > 0) {
@@ -394,6 +536,7 @@ export class AgentLoopEngine {
             lastSummary: summary,
             compactedAtIteration: this.iteration,
           };
+          this.callbacks.onContextCompaction?.(this.contextCompaction);
           conversation.splice(1, conversation.length - 3);
           conversation.splice(1, 0, {
             role: "user",
@@ -403,7 +546,14 @@ export class AgentLoopEngine {
       }
 
       if (this.iteration >= this.maxIterations) {
-        this.setPhase("error", `Exceeded max iterations (${this.maxIterations})`);
+        const detail = this.consecutiveInvalidToolResponses > 0
+          ? `。连续 ${this.consecutiveInvalidToolResponses} 次没有可执行工具调用，请换更强模型或重新规划后再试。`
+          : "";
+        const message = `Exceeded max iterations (${this.maxIterations})${detail}`;
+        this.setPhase("error", message);
+        this.callbacks.onError(message);
+        this.isRunning = false;
+        return message;
       }
     } catch (e: any) {
       this.setPhase("error", `Agent loop error: ${e?.message || String(e)}`);
@@ -451,5 +601,18 @@ export class AgentLoopEngine {
       name: envelope.tool,
       params: envelope.params,
     }));
+  }
+
+  private invalidDoneSummary(summary: string): string | null {
+    if (this.finalSummaryOnly) return null;
+    if (!doneSummaryClaimsUncreatedPatch(summary, this.patchProposalCreated)) return null;
+    return [
+      "Invalid done tool call: you claimed patches, file changes, or Review Dock review, but Orbit has not received a real apply_patch tool call in this run.",
+      "Nothing was written and no Review Dock patch exists.",
+      "Return exactly one complete JSON tool call.",
+      'If you need to propose files, use: {"tool":"apply_patch","params":{"patches":[{"path":"relative/file","oldContent":"...","newContent":"..."}]}}',
+      "Keep apply_patch small: at most 3 files per call, then wait for Review Dock.",
+      "Do not call done until Orbit returns a real apply_patch result and, after user verification, a real verification result.",
+    ].join("\n");
   }
 }

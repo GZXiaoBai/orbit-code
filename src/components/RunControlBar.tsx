@@ -73,6 +73,10 @@ export function RunControlBar({ copy, controls, onOpenSettings }: RunControlBarP
         <span className="run-context-chip">{formatContextTokens(controls.selectedCapability.maxContextTokens)}</span>
       ) : null}
 
+      {controls.mode === "build" && controls.selectedModelId && controls.missingCredential ? (
+        <span className="run-unsupported-chip">{copy.settingsModal.vaultLocked}</span>
+      ) : null}
+
       {controls.mode === "build" && controls.selectedModelId && !controls.buildSupported ? (
         <span className="run-unsupported-chip">{copy.runControls.unsupported}</span>
       ) : null}

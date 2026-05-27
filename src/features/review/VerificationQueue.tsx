@@ -1,8 +1,8 @@
 import { Check, ShieldCheck, X } from "lucide-react";
 import type { PermissionAction } from "../../domain/types";
 import type { AppCopy } from "../../i18n/copy";
-import type { ApprovalRequest } from "../../state/useApprovalQueue";
-import { Button, StatusBadge } from "../../ui/primitives";
+import type { ApprovalGrantScope, ApprovalRequest } from "../../state/useApprovalQueue";
+import { Button, SelectMenu, StatusBadge } from "../../ui/primitives";
 import { commandApprovalView } from "./reviewCardUtils";
 
 export function VerificationQueue({
@@ -10,14 +10,21 @@ export function VerificationQueue({
   approvals,
   workspaceRoot,
   onResolve,
+  onGrantScopeChange,
 }: {
   copy: AppCopy;
   approvals: ApprovalRequest[];
   workspaceRoot: string;
   onResolve: (id: string, approved: boolean) => void;
+  onGrantScopeChange: (id: string, scope: ApprovalGrantScope) => void;
 }) {
   if (approvals.length === 0) return null;
   const actionLabel = (action: PermissionAction) => copy.security[action] || action;
+  const grantOptions: Array<{ value: ApprovalGrantScope; label: string; description?: string }> = [
+    { value: "once", label: copy.workbench.grantOnce, description: copy.workbench.grantOnceDescription },
+    { value: "session", label: copy.workbench.grantSession, description: copy.workbench.grantSessionDescription },
+    { value: "project", label: copy.workbench.grantProject, description: copy.workbench.grantProjectDescription },
+  ];
 
   return (
     <>
@@ -28,7 +35,7 @@ export function VerificationQueue({
       {approvals.map((request) => {
         const view = commandApprovalView(request.params as Record<string, unknown>, request.reason || copy.workbench.pendingApproval);
         return (
-          <article key={request.id} className="approval-request-card verification-request-card">
+          <article key={request.id} className="approval-request-card verification-request-card" data-review-focus="pending">
             <header>
               <div>
                 <strong>{copy.workbench.verificationQueue}</strong>
@@ -39,10 +46,21 @@ export function VerificationQueue({
             <div className="approval-command-summary">
               <code className="approval-command-line">{view.display}</code>
               <small>{copy.workbench.workspacePath}: {view.workspacePath || workspaceRoot || copy.workbench.noWorkspace}</small>
+              {view.cwd ? <small>CWD: {view.cwd}</small> : null}
               <div className="approval-risk-list" aria-label={copy.workbench.permissionActions}>
                 {view.actions.map((action) => (
                   <span key={action} className="approval-risk-chip">{actionLabel(action)}</span>
                 ))}
+              </div>
+              <div className="approval-grant-row">
+                <span>{copy.workbench.grantScope}</span>
+                <SelectMenu
+                  value={request.grantScope || "once"}
+                  ariaLabel={copy.workbench.grantScope}
+                  size="compact"
+                  options={grantOptions}
+                  onChange={(value) => onGrantScopeChange(request.id, value as ApprovalGrantScope)}
+                />
               </div>
             </div>
             <footer>

@@ -25,7 +25,7 @@ export function QuestionQueue({
         <strong>{copy.workbench.questionsQueue}</strong>
       </div>
       {questions.map((question) => (
-        <article key={question.id} className="approval-request-card question-request-card">
+        <article key={question.id} className="approval-request-card question-request-card" data-review-focus="pending">
           <header>
             <div>
               <strong>{copy.workbench.agentQuestion}</strong>

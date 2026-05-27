@@ -27,12 +27,21 @@ export function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return typeof value === "string" && reasoningEfforts.includes(value as ReasoningEffort);
 }
 
-export function defaultModelForProvider(providerId: string, settings: ProviderSettings, apiKeys: Record<string, string> = {}): string {
-  return resolveModelSelection(settings, apiKeys, { providerId })?.model || "";
+export function defaultModelForProvider(
+  providerId: string,
+  settings: ProviderSettings,
+  apiKeys: Record<string, string> = {},
+  savedCredentialProviders: string[] = [],
+): string {
+  return resolveModelSelection(settings, apiKeys, { providerId }, savedCredentialProviders)?.model || "";
 }
 
-function createDefaultState(settings: ProviderSettings, apiKeys: Record<string, string>): Pick<RunControlsState, "mode" | "selection"> {
-  const selected = resolveModelSelection(settings, apiKeys, { providerId: settings.activeProviderId });
+function createDefaultState(
+  settings: ProviderSettings,
+  apiKeys: Record<string, string>,
+  savedCredentialProviders: string[],
+): Pick<RunControlsState, "mode" | "selection"> {
+  const selected = resolveModelSelection(settings, apiKeys, { providerId: settings.activeProviderId }, savedCredentialProviders);
   return {
     mode: "plan",
     selection: {
@@ -43,13 +52,17 @@ function createDefaultState(settings: ProviderSettings, apiKeys: Record<string, 
   };
 }
 
-function loadStoredState(settings: ProviderSettings, apiKeys: Record<string, string>): Pick<RunControlsState, "mode" | "selection"> {
-  const fallback = createDefaultState(settings, apiKeys);
+function loadStoredState(
+  settings: ProviderSettings,
+  apiKeys: Record<string, string>,
+  savedCredentialProviders: string[],
+): Pick<RunControlsState, "mode" | "selection"> {
+  const fallback = createDefaultState(settings, apiKeys, savedCredentialProviders);
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw) as Partial<Pick<RunControlsState, "mode" | "selection">>;
-    const selected = resolveModelSelection(settings, apiKeys, parsed.selection);
+    const selected = resolveModelSelection(settings, apiKeys, parsed.selection, savedCredentialProviders);
     const reasoningEffort = isReasoningEffort(parsed.selection?.reasoningEffort)
       ? parsed.selection.reasoningEffort
       : selected?.capability?.reasoningLevels[0] || "auto";
@@ -66,15 +79,19 @@ function loadStoredState(settings: ProviderSettings, apiKeys: Record<string, str
   }
 }
 
-export function useRunControls(settings: ProviderSettings, apiKeys: Record<string, string>): RunControlsState {
-  const initial = useMemo(() => loadStoredState(settings, apiKeys), []);
+export function useRunControls(
+  settings: ProviderSettings,
+  apiKeys: Record<string, string>,
+  savedCredentialProviders: string[] = [],
+): RunControlsState {
+  const initial = useMemo(() => loadStoredState(settings, apiKeys, savedCredentialProviders), []);
   const [mode, setModeState] = useState<WorkbenchMode>(initial.mode);
   const [selection, setSelection] = useState<RunModelSelection>(initial.selection);
 
-  const modelOptions = useMemo(() => buildRunModelOptions(settings, apiKeys), [settings, apiKeys]);
+  const modelOptions = useMemo(() => buildRunModelOptions(settings, apiKeys, savedCredentialProviders), [settings, apiKeys, savedCredentialProviders]);
   const selectedOption = useMemo(
-    () => resolveModelSelection(settings, apiKeys, selection),
-    [settings, apiKeys, selection],
+    () => resolveModelSelection(settings, apiKeys, selection, savedCredentialProviders),
+    [settings, apiKeys, selection, savedCredentialProviders],
   );
   const provider = selectedOption ? findProvider(selectedOption.providerId) : null;
   const selectedModelId = selectedOption?.id || "";
@@ -82,8 +99,9 @@ export function useRunControls(settings: ProviderSettings, apiKeys: Record<strin
     () => selectedOption ? (selectedOption.capability?.reasoningLevels?.length ? selectedOption.capability.reasoningLevels : inferReasoningEfforts(selectedOption.providerId, selectedOption.model)) : [],
     [selectedOption],
   );
+  const hasSavedCredential = Boolean(provider && savedCredentialProviders.includes(provider.id));
   const missingCredential = Boolean(provider && !provider.capabilities.local && !apiKeys[provider.id]);
-  const hasModelAccess = Boolean(provider && (provider.capabilities.local || apiKeys[provider.id]));
+  const hasModelAccess = Boolean(provider && (provider.capabilities.local || apiKeys[provider.id] || hasSavedCredential));
   const buildSupported = selectedOption?.capability?.buildSupported ?? Boolean(selectedOption);
 
   useEffect(() => {
@@ -92,7 +110,7 @@ export function useRunControls(settings: ProviderSettings, apiKeys: Record<strin
 
   useEffect(() => {
     setSelection((prev) => {
-      const selected = resolveModelSelection(settings, apiKeys, prev);
+      const selected = resolveModelSelection(settings, apiKeys, prev, savedCredentialProviders);
       if (selected && selected.providerId === prev.providerId && selected.model === prev.model) return prev;
       return {
         providerId: selected?.providerId || settings.activeProviderId,
@@ -100,7 +118,7 @@ export function useRunControls(settings: ProviderSettings, apiKeys: Record<strin
         reasoningEffort: prev.reasoningEffort,
       };
     });
-  }, [settings, apiKeys]);
+  }, [settings, apiKeys, savedCredentialProviders]);
 
   useEffect(() => {
     setSelection((prev) => {

@@ -4,7 +4,11 @@ export type TerminalRunStatus = "pending" | "running" | "done" | "failed" | "can
 
 export interface TerminalRun {
   id: string;
+  workspacePath?: string;
+  threadId?: string;
   taskId: string;
+  approvalId?: string;
+  cwd?: string;
   command: string;
   args: string[];
   reason: string;
@@ -16,7 +20,11 @@ export interface TerminalRun {
 }
 
 export function createTerminalRun(input: {
+  workspacePath?: string;
+  threadId?: string;
   taskId: string;
+  approvalId?: string;
+  cwd?: string;
   command: string;
   args?: string[];
   reason?: string;
@@ -28,7 +36,11 @@ export function createTerminalRun(input: {
   const startedAt = input.at || new Date().toISOString();
   return {
     id: `terminal-${startedAt}-${Math.random().toString(36).slice(2, 8)}`,
+    workspacePath: input.workspacePath,
+    threadId: input.threadId,
     taskId: input.taskId,
+    approvalId: input.approvalId,
+    cwd: input.cwd,
     command: input.command,
     args: input.args || [],
     reason: input.reason || formatCommandForDisplay(input.command, input.args || []),
