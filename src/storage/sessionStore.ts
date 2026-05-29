@@ -7,7 +7,10 @@ import type { AgentRunSession } from "../domain/agentRunSession";
 import type { QuestionRequest } from "../domain/questionRequest";
 import type { ActionRequiredEvent } from "../domain/actionRequired";
 import type { TerminalRun } from "../domain/terminalRun";
-import type { ApprovalGrant, ApprovalRequest } from "../state/useApprovalQueue";
+import type { ToolCallLifecycle } from "../domain/toolCallLifecycle";
+import type { ThreadRuntimeSnapshot } from "../state/threadRuntimeStore";
+import type { ApprovalGrant } from "../domain/approvalGrant";
+import type { ApprovalRequest } from "../state/useApprovalQueue";
 import type { ImportedPlanState } from "../state/useWorkspace";
 import { isTauri } from "../utils/tauri";
 
@@ -20,7 +23,16 @@ interface StoredProviderConfig {
   modelCapabilities?: Record<string, ModelCapability>;
 }
 
-export interface SessionState {
+export interface LegacyRuntimeSnapshot {
+  agentEvents?: AgentEvent[];
+  approvalRequests?: ApprovalRequest[];
+  questionRequests?: QuestionRequest[];
+  actionRequired?: ActionRequiredEvent[];
+  toolCalls?: ToolCallLifecycle[];
+  terminalRuns?: TerminalRun[];
+}
+
+export interface SessionState extends LegacyRuntimeSnapshot {
   activeProjectId: string;
   activeThreadId: string;
   importedPlan: ImportedPlanState | null;
@@ -30,14 +42,10 @@ export interface SessionState {
     sandboxMode?: string;
     smokeStatus?: Record<string, ProviderSmokeRecord>;
   };
-  agentEvents: AgentEvent[];
   threadEvents?: ThreadEvent[];
   agentRunSession?: AgentRunSession;
-  approvalRequests?: ApprovalRequest[];
   approvalGrants?: ApprovalGrant[];
-  questionRequests?: QuestionRequest[];
-  actionRequired?: ActionRequiredEvent[];
-  terminalRuns?: TerminalRun[];
+  runtimeLedgerSnapshot?: ThreadRuntimeSnapshot;
   lastActiveAt: string;
 }
 

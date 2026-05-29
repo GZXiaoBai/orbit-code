@@ -4,8 +4,10 @@ import { invokeDesktop, isDesktopRuntime } from "../runtime/desktopGateway";
 import { isTauri } from "../utils/tauri";
 import {
   appendTerminalOutput,
+  cancelTerminalRun,
   completeTerminalRun,
   createTerminalRun,
+  recoverTerminalRun,
   type TerminalRun,
 } from "../domain/terminalRun";
 
@@ -92,6 +94,7 @@ export interface FileSystemState {
     exitCode?: number | null;
   }) => string;
   recoverTerminalRuns: (runs: TerminalRun[], replace?: boolean) => void;
+  cancelTerminalRun: (runId: string) => void;
 }
 
 export function terminalRunLooksLikeVerification(run?: TerminalRun): boolean {
@@ -322,23 +325,34 @@ export function useFileSystem(
   }, [workspaceRoot]);
 
   const recoverTerminalRuns = useCallback((runs: TerminalRun[], replace = false) => {
-    terminalRunsRef.current = replace ? runs : terminalRunsRef.current.length > 0 ? terminalRunsRef.current : runs;
+    const recovered = runs.map(recoverTerminalRun);
+    terminalRunsRef.current = replace ? recovered : terminalRunsRef.current.length > 0 ? terminalRunsRef.current : recovered;
     setTerminalRuns(terminalRunsRef.current);
     setTerminalLogs((prev) => {
       if (!replace && Object.keys(prev).length > 0) return prev;
-      return runs.reduce<Record<string, string>>((logs, run) => {
+      return recovered.reduce<Record<string, string>>((logs, run) => {
         if (run.output) logs[run.taskId] = run.output;
         return logs;
       }, {});
     });
     setCommandStatus((prev) => {
       if (!replace && Object.keys(prev).length > 0) return prev;
-      return runs.reduce<Record<string, { running: boolean; exitCode: number | null }>>((statuses, run) => {
-        statuses[run.taskId] = { running: run.status === "running", exitCode: run.exitCode };
+      return recovered.reduce<Record<string, { running: boolean; exitCode: number | null }>>((statuses, run) => {
+        statuses[run.taskId] = { running: false, exitCode: run.exitCode };
         return statuses;
       }, {});
     });
   }, []);
+
+  const cancelTerminalRunById = useCallback((runId: string) => {
+    terminalRunsRef.current = cancelTerminalRun(terminalRunsRef.current, runId);
+    setTerminalRuns(terminalRunsRef.current);
+    const run = terminalRunsRef.current.find((item) => item.id === runId || item.taskId === runId);
+    if (run) {
+      setCommandStatus((prev) => ({ ...prev, [run.taskId]: { running: false, exitCode: run.exitCode } }));
+      updateTask(run.taskId, { status: "blocked" });
+    }
+  }, [updateTask]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -406,6 +420,6 @@ export function useFileSystem(
     workspaceFiles, activeFilePath, activeFileContent,
     terminalLogs, commandStatus,
     terminalRuns,
-    viewFile, setWorkspaceRoot, refreshFileTree, executeCommand, executeStructuredCommand, recordTerminalResult, recoverTerminalRuns,
+    viewFile, setWorkspaceRoot, refreshFileTree, executeCommand, executeStructuredCommand, recordTerminalResult, recoverTerminalRuns, cancelTerminalRun: cancelTerminalRunById,
   };
 }

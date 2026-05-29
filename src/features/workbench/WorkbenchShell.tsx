@@ -5,10 +5,8 @@ import type { Language, Theme } from "../../domain/types";
 import type { AppCopy } from "../../i18n/copy";
 import type { useWorkspace } from "../../state/useWorkspace";
 import { IconButton, StatusBadge } from "../../ui/primitives";
-import { ApprovalOverlay } from "../approvals/ApprovalOverlay";
-import { PatchReviewOverlay } from "../patches/PatchReviewOverlay";
+import { ActionRequiredOverlay } from "../actions/ActionRequiredOverlay";
 import { ProjectRail } from "../projects/ProjectRail";
-import { StructuredQuestionOverlay } from "../questions/StructuredQuestionOverlay";
 import { ReviewDock } from "../review/ReviewDock";
 import { ThreadCanvas } from "../thread/ThreadCanvas";
 
@@ -191,24 +189,16 @@ export function WorkbenchShell({
           <ReviewDock copy={copy} theme={theme} workspace={workspace} />
         ) : null}
       </div>
-      <StructuredQuestionOverlay
+      <ActionRequiredOverlay
         copy={copy}
-        questions={workspace.pendingQuestions}
-        onAnswer={workspace.answerQuestion}
-        onCancel={workspace.cancelQuestion}
-      />
-      <ApprovalOverlay
-        copy={copy}
-        approvals={workspace.pendingApprovals}
+        actions={workspace.actionRequired}
+        events={workspace.threadEvents}
         workspaceRoot={workspace.workspaceRoot}
-        onResolve={workspace.resolveApproval}
-        onGrantScopeChange={workspace.updateApprovalGrantScope}
-      />
-      <PatchReviewOverlay
-        copy={copy}
-        events={workspace.reviewDockModel.patchReviews}
-        workspacePath={workspace.workspaceRoot}
-        onApply={workspace.applyEventPatch}
+        onResolve={workspace.resolveActionRequired}
+        onCancel={workspace.cancelActionRequired}
+        onAnswer={workspace.answerActionRequiredQuestion}
+        onGrantScopeChange={workspace.updateActionRequiredGrantScope}
+        onApplyPatch={workspace.applyEventPatch}
         onUpdatePatch={workspace.updateEventPatch}
       />
     </main>

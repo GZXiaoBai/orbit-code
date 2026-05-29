@@ -11,14 +11,21 @@ import { isTauri } from "../utils/tauri";
 import type { LLMProvider } from "../services/llmService";
 import { optionsForReasoningEffort } from "../services/llmService";
 import type { RunControlsState } from "./useRunControls";
-import { findProvider } from "../providers/providerRegistry";
 import { createAgentRunSession, reduceAgentRunSession } from "../domain/agentRunSession";
 import type { AgentRunSession } from "../domain/agentRunSession";
 import type { ContextCompactionState, ProjectSecurityOverride, SecuritySettings } from "../domain/types";
 import type { ApprovalRequest } from "./useApprovalQueue";
+import type { PermissionSchedulerResult } from "../runtime/permissionScheduler";
 import { normalizeQuestionOptions, type QuestionRequest, type QuestionOption } from "../domain/questionRequest";
 import { looksLikeNonStrictPatchProposal, parseToolEnvelopes } from "../domain/agentToolEnvelope";
 import { invokeDesktop, isDesktopRuntime } from "../runtime/desktopGateway";
+import type { ToolCallLifecycle } from "../domain/toolCallLifecycle";
+import {
+  summarizeToolParamsForLifecycle,
+  ToolCallExecutor,
+  type ToolLifecycleStore,
+} from "./toolCallExecutor";
+import { AgentRunKernel } from "./agentRunKernel";
 
 interface UseAgentRunArgs {
   importedPlan: ImportedPlanState | null;
@@ -35,7 +42,7 @@ interface UseAgentRunArgs {
     params: ToolParams,
     reason?: string,
     onCreated?: (request: ApprovalRequest) => void
-  ) => Promise<boolean>;
+  ) => Promise<PermissionSchedulerResult>;
   requestQuestion: (
     question: string,
     taskId: string,
@@ -65,6 +72,8 @@ interface UseAgentRunArgs {
   }) => string;
   emitThreadEvent: (event: ThreadEvent) => void;
   updateThreadEvent: (id: string, update: Partial<ThreadEvent> | ((event: ThreadEvent) => ThreadEvent)) => void;
+  onPatchReviewRequired?: (event: ThreadEvent) => void;
+  toolCallLifecycleStore: ToolLifecycleStore;
   getExtensionContext?: () => Promise<string> | string;
   initialAgentRunSession?: AgentRunSession | null;
 }
@@ -254,6 +263,8 @@ export function useAgentRun({
   recordTerminalResult,
   emitThreadEvent,
   updateThreadEvent,
+  onPatchReviewRequired,
+  toolCallLifecycleStore,
   getExtensionContext,
   initialAgentRunSession,
 }: UseAgentRunArgs) {
@@ -268,11 +279,17 @@ export function useAgentRun({
   const agentLoopCancelledRef = useRef(false);
   const patchReviewPendingRef = useRef(false);
   const toolCallsRef = useRef(new Map<string, ToolCall>());
+  const toolCallLifecyclesRef = useRef<ToolCallLifecycle[]>(toolCallLifecycleStore.list());
   const recoveredRef = useRef(false);
   const continueResolverRef = useRef<((shouldContinue: boolean) => void) | null>(null);
   const recoveredResumeContextRef = useRef<string | undefined>(undefined);
   const agentLoopErrorRef = useRef(false);
   const latestPhaseEventIdRef = useRef<string | null>(null);
+  const agentRunKernelRef = useRef(new AgentRunKernel());
+
+  useEffect(() => {
+    toolCallLifecyclesRef.current = toolCallLifecycleStore.list();
+  });
 
   const emitRuntimeEvent = useCallback((event: RuntimeEventInput) => {
     emitThreadEvent({
@@ -335,71 +352,36 @@ export function useAgentRun({
       });
     };
 
-    if (runControls.mode !== "build") {
-      pushGuardEvent("当前处于 Plan 模式。Agent 只会整理计划，不会执行命令、生成 Patch 或写入文件。切换到 Build 后再启动执行。");
-      return;
-    }
-
-    const hasResumeContext = Boolean(recoveredResumeContextRef.current);
-    const isResumeRun = Boolean(hasResumeContext && agentRunSession.taskId);
-    const resumeTaskId = isResumeRun ? agentRunSession.taskId : null;
-    const planTasks = importedPlan?.plan.tasks ?? [];
-    const selectedTask = selectAgentRunTask({
-      tasks: planTasks,
-      resumeTaskId,
-      currentTaskId: agentRunSession.taskId,
+    const preparation = agentRunKernelRef.current.prepareBuildTurn({
+      importedPlan,
+      providerSettings,
+      apiKeys,
+      runControls,
+      agentRunSession,
+      workspaceRoot,
+      threadId,
+      recoveredResumeContext: recoveredResumeContextRef.current,
     });
-    const task = selectedTask.task;
 
-    const providerId = runControls.selection.providerId;
-    const provider = findProvider(providerId);
-    const model = runControls.selection.model.trim();
-
-    if (!model) {
-      pushGuardEvent("当前没有可用模型。请先在设置中选择服务商、输入 API Key，并导入该 API 返回的模型列表。");
+    if (!preparation.ok) {
+      pushGuardEvent(preparation.guard.message);
       return;
     }
 
-    if (runControls.missingCredential) {
-      pushGuardEvent("已检测到导入过的模型，但凭据库当前未解锁。请到设置 > 模型输入 Orbit 凭据库主密码解锁 API Key 后再启动 Build。");
-      return;
-    }
-
-    if (!provider || !runControls.buildSupported) {
-      if (providerId === "ollama") {
-        pushGuardEvent("Ollama 当前仅接入本地模型发现，Agent Build 执行通道尚未接入。请切换到已导入且支持 Build 的模型。");
-      } else {
-        pushGuardEvent("当前模型没有声明 Build 执行能力。请选择已导入且支持 tool calling / chat completion 的模型后再启动。");
-      }
-      return;
-    }
-
-    if (!provider.capabilities.local && !apiKeys[providerId]) {
-      pushGuardEvent(`缺少 ${provider.label} API Key。Build 模式不会生成假 Diff；请先在设置中保存密钥。`);
-      return;
-    }
-
-    if (!task) {
-      pushGuardEvent("没有待执行任务。请先导入或创建 Coding Plan。");
-      return;
-    }
+    const {
+      task,
+      provider,
+      providerId,
+      model,
+      runThreadId,
+      runSessionId,
+      isResumeRun,
+      finalSummaryOnly,
+      completionContext,
+    } = preparation.value;
 
     setAgentLoopRunning(true);
     agentLoopErrorRef.current = false;
-    const runThreadId = isResumeRun
-      ? agentRunSession.threadId || threadId
-      : threadId;
-    const runSessionId = isResumeRun
-      ? agentRunSession.id
-      : `run-${new Date().toISOString()}-${Math.random().toString(36).slice(2, 8)}`;
-    const pendingResumeContext = recoveredResumeContextRef.current;
-    const finalSummaryOnly = shouldForceFinalSummaryRun({
-      completionOnly: selectedTask.completionOnly,
-      resumeKind: agentRunSession.resumeKind,
-      lastToolResult: agentRunSession.lastToolResult,
-      resumeContext: pendingResumeContext,
-    });
-
     if (isResumeRun) {
       dispatchRunSession({ type: "resume" });
     } else {
@@ -410,6 +392,11 @@ export function useAgentRun({
     setAgentLoopPhase("planning");
     setAgentLoopToolCalls([]);
     toolCallsRef.current.clear();
+    const toolExecutor = new ToolCallExecutor({
+      list: () => toolCallLifecyclesRef.current,
+      append: toolCallLifecycleStore.append,
+      update: toolCallLifecycleStore.update,
+    });
 
     if (isTauri()) {
       try {
@@ -448,7 +435,11 @@ export function useAgentRun({
       onToolCall: (toolCall) => {
         toolCallsRef.current.set(toolCall.id, toolCall);
         dispatchRunSession({ type: "tool", toolCall });
-        setAgentLoopToolCalls(prev => [...prev, toolCall]);
+        setAgentLoopToolCalls(prev => {
+          const next = prev.filter((item) => item.id !== toolCall.id);
+          return [...next, toolCall];
+        });
+        toolExecutor.recordGenerated(toolCall, summarizeToolParamsForLifecycle(toolCall.name, toolCall.params));
       },
       onToolResult: (id, result) => {
         const toolCall = toolCallsRef.current.get(id);
@@ -474,6 +465,7 @@ export function useAgentRun({
             ? { ...toolCall, result, status: "done", completedAt: new Date().toISOString() }
             : toolCall
         ));
+        toolExecutor.recordResult(id, result);
       },
       onRequestApproval: async (tool, params) => {
         if (["read_file", "list_files", "search_code"].includes(tool)) return true;
@@ -490,7 +482,7 @@ export function useAgentRun({
             status: "done",
             message: `当前计划已完成或已验证，这次运行只用于生成最终总结。Orbit 已拒绝新的 ${tool} 请求；请让 Agent 返回 done 总结。`,
           });
-          return false;
+          return { approved: false, toolResult: `Denied ${tool}: final-summary-only run cannot execute additional tools.` };
         }
         const reason = typeof params.reason === "string" ? params.reason : "";
         const approvalParams: ToolParams = {
@@ -512,11 +504,17 @@ export function useAgentRun({
           message: approvalEventMessage(tool, approvalParams),
         });
         let approvalId = "";
-        const approved = await requestApproval(tool, approvalParams, reason, (request) => {
+        const approval = await requestApproval(tool, approvalParams, reason, (request) => {
           approvalId = request.id;
           dispatchRunSession({ type: "approval", approvalId: request.id });
         });
         dispatchRunSession({ type: "approval", approvalId: undefined });
+        if (typeof approvalParams.toolCallId === "string") {
+          toolExecutor.recordApprovalResult({
+            toolCallId: approvalParams.toolCallId,
+            approval,
+          });
+        }
         emitRuntimeEvent({
           id: `approval-result-${Date.now()}`,
           kind: "approval",
@@ -525,21 +523,19 @@ export function useAgentRun({
           threadId: runThreadId,
           taskId: task.id,
           role: "reviewer",
-          title: approved ? "Approval Granted" : "Approval Denied",
+          title: approval.approved ? "Approval Granted" : "Approval Denied",
           status: "done",
-          message: approved
+          message: approval.approved
             ? `你已批准 ${tool}。结果已记录，点击“继续执行”后 Agent 才会继续。`
             : `你已拒绝 ${tool}，Agent 将把拒绝结果纳入下一步规划。`,
         });
         const shouldContinue = await waitForExplicitContinue(
           "approval",
           { type: "approval", payloadId: approvalId },
-          approved
-            ? `Approved ${tool}: ${JSON.stringify(approvalParams)}`
-            : `Denied ${tool}: ${JSON.stringify(approvalParams)}`,
+          approval.toolResult,
         );
-        if (!shouldContinue) return false;
-        return approved;
+        if (!shouldContinue) return { ...approval, approved: false, toolResult: "Cancelled by user before resuming the agent." };
+        return approval;
       },
       onToolDeniedByMode: (tool, mode) => {
         emitRuntimeEvent({
@@ -657,7 +653,7 @@ export function useAgentRun({
         const sandboxFailed = sandboxedPatches.some((patch) => patch.sandboxStatus === "failed");
         patchReviewPendingRef.current = true;
         dispatchRunSession({ type: "patch", patchProposalId: eventId });
-        emitRuntimeEvent({
+        const patchEvent: ThreadEvent = {
           id: eventId,
           kind: "patchProposal",
           runSessionId,
@@ -670,8 +666,11 @@ export function useAgentRun({
           message: sandboxFailed
             ? `Agent 提出了 ${sandboxedPatches.length} 个文件修改，但沙盒预演失败。当前工作区没有被修改，请在详情中查看原因。`
             : `Agent 提出了 ${sandboxedPatches.length} 个文件修改，已在临时沙盒中预演。请在中心补丁浮层审查，批准后才会事务写入本地文件。`,
+          timestamp: new Date().toLocaleTimeString(),
           patches: sandboxedPatches,
-        });
+        };
+        emitThreadEvent(patchEvent);
+        onPatchReviewRequired?.(patchEvent);
         const result = sandboxFailed
           ? [
               `Patch proposal ${eventId} was created, but sandbox preview failed. Do not claim files were changed.`,
@@ -777,17 +776,6 @@ export function useAgentRun({
 
     try {
       const providerConfig = providerSettings.configs[providerId] || {};
-      const completionContext = finalSummaryOnly
-        ? [
-          recoveredResumeContextRef.current ? `Recovered continuation context:\n${recoveredResumeContextRef.current}` : "",
-          "This Orbit run is now a final-summary pass.",
-          "The current task already has a successful verification result or all plan tasks are complete.",
-          "Do not call propose_patch. Do not call run_command. Do not request npm install. Do not rerun verification.",
-          "If a dependency-install command was denied after successful verification, treat it as unnecessary and summarize the already verified result.",
-          "Return a strict done_build tool call with a truthful final summary based only on existing patch and terminal results.",
-          'Required output shape: {"tool":"done_build","params":{"summary":"..."}}',
-        ].filter(Boolean).join("\n")
-        : undefined;
       const resumeContext = completionContext || recoveredResumeContextRef.current;
       recoveredResumeContextRef.current = undefined;
       await engine.runTask(
@@ -817,7 +805,7 @@ export function useAgentRun({
     if (!agentLoopCancelledRef.current) {
       dispatchRunSession({ type: "complete", phase: "idle" });
     }
-  }, [agentRunSession.id, agentRunSession.taskId, agentRunSession.threadId, apiKeys, emitRuntimeEvent, getExtensionContext, importedPlan, projectSecurityOverride, providerSettings.configs, providerSettings.agent, providerSettings.sandboxMode, recordTerminalResult, requestApproval, requestQuestion, runControls, securitySettings, threadId, updateTask, updateThreadEvent, waitForExplicitContinue, workspaceRoot]);
+  }, [agentRunSession.id, agentRunSession.taskId, agentRunSession.threadId, apiKeys, emitRuntimeEvent, getExtensionContext, importedPlan, projectSecurityOverride, providerSettings.configs, providerSettings.agent, providerSettings.sandboxMode, recordTerminalResult, requestApproval, requestQuestion, runControls, securitySettings, threadId, toolCallLifecycleStore, updateTask, updateThreadEvent, waitForExplicitContinue, workspaceRoot]);
 
   const continueAgentRun = useCallback(() => {
     const resolve = continueResolverRef.current;

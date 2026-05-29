@@ -100,7 +100,7 @@ The goal is not cosmetic splitting. The goal is a deeper Interface for the conve
 
 Extract from `useWorkspace.ts`:
 
-- `useAgentRun` (extracted and now writes typed `ThreadEvent` directly)
+- `useAgentRun` (extracted and now writes typed `ThreadEvent` directly; Build-turn preparation is starting to move into `AgentRunKernel`)
 - `usePatchWorkflow` (extracted and now updates typed `ThreadEvent` directly)
 - `useEmbeddingIndex` (done)
 - `useWindowActions` (done)

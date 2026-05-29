@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, BookOpenText, FileCode2, GitPullRequestArrow } from "lucide-react";
+import { AlertTriangle, BookOpenText, FileCode2, GitPullRequestArrow, ShieldCheck } from "lucide-react";
 import type { Theme } from "../../domain/types";
 import type { TerminalRun } from "../../domain/terminalRun";
 import type { AppCopy } from "../../i18n/copy";
@@ -154,6 +154,38 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
               workspacePath={workspace.workspaceRoot}
             />
 
+            {model.checkpointEvents.length > 0 ? (
+              <div className="dock-checkpoint-browser" data-testid="checkpoint-browser">
+                <div className="dock-queue-heading">
+                  <GitPullRequestArrow size={14} />
+                  <strong>{copy.language === "中" ? "Checkpoint Restore" : "Checkpoint Restore"}</strong>
+                </div>
+                {model.checkpointEvents.slice(0, 6).map((event) => (
+                  <article key={event.id} className="dock-run-step dock-run-step-done">
+                    <header>
+                      <div>
+                        <strong>{event.checkpoint?.checkpointId || event.title}</strong>
+                        <small>
+                          {(event.checkpoint?.strategy || "checkpoint")}
+                          {event.checkpoint?.filePaths?.length ? ` · ${event.checkpoint.filePaths.join(", ")}` : ""}
+                        </small>
+                      </div>
+                      <div className="dock-run-step-actions">
+                        <StatusBadge tone={event.checkpoint?.status === "failed" ? "danger" : "neutral"}>
+                          {event.checkpoint?.status || "created"}
+                        </StatusBadge>
+                        {event.checkpoint?.checkpointId && event.checkpoint.status === "created" ? (
+                          <button type="button" onClick={() => void workspace.restoreCheckpoint(event.checkpoint!.checkpointId)}>
+                            {copy.language === "中" ? "恢复" : "Restore"}
+                          </button>
+                        ) : null}
+                      </div>
+                    </header>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+
             {(model.appliedPatchReviews.length > 0 || model.failedPatchReviews.length > 0 || model.historyPatchReviews.length > 0) ? (
               <div className="dock-applied-history">
                 <div className="dock-queue-heading">
@@ -183,6 +215,30 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
                   </article>
                   );
                 })}
+              </div>
+            ) : null}
+
+            {model.rollbackEvents.length > 0 && model.appliedPatchReviews.length === 0 && model.failedPatchReviews.length === 0 && model.historyPatchReviews.length === 0 ? (
+              <div className="dock-applied-history">
+                <div className="dock-queue-heading">
+                  <GitPullRequestArrow size={14} />
+                  <strong>{copy.language === "中" ? "恢复历史" : "Restore history"}</strong>
+                </div>
+                {model.rollbackEvents.slice(0, 4).map((event) => (
+                  <article key={event.id} className="dock-run-step dock-run-step-done">
+                    <header>
+                      <div>
+                        <strong>{localizedAgentEventName(copy, event.title)}</strong>
+                        <small>{event.rollback?.filePaths?.join(", ") || event.message}</small>
+                      </div>
+                      <div className="dock-run-step-actions">
+                        <StatusBadge tone={event.rollback?.status === "failed" ? "danger" : "success"}>
+                          {event.rollback?.status || "restored"}
+                        </StatusBadge>
+                      </div>
+                    </header>
+                  </article>
+                ))}
               </div>
             ) : null}
 
@@ -293,6 +349,31 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
               </div>
             ) : null}
 
+            {model.activeGrants.length > 0 ? (
+              <div className="dock-context-blocks" data-testid="active-grants">
+                <div className="dock-queue-heading">
+                  <ShieldCheck size={14} />
+                  <strong>{copy.language === "中" ? "Active Grants" : "Active Grants"}</strong>
+                </div>
+                {model.activeGrants.map((grant) => (
+                  <article key={grant.id} className="dock-context-block">
+                    <header>
+                      <strong>{grant.tool}</strong>
+                      <StatusBadge tone="neutral">{grant.scope}</StatusBadge>
+                    </header>
+                    <small>
+                      {(grant.mode || "build")}
+                      {grant.actions?.length ? ` · ${grant.actions.join(", ")}` : ""}
+                      {grant.cwdOrPathScope ? ` · ${grant.cwdOrPathScope}` : ""}
+                    </small>
+                    <button type="button" className="btn" onClick={() => workspace.revokeApprovalGrant(grant.id)}>
+                      {copy.language === "中" ? "撤销" : "Revoke"}
+                    </button>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+
             {contextInspector.blocks.length > 0 ? (
               <div className="dock-context-blocks">
                 {contextInspector.blocks.map((block) => (
@@ -304,6 +385,7 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
                     <small>
                       {copy.workbench.contextTokens}: {block.tokenEstimate || 0}
                       {block.matchedRules?.length ? ` · ${copy.workbench.matchedRules}: ${block.matchedRules.join(", ")}` : ""}
+                      {block.matchReason ? ` · ${block.matchReason}` : ""}
                     </small>
                     <pre>{block.content}</pre>
                   </article>
@@ -325,7 +407,10 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
                       <strong>{block.title}</strong>
                       <StatusBadge tone="neutral">{block.source}</StatusBadge>
                     </header>
-                    <small>{copy.workbench.contextMode}: {block.mode}</small>
+                    <small>
+                      {copy.workbench.contextMode}: {block.mode}
+                      {block.matchReason ? ` · ${block.matchReason}` : ""}
+                    </small>
                   </article>
                 ))}
               </div>

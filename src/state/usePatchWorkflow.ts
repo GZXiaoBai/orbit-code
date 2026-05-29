@@ -68,6 +68,7 @@ interface UsePatchWorkflowArgs {
   isRealLLMActiveRef: MutableRefObject<boolean>;
   activeLLMConfigRef: MutableRefObject<SessionState["activeLLMConfig"]>;
   onPatchApplied?: (eventId: string) => void;
+  onCheckpointCreated?: (checkpointId: string, event: ThreadEvent) => void;
 }
 
 export function usePatchWorkflow({
@@ -78,6 +79,7 @@ export function usePatchWorkflow({
   isRealLLMActiveRef,
   activeLLMConfigRef,
   onPatchApplied,
+  onCheckpointCreated,
 }: UsePatchWorkflowArgs) {
   const applyEventPatch = useCallback(async (eventId: string) => {
     let event = threadEventsRef.current.find(e => e.id === eventId);
@@ -210,6 +212,7 @@ export function usePatchWorkflow({
               status: "created",
             },
           }));
+          onCheckpointCreated?.(checkpoint.id, event);
         } catch (err: any) {
           const message = err?.message || String(err);
           emitThreadEvent(createThreadEvent({
@@ -268,7 +271,7 @@ export function usePatchWorkflow({
     } catch (err: any) {
       throw new Error(err || "写入本地失败");
     }
-  }, [emitThreadEvent, fs, onPatchApplied, threadEventsRef, updateThreadEvent]);
+  }, [emitThreadEvent, fs, onCheckpointCreated, onPatchApplied, threadEventsRef, updateThreadEvent]);
 
   const rollbackEventPatch = useCallback(async (eventId: string) => {
     const event = threadEventsRef.current.find((item) => item.id === eventId);

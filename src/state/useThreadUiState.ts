@@ -47,6 +47,15 @@ export function useThreadUiState(workspacePath: string, title: string) {
     const active = getThreadUiState(threadUiStateMap, threadId, workspacePath);
     return hasActive ? threads : [active, ...threads];
   }, [threadId, threadUiStateMap, workspacePath]);
+  const allThreadsForWorkspace = useMemo(() => {
+    return Object.values(threadUiStateMap)
+      .filter((thread) => thread.workspacePath === workspacePath)
+      .sort((a, b) => {
+        if (a.archived !== b.archived) return a.archived ? 1 : -1;
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      });
+  }, [threadUiStateMap, workspacePath]);
   const threadsByProject = useMemo(() => groupThreadsByWorkspace(threadUiStateMap), [threadUiStateMap]);
 
   useEffect(() => {
@@ -139,6 +148,7 @@ export function useThreadUiState(workspacePath: string, title: string) {
     threadId,
     threadUiState,
     threadList,
+    allThreadsForWorkspace,
     threadsByProject,
     updateThreadUiState,
     updateThreadUiStateById,

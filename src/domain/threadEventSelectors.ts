@@ -1,8 +1,6 @@
-import type { QuestionRequest } from "./questionRequest";
 import type { TerminalRun } from "./terminalRun";
 import type { ThreadEvent } from "./threadEvents";
 import type { ActionRequiredEvent } from "./actionRequired";
-import type { ApprovalRequest } from "../state/useApprovalQueue";
 import type { ToolCallLifecycle } from "./toolCallLifecycle";
 import type { ContextInspectorModel } from "../runtime/contextProviders";
 
@@ -77,15 +75,16 @@ export function selectCenterTimeline(input: ThreadEvent[] | RuntimeLedgerSelecto
   });
 }
 
-export function selectPendingActions(input: RuntimeLedgerSelectorSnapshot | {
-  events: ThreadEvent[];
-  actionRequired?: ActionRequiredEvent[];
-  approvals?: ApprovalRequest[];
-  questions?: QuestionRequest[];
-}): PendingAction[] {
+export function selectPendingActions(input: RuntimeLedgerSelectorSnapshot): PendingAction[] {
   const actions: PendingAction[] = [];
-  const events = "threadEvents" in input ? input.threadEvents : input.events;
-  const actionRequired = "threadEvents" in input ? input.actionRequired : input.actionRequired || [];
+  const events = input.threadEvents;
+  const actionRequired = input.actionRequired || [];
+  const patchActionEventIds = new Set(
+    actionRequired
+      .filter((action) => action.kind === "patchReview")
+      .map((action) => action.sourceEventId)
+      .filter(Boolean),
+  );
 
   for (const action of actionRequired) {
     if (action.status !== "pending") continue;
@@ -104,33 +103,8 @@ export function selectPendingActions(input: RuntimeLedgerSelectorSnapshot | {
     });
   }
 
-  for (const request of ("threadEvents" in input ? [] : input.approvals || [])) {
-    if (request.status !== "pending") continue;
-    const isVerification = request.tool === "run_command" && typeof request.params.sourceEventId === "string";
-    actions.push({
-      id: `approval:${request.id}`,
-      kind: isVerification ? "verification" : "approval",
-      payloadId: request.id,
-      title: isVerification ? "Verification Approval" : "Approval",
-      detail: request.reason || request.tool,
-      createdAt: request.createdAt,
-    });
-  }
-
-  for (const question of ("threadEvents" in input ? [] : input.questions || [])) {
-    if (question.status !== "pending") continue;
-    actions.push({
-      id: `question:${question.id}`,
-      kind: "question",
-      payloadId: question.id,
-      title: "Question",
-      detail: question.question,
-      createdAt: question.createdAt,
-    });
-  }
-
   for (const event of events) {
-    if (isPendingPatchEvent(event)) {
+    if (isPendingPatchEvent(event) && !patchActionEventIds.has(event.id)) {
       actions.push({
         id: `patch:${event.id}`,
         kind: "patch",

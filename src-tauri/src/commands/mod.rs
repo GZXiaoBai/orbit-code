@@ -80,6 +80,13 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager};
 
+pub mod command;
+pub mod context;
+pub mod file;
+pub mod patch;
+pub mod provider;
+pub mod vault;
+
 /* ==========================================================================
 Greet
 ========================================================================== */

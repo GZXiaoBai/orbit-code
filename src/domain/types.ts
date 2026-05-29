@@ -68,6 +68,9 @@ export interface ContextRule {
   enabled: boolean;
   mode: ContextRuleMode;
   source: ContextRuleSource;
+  globs?: string[];
+  regex?: string[];
+  policy?: "on" | "off" | "always";
 }
 
 export interface ContextSkill {

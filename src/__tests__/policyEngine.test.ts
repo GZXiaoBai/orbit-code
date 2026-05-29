@@ -63,4 +63,36 @@ describe("PolicyEngine", () => {
     expect(decision.decision).toBe("deny");
     expect(decision.reason).toContain("denies");
   });
+
+  it("applies mode-aware persisted approval grants without widening Plan into Build", () => {
+    const buildGrant = {
+      id: "grant-1",
+      tool: "run_command",
+      key: "run_command:npm\u0000test\u0000",
+      workspacePath: "/tmp/project",
+      threadId: "thread-1",
+      scope: "session" as const,
+      mode: "build" as const,
+      actions: ["command" as const],
+      createdAt: "2026-05-29T00:00:00.000Z",
+    };
+
+    expect(engine.evaluate({
+      mode: "build",
+      tool: "run_command",
+      params: { command: "npm", args: ["test"] },
+      workspacePath: "/tmp/project",
+      threadId: "thread-1",
+      approvalGrants: [buildGrant],
+    }).decision).toBe("allow");
+
+    expect(engine.evaluate({
+      mode: "plan",
+      tool: "run_command",
+      params: { command: "npm", args: ["test"] },
+      workspacePath: "/tmp/project",
+      threadId: "thread-1",
+      approvalGrants: [{ ...buildGrant, id: "grant-plan", mode: "plan" as const }],
+    }).decision).toBe("deny");
+  });
 });

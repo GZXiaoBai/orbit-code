@@ -1,26 +1,23 @@
-import { AgentLoopEngine, type AgentLoopCallbacks } from "./agentLoopEngine";
 import type { PlanTask, ReasoningEffort } from "../domain/types";
 import type { AgentLoopStatus } from "../domain/agentLoop";
 import type { LLMProvider, LLMRequestOptions } from "../services/llmService";
+import { AgentTurnRunner, type AgentTurnRunnerCallbacks } from "./agentTurnRunner";
 
-export type BuildAgentEngineCallbacks = AgentLoopCallbacks;
+export type BuildAgentEngineCallbacks = AgentTurnRunnerCallbacks;
 
 export class BuildAgentEngine {
-  private engine: AgentLoopEngine;
+  private runner: AgentTurnRunner;
 
   constructor(callbacks: BuildAgentEngineCallbacks) {
-    this.engine = new AgentLoopEngine({
-      ...callbacks,
-      getRuntimeMode: () => "build",
-    });
+    this.runner = new AgentTurnRunner(callbacks);
   }
 
   getStatus(): AgentLoopStatus {
-    return this.engine.getStatus();
+    return this.runner.getStatus();
   }
 
   cancel(): void {
-    this.engine.cancel();
+    this.runner.cancel();
   }
 
   runTask(
@@ -32,6 +29,6 @@ export class BuildAgentEngine {
     options?: LLMRequestOptions & { reasoningEffort?: ReasoningEffort },
     resumeContext?: string,
   ): Promise<string> {
-    return this.engine.runTask(task, provider, model, baseUrl, threadId, options, resumeContext);
+    return this.runner.runBuildTurn(task, provider, model, baseUrl, threadId, options, resumeContext);
   }
 }

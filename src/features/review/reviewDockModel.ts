@@ -1,19 +1,20 @@
+import type { ActionRequiredEvent } from "../../domain/actionRequired";
+import type { RuntimeLedgerSelectorSnapshot } from "../../domain/threadEventSelectors";
 import type { ThreadEvent } from "../../domain/threadEvents";
-import type { QuestionRequest } from "../../domain/questionRequest";
 import type { TerminalRun } from "../../domain/terminalRun";
-import type { ApprovalRequest } from "../../state/useApprovalQueue";
+import type { ApprovalGrant } from "../../domain/approvalGrant";
 
-export interface ReviewDockQueueModel {
-  commandApprovals: ApprovalRequest[];
-  questions: QuestionRequest[];
+export interface ReviewDockInspectorModel {
+  actionRequired: ActionRequiredEvent[];
   patchReviews: ThreadEvent[];
   appliedPatchReviews: ThreadEvent[];
   failedPatchReviews: ThreadEvent[];
-  verificationApprovals: ApprovalRequest[];
-  otherApprovals: ApprovalRequest[];
   terminalRuns: TerminalRun[];
   historyTerminalRuns: TerminalRun[];
   historyPatchReviews: ThreadEvent[];
+  checkpointEvents: ThreadEvent[];
+  rollbackEvents: ThreadEvent[];
+  activeGrants: ApprovalGrant[];
   counts: {
     changes: number;
     terminal: number;
@@ -21,10 +22,13 @@ export interface ReviewDockQueueModel {
   };
 }
 
-function isVerificationApproval(request: ApprovalRequest): boolean {
-  return request.tool === "run_command"
-    && typeof request.params.sourceEventId === "string"
-    && request.params.sourceEventId.length > 0;
+function itemScope(input: { workspacePath?: string; threadId?: string; taskId?: string | null }) {
+  return (item: { workspacePath?: string; threadId?: string; taskId?: string | null }) => {
+    const workspaceMatches = !input.workspacePath || !item.workspacePath || item.workspacePath === input.workspacePath;
+    const threadMatches = !input.threadId || !item.threadId || item.threadId === input.threadId;
+    const taskMatches = !input.taskId || !item.taskId || item.taskId === input.taskId;
+    return workspaceMatches && threadMatches && taskMatches;
+  };
 }
 
 function isTerminalFailedPatchReview(event: ThreadEvent): boolean {
@@ -38,40 +42,19 @@ function isTerminalFailedPatchReview(event: ThreadEvent): boolean {
 }
 
 export function buildReviewDockModel(input: {
-  approvals: ApprovalRequest[];
-  questions: QuestionRequest[];
-  events: ThreadEvent[];
-  terminalRuns: TerminalRun[];
+  ledger: RuntimeLedgerSelectorSnapshot;
   workspacePath?: string;
   threadId?: string;
   taskId?: string | null;
-}): ReviewDockQueueModel {
-  const inScope = (item: {
-    workspacePath?: string;
-    threadId?: string;
-    taskId?: string | null;
-    params?: Record<string, unknown>;
-  }) => {
-    const workspacePath = item.workspacePath || (typeof item.params?.workspacePath === "string" ? item.params.workspacePath : undefined);
-    const threadId = item.threadId || (typeof item.params?.threadId === "string" ? item.params.threadId : undefined);
-    const taskId = item.taskId || (typeof item.params?.taskId === "string" ? item.params.taskId : undefined);
-    const workspaceMatches = !input.workspacePath || !workspacePath || workspacePath === input.workspacePath;
-    const threadMatches = !input.threadId || !threadId || threadId === input.threadId;
-    const taskMatches = !input.taskId || !taskId || taskId === input.taskId;
-    return workspaceMatches && threadMatches && taskMatches;
-  };
-  const scopedApprovals = input.approvals.filter((request) => inScope(request as ApprovalRequest & { params: Record<string, unknown> }));
-  const scopedQuestions = input.questions.filter((question) => inScope(question));
-  const scopedEvents = input.events.filter((event) => inScope(event));
-  const scopedTerminalRuns = input.terminalRuns.filter((run) => inScope(run));
-  const historyTerminalRuns = input.terminalRuns.filter((run) => !inScope(run));
-  const scopedPendingApprovals = scopedApprovals.filter((request) => request.status === "pending");
-  const verificationApprovals = scopedPendingApprovals.filter(isVerificationApproval);
-  const commandApprovals = scopedPendingApprovals.filter((request) => request.tool === "run_command" && !isVerificationApproval(request));
-  const otherApprovals = scopedPendingApprovals.filter((request) => request.tool !== "run_command");
-  const questions = scopedQuestions.filter((question) => question.status === "pending");
+  approvalGrants?: ApprovalGrant[];
+}): ReviewDockInspectorModel {
+  const inScope = itemScope(input);
+  const scopedEvents = input.ledger.threadEvents.filter((event) => inScope(event));
+  const scopedActions = input.ledger.actionRequired.filter((action) => inScope(action));
+  const scopedTerminalRuns = (input.ledger.terminalRuns || []).filter((run) => inScope(run));
+  const historyTerminalRuns = (input.ledger.terminalRuns || []).filter((run) => !inScope(run));
   const patchEvents = scopedEvents.filter((event) => event.patches && event.patches.length > 0).reverse();
-  const historyPatchReviews = input.events
+  const historyPatchReviews = input.ledger.threadEvents
     .filter((event) => event.patches && event.patches.length > 0 && !inScope(event))
     .reverse();
   const failedPatchReviews = patchEvents.filter(isTerminalFailedPatchReview);
@@ -79,20 +62,23 @@ export function buildReviewDockModel(input: {
   const appliedPatchReviews = patchEvents.filter((event) => event.patches?.length && event.patches.every((patch) => patch.applied));
 
   return {
-    commandApprovals,
-    questions,
+    actionRequired: scopedActions,
     patchReviews,
     appliedPatchReviews,
     failedPatchReviews,
-    verificationApprovals,
-    otherApprovals,
     terminalRuns: scopedTerminalRuns,
     historyTerminalRuns,
     historyPatchReviews,
+    checkpointEvents: scopedEvents.filter((event) => event.kind === "checkpoint" || Boolean(event.checkpoint)).reverse(),
+    rollbackEvents: scopedEvents.filter((event) => event.kind === "rollback").reverse(),
+    activeGrants: (input.approvalGrants || []).filter((grant) =>
+      (!input.workspacePath || !grant.workspacePath || grant.workspacePath === input.workspacePath)
+      && (grant.scope !== "session" || !input.threadId || !grant.threadId || grant.threadId === input.threadId)
+    ),
     counts: {
       changes: patchReviews.length,
       terminal: scopedTerminalRuns.length,
-      questions: questions.length,
+      questions: scopedActions.filter((action) => action.kind === "question" && action.status === "pending").length,
     },
   };
 }

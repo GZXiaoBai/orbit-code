@@ -1,29 +1,27 @@
 import { describe, expect, it } from "vitest";
+import { createActionRequiredEvent } from "../domain/actionRequired";
 import type { ThreadEvent } from "../domain/threadEvents";
-import { mergeRunSteps, runStepsFromApprovals, runStepsFromEvents, selectRunSteps } from "../domain/runSteps";
-import { createApprovalRequest, resolveApprovalRequest } from "../state/useApprovalQueue";
+import { runStepsFromActionRequired, runStepsFromEvents, selectRunSteps } from "../domain/runSteps";
 
 describe("run steps view model", () => {
-  it("maps pending command approvals to waiting command steps", () => {
-    const request = createApprovalRequest("run_command", { command: "npm", args: ["test"] }, "verify");
-    const steps = runStepsFromApprovals([request]);
-
-    expect(steps[0]).toMatchObject({
+  it("maps ActionRequired command approvals to waiting command steps", () => {
+    const action = createActionRequiredEvent({
+      id: "action-command",
       kind: "command",
+      tool: "run_command",
+      title: "Run command",
+      description: "npm test",
+    });
+
+    expect(runStepsFromActionRequired([action])[0]).toMatchObject({
+      id: "action:action-command",
+      kind: "approval",
       status: "waiting",
-      title: "run_command",
-      approvalId: request.id,
+      approvalId: "action-command",
     });
   });
 
-  it("maps denied approvals to denied steps", () => {
-    const request = createApprovalRequest("run_command", { command: "npm" }, "verify");
-    const denied = resolveApprovalRequest([request], request.id, false);
-
-    expect(runStepsFromApprovals(denied)[0].status).toBe("denied");
-  });
-
-  it("maps patch events to patch steps and preserves ordering with approvals", () => {
+  it("maps patch events to patch steps", () => {
     const event: ThreadEvent = {
       id: "patch-1",
       kind: "patchProposal",
@@ -34,10 +32,8 @@ describe("run steps view model", () => {
       timestamp: "12:00",
       patches: [{ path: "src/App.tsx", oldContent: "old", newContent: "new", applied: false }],
     };
-    const request = createApprovalRequest("run_command", { command: "npm" }, "verify");
 
     expect(runStepsFromEvents([event])[0].kind).toBe("patch");
-    expect(mergeRunSteps([event], [request]).map((step) => step.kind)).toEqual(["patch", "command"]);
   });
 
   it("projects run steps from ledger tool lifecycle instead of legacy approval queues", () => {

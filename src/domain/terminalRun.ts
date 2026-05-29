@@ -1,6 +1,7 @@
 import { formatCommandForDisplay } from "../runtime/commandParser";
 
 export type TerminalRunStatus = "pending" | "running" | "done" | "failed" | "cancelled";
+export type TerminalRecoveredState = "completed" | "cancelled" | "unknown-needs-continue";
 
 export interface TerminalRun {
   id: string;
@@ -17,6 +18,11 @@ export interface TerminalRun {
   output: string;
   startedAt: string;
   completedAt?: string;
+  processId?: string;
+  sessionId?: string;
+  cancelledAt?: string;
+  outputTail?: string;
+  recoveredState?: TerminalRecoveredState;
 }
 
 export function createTerminalRun(input: {
@@ -32,6 +38,10 @@ export function createTerminalRun(input: {
   status?: TerminalRunStatus;
   exitCode?: number | null;
   at?: string;
+  processId?: string;
+  sessionId?: string;
+  cancelledAt?: string;
+  recoveredState?: TerminalRecoveredState;
 }): TerminalRun {
   const startedAt = input.at || new Date().toISOString();
   return {
@@ -49,6 +59,11 @@ export function createTerminalRun(input: {
     output: input.output || "",
     startedAt,
     completedAt: input.status && input.status !== "running" ? startedAt : undefined,
+    processId: input.processId,
+    sessionId: input.sessionId,
+    cancelledAt: input.cancelledAt,
+    outputTail: (input.output || "").slice(-4000),
+    recoveredState: input.recoveredState,
   };
 }
 
@@ -57,7 +72,7 @@ export function appendTerminalOutput(runs: TerminalRun[], taskId: string, text: 
   if (index === -1) return runs;
   const targetIndex = runs.length - 1 - index;
   return runs.map((run, runIndex) =>
-    runIndex === targetIndex ? { ...run, output: run.output + text } : run
+    runIndex === targetIndex ? { ...run, output: run.output + text, outputTail: (run.output + text).slice(-4000) } : run
   );
 }
 
@@ -72,7 +87,43 @@ export function completeTerminalRun(
   const targetIndex = runs.length - 1 - index;
   return runs.map((run, runIndex) =>
     runIndex === targetIndex
-      ? { ...run, status: exitCode === 0 ? "done" : "failed", exitCode, completedAt: at }
+      ? { ...run, status: exitCode === 0 ? "done" : "failed", exitCode, completedAt: at, outputTail: run.output.slice(-4000) }
+      : run
+  );
+}
+
+export function recoverTerminalRun(run: TerminalRun): TerminalRun {
+  if (run.status === "running") {
+    return {
+      ...run,
+      status: "cancelled",
+      recoveredState: "unknown-needs-continue",
+      outputTail: (run.output || run.outputTail || "").slice(-4000),
+    };
+  }
+  return {
+    ...run,
+    recoveredState: run.recoveredState || (run.status === "cancelled" ? "cancelled" : "completed"),
+    outputTail: (run.outputTail || run.output || "").slice(-4000),
+  };
+}
+
+export function cancelTerminalRun(
+  runs: TerminalRun[],
+  runId: string,
+  at = new Date().toISOString(),
+): TerminalRun[] {
+  return runs.map((run) =>
+    run.id === runId || run.taskId === runId
+      ? {
+        ...run,
+        status: "cancelled",
+        exitCode: run.exitCode ?? null,
+        cancelledAt: at,
+        completedAt: run.completedAt || at,
+        recoveredState: "cancelled",
+        outputTail: (run.output || run.outputTail || "").slice(-4000),
+      }
       : run
   );
 }

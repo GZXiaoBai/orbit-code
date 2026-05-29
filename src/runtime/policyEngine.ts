@@ -1,5 +1,5 @@
 import type { AgentRuntimeMode, ToolName, ToolParams } from "../domain/agentLoop";
-import type { ApprovalGrantScope } from "../state/useApprovalQueue";
+import { approvalGrantKey, policyGrantMatches, type ApprovalGrantScope, type PolicyGrant } from "../domain/approvalGrant";
 import type {
   PermissionAction,
   PermissionDecision,
@@ -20,6 +20,7 @@ export interface PolicyEvaluationRequest {
   workspacePath?: string;
   threadId?: string;
   grantScope?: ApprovalGrantScope;
+  approvalGrants?: PolicyGrant[];
   security?: SecuritySettings;
   projectOverride?: ProjectSecurityOverride;
   projectRuleDecisions?: Partial<Record<PermissionAction, PermissionDecision>>;
@@ -53,7 +54,7 @@ function mergeRestrictiveDecisions(
   return merged;
 }
 
-function inferActions(tool: string, params?: ToolParams): PermissionAction[] {
+export function inferPermissionActions(tool: string, params?: ToolParams): PermissionAction[] {
   if (tool === "read_file") return ["read"];
   if (tool === "list_files") return ["read"];
   if (tool === "search_code") return ["read", "search"];
@@ -73,14 +74,32 @@ export class PolicyEngine {
     if (!isToolAllowedInMode(request.mode, tool)) {
       return {
         decision: "deny",
-        actions: inferActions(request.tool, request.params),
+        actions: inferPermissionActions(request.tool, request.params),
         reason: `${request.mode} mode does not allow ${request.tool}.`,
       };
     }
 
-    const actions = inferActions(request.tool, request.params);
+    const actions = inferPermissionActions(request.tool, request.params);
     if (actions.length === 0) {
       return { decision: "allow", actions, reason: `${request.tool} does not require permission.` };
+    }
+
+    const key = approvalGrantKey(request.tool, request.params || {});
+    const matchingGrant = request.approvalGrants?.find((grant) => policyGrantMatches({
+      grant,
+      mode: request.mode,
+      tool: request.tool,
+      key,
+      actions,
+      workspacePath: request.workspacePath,
+      threadId: request.threadId,
+    }));
+    if (matchingGrant) {
+      return {
+        decision: "allow",
+        actions,
+        reason: `${matchingGrant.scope} approval grant allows ${request.tool}.`,
+      };
     }
 
     const effective = buildEffectiveSecurityPolicy(request.security, request.projectOverride);

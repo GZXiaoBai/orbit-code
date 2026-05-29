@@ -3,8 +3,8 @@ import { PermissionScheduler } from "../runtime/permissionScheduler";
 
 describe("PermissionScheduler", () => {
   it("denies Plan-mode command without enqueueing UI approval", async () => {
-    const enqueueApproval = vi.fn();
-    const scheduler = new PermissionScheduler({ enqueueApproval });
+    const requestAction = vi.fn();
+    const scheduler = new PermissionScheduler({ requestAction });
 
     const result = await scheduler.request({
       mode: "plan",
@@ -15,23 +15,19 @@ describe("PermissionScheduler", () => {
     expect(result.approved).toBe(false);
     expect(result.policy.decision).toBe("deny");
     expect(result.toolResult).toContain("Denied run_command");
-    expect(enqueueApproval).not.toHaveBeenCalled();
+    expect(requestAction).not.toHaveBeenCalled();
   });
 
-  it("routes Build command approval through the adapter", async () => {
-    const enqueueApproval = vi.fn(async (_tool, _params, _reason, onCreated) => {
-      onCreated?.({
-        id: "approval-1",
-        tool: "run_command",
-        params: { command: "npm" },
-        reason: "verify",
-        grantScope: "once",
-        status: "pending",
-        createdAt: "2026-05-29T00:00:00.000Z",
-      });
-      return true;
+  it("routes Build command approval through ActionRequired adapter", async () => {
+    const requestAction = vi.fn(async (action) => {
+      return {
+        status: "approved" as const,
+        toolResultText: `Approved run_command: ${action.description}`,
+        resumeAction: action.resumeAction,
+        resolvedAt: "2026-05-29T00:00:01.000Z",
+      };
     });
-    const scheduler = new PermissionScheduler({ enqueueApproval });
+    const scheduler = new PermissionScheduler({ requestAction });
 
     const result = await scheduler.request({
       mode: "build",
@@ -42,29 +38,27 @@ describe("PermissionScheduler", () => {
       toolCallId: "tool-1",
     });
 
-    expect(enqueueApproval).toHaveBeenCalledTimes(1);
+    expect(requestAction).toHaveBeenCalledTimes(1);
     expect(result.approved).toBe(true);
-    expect(result.action.id).toBe("approval-1");
+    expect(result.action.id).toMatch(/^action-/);
     expect(result.action).toMatchObject({ runSessionId: "run-1", toolCallId: "tool-1" });
     expect(result.toolResult).toContain("Approved run_command");
+    expect(result.resolution).toMatchObject({
+      status: "approved",
+      toolResultText: expect.stringContaining("Approved run_command"),
+    });
   });
 
   it("emits pending and resolved ActionRequired records around UI approval", async () => {
     const created = vi.fn();
     const resolved = vi.fn();
     const scheduler = new PermissionScheduler({
-      enqueueApproval: vi.fn(async (_tool, _params, _reason, onCreated) => {
-        onCreated?.({
-          id: "approval-action-1",
-          tool: "run_command",
-          params: { command: "npm", args: ["install"] },
-          reason: "install deps",
-          grantScope: "once",
-          status: "pending",
-          createdAt: "2026-05-29T00:00:00.000Z",
-        });
-        return false;
-      }),
+      requestAction: vi.fn(async (action) => ({
+        status: "denied" as const,
+        toolResultText: `Denied run_command: ${action.description}`,
+        resumeAction: action.resumeAction,
+        resolvedAt: "2026-05-29T00:00:01.000Z",
+      })),
     });
 
     const result = await scheduler.request({
@@ -76,32 +70,28 @@ describe("PermissionScheduler", () => {
     });
 
     expect(created).toHaveBeenCalledWith(expect.objectContaining({
-      id: "approval-action-1",
       status: "pending",
-      resumeAction: { type: "approval", payloadId: "approval-action-1" },
+      resumeAction: expect.objectContaining({ type: "approval" }),
     }), expect.anything());
     expect(resolved).toHaveBeenCalledWith(expect.objectContaining({
-      id: "approval-action-1",
       status: "denied",
+      resumeAction: expect.objectContaining({ type: "approval" }),
     }), expect.anything());
     expect(result.toolResult).toContain("Denied run_command");
+    expect(result.resolution).toMatchObject({
+      status: "denied",
+      resumeAction: expect.objectContaining({ type: "approval" }),
+    });
   });
 
   it("classifies install and network commands as dedicated blocking action kinds", async () => {
     const created = vi.fn();
     const scheduler = new PermissionScheduler({
-      enqueueApproval: vi.fn(async (_tool, _params, _reason, onCreated) => {
-        onCreated?.({
-          id: "approval-install",
-          tool: "run_command",
-          params: { command: "npm", args: ["install"] },
-          reason: "install deps",
-          grantScope: "once",
-          status: "pending",
-          createdAt: "2026-05-29T00:00:00.000Z",
-        });
-        return false;
-      }),
+      requestAction: vi.fn(async (action) => ({
+        status: "denied" as const,
+        toolResultText: `Denied run_command: ${action.description}`,
+        resumeAction: action.resumeAction,
+      })),
     });
 
     const install = await scheduler.request({
@@ -116,18 +106,11 @@ describe("PermissionScheduler", () => {
 
     const networkCreated = vi.fn();
     const networkScheduler = new PermissionScheduler({
-      enqueueApproval: vi.fn(async (_tool, _params, _reason, onCreated) => {
-        onCreated?.({
-          id: "approval-network",
-          tool: "run_command",
-          params: { command: "curl", args: ["https://example.com/install.sh"] },
-          reason: "fetch remote",
-          grantScope: "once",
-          status: "pending",
-          createdAt: "2026-05-29T00:00:00.000Z",
-        });
-        return false;
-      }),
+      requestAction: vi.fn(async (action) => ({
+        status: "denied" as const,
+        toolResultText: `Denied run_command: ${action.description}`,
+        resumeAction: action.resumeAction,
+      })),
     });
 
     await networkScheduler.request({
@@ -138,5 +121,33 @@ describe("PermissionScheduler", () => {
     });
 
     expect(networkCreated).toHaveBeenCalledWith(expect.objectContaining({ kind: "network" }), expect.anything());
+  });
+
+  it("skips UI approval when a matching Build grant exists", async () => {
+    const requestAction = vi.fn();
+    const scheduler = new PermissionScheduler({ requestAction });
+
+    const result = await scheduler.request({
+      mode: "build",
+      tool: "run_command",
+      params: { command: "npm", args: ["test"] },
+      workspacePath: "/tmp/project",
+      threadId: "thread-1",
+      approvalGrants: [{
+        id: "grant-1",
+        tool: "run_command",
+        key: "run_command:npm\u0000test\u0000",
+        workspacePath: "/tmp/project",
+        threadId: "thread-1",
+        scope: "session",
+        mode: "build",
+        actions: ["command"],
+        createdAt: "2026-05-29T00:00:00.000Z",
+      }],
+    });
+
+    expect(requestAction).not.toHaveBeenCalled();
+    expect(result.approved).toBe(true);
+    expect(result.policy.reason).toContain("approval grant");
   });
 });

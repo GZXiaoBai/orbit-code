@@ -28,19 +28,20 @@ Closed-source products such as Claude Code, Cursor, and Antigravity should be st
 
 OpenCode has a small and useful pattern in `internal/permission/permission.go`: a permission request is published as an event and the tool execution waits on a response channel. It also distinguishes one-time grant, persistent session grant, deny, and auto-approve session.
 
-Orbit already has an approval queue, but it should converge on this shape:
+Orbit originally had an approval queue, but the runtime path has now converged on this shape:
 
-- `requestApproval()` creates a durable approval event.
+- `ActionRequiredController.request()` creates a durable blocking action in `RuntimeLedger`.
 - Tool execution blocks until approve/deny/cancel.
 - A restored approval does not pretend to recover the old Promise; it maps to a concrete resume action.
-- Session-scoped grants are explicit and visible.
+- Session/project-scoped grants are explicit, visible, mode-aware, and revocable from the Inspector.
 
 Concrete Orbit work:
 
-- Make `useApprovalQueue` the only command/write approval gate.
-- Store `grantScope: "once" | "session" | "project"` on approvals.
-- Add a UI affordance for “本次允许 / 当前会话允许 / 当前项目允许”.
-- Ensure deny is a tool result consumed by the agent, not just a UI state.
+- Keep `ActionRequiredController + RuntimeLedger` as the only command/write/question/patch/verification blocking path.
+- Treat `useApprovalQueue` and `useQuestionQueue` as legacy migration/compatibility helpers only; they must not be new UI or runner inputs.
+- Store `grantScope: "once" | "session" | "project"` plus mode/tool/action/path scope on approvals.
+- Add and maintain UI affordances for “本次允许 / 当前会话允许 / 当前项目允许” and active grant revoke.
+- Ensure deny/cancel/expired are tool results consumed by the agent, not just UI states.
 - Assign a durable `resumeAction` when a blocking action is created, not only when it is replayed after reload.
 
 ### 2. Thread Events Should Be A Typed Protocol, Not Ad-Hoc Timeline Items
@@ -104,6 +105,10 @@ These are the concrete gaps found while comparing Orbit to Cline/OpenCode/Aider:
 - Runtime state should pass through a single ledger seam: Orbit now has `RuntimeLedger` wrapping thread-event writes, `ActionRequired` writes/resolution, pending replay, and snapshot serialization. The next cleanup is removing remaining direct compatibility writes outside migration paths.
 - Runtime items should follow a small lifecycle vocabulary. Orbit now records `started / updated / completed / failed` through `RuntimeLedger.appendItem/updateItem/completeItem/failItem`, matching the Codex-style idea that command, patch, verification, terminal, question, and approval are protocol items before they are UI rows.
 - Tool calls need their own lifecycle projection. Orbit now has `ToolCallLifecycle` for `generated -> policyEvaluated -> actionRequired -> running -> completed/failed/denied/cancelled`, and run steps can be derived from the ledger snapshot rather than the legacy approval queue.
+- Tool-call writes should not live in React state. Orbit now routes lifecycle creation/result/approval updates through a non-React `ToolCallExecutor` backed by `RuntimeLedger.appendToolCall/updateToolCall`; the executor also has a first permission-scheduling seam for policy evaluation and ActionRequired linkage.
+- Restored actions should not resume old Promises. Orbit now has `SessionRestoreController` plus `ResumeController` to turn restored command/question/patch/verification/terminal states into explicit continue results.
+- Checkpoint restore should restore runtime as well as files. Orbit now has `CheckpointRestoreController` to preview checkpoint restore feasibility, restore the saved ledger snapshot, write a rollback event, and recreate a patch-review action when needed.
+- Persisted grants must be policy inputs, not UI shortcuts. Orbit now feeds `PolicyGrant[]` into `PolicyEngine.evaluate()`; grants match by workspace, mode, tool/action, thread/session/project scope, and optional cwd/path scope. A Plan grant does not widen Build permissions.
 
 ### 5. Project-Scoped Sessions And Checkpoints Are Non-Negotiable
 
@@ -154,6 +159,7 @@ Concrete Orbit work:
 
 - Settings now owns user-level rules with `title`, `content`, `enabled`, and `mode: plan | build | both`.
 - The Current Context Inspector shows active and disabled context blocks, editable Orbit project-rule sources, project skill manifests, parse/read errors, token estimates, and `permissionImpact: none`.
+- User rules support `globs`, `regex`, and `policy: on | off | always` filtering. These filters decide whether context is injected and are displayed as match reasons in the Inspector; they do not change tool permissions.
 - Project rule editing is intentionally constrained to `ORBIT.md`, `.orbit/rules`, `.orbit/rules.md`, and `.orbit/skills/*/SKILL.md` through the Rust workspace gateway.
 - Skills are read-only prompt context from `.orbit/skills/*/SKILL.md`; they do not execute scripts, read assets, or receive tool permissions.
 - The injection order is user rules, `ORBIT.md`, `.orbit/rules` / `.orbit/rules.md`, accepted plan, then skill manifests.
@@ -222,6 +228,12 @@ Orbit should add these cautiously:
 - Manual smoke: run `orbit-mini-lab` in `/Users/zhoujunjie/PersonalProjects/test for orbit/orbit-mini-lab` and evaluate the required typed milestones with the smoke harness before marking the flow verified.
 - Use the Current Context Inspector smoke gate to evaluate the live event/action snapshot after the run; this does not replace the manual DeepSeek run, but it makes missing protocol milestones visible and repeatable.
 
+2026-05-29 Runner Kernel update:
+
+- `AgentRunKernel` now owns Build-turn preparation outside React state: mode guard, provider/model/key/build-support checks, task selection, resume detection, run session id creation, and final-summary-only context.
+- `useAgentRun` is still too large, but this is the correct direction: move deterministic run preparation and tool/result lifecycle decisions into testable non-React modules before deleting legacy queue adapters.
+- The next split should move streaming repair, approval/question/patch callback handling, terminal recording, cancellation, and error finalization behind `AgentTurnRunner` / `ToolCallExecutor`.
+
 ### P1: Make The Workbench Understand Its Own History
 
 - Project-scoped multi-thread sessions.
@@ -230,6 +242,7 @@ Orbit should add these cautiously:
 - Terminal run records linked to approvals/tasks.
 - Context compaction events.
 - Session browser and search.
+- Rust gateway extraction has started by moving the flat `commands.rs` file into `commands/mod.rs` with file/command/patch/context/provider/vault child-module entry points. The implementation is not fully split yet; keep command names stable while moving code into those modules.
 
 ### P2: Make Provider/Model Handling Mature
 

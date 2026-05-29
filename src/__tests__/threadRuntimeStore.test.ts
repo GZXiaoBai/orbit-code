@@ -144,6 +144,53 @@ describe("ThreadRuntimeStore", () => {
     });
   });
 
+  it("stores runtime snapshots keyed by checkpoint id", () => {
+    const store = new RuntimeLedger({ threadEvents: [event] });
+
+    const snapshot = store.saveCheckpointRuntimeSnapshot({
+      checkpointId: "checkpoint-1",
+      threadId: "thread-1",
+      workspacePath: "/tmp/project",
+      runtimeLedgerSnapshot: store.serializeSnapshot(),
+      createdAt: "2026-05-29T00:00:00.000Z",
+    });
+
+    expect(snapshot.checkpointRuntimeSnapshots["checkpoint-1"]).toMatchObject({
+      checkpointId: "checkpoint-1",
+      runtimeLedgerSnapshot: {
+        threadEvents: [expect.objectContaining({ id: "event-1" })],
+      },
+    });
+    expect(store.ledgerSnapshot().checkpointRuntimeSnapshots["checkpoint-1"]).toBeTruthy();
+  });
+
+  it("updates tool calls through the ledger without creating duplicate lifecycle facts", () => {
+    const store = new RuntimeLedger();
+    store.appendToolCall(createToolCallLifecycle({
+      id: "tool-1",
+      tool: "run_command",
+      status: "generated",
+      argsSummary: "npm test",
+      createdAt: "2026-05-29T00:00:00.000Z",
+    }));
+    store.appendToolCall(createToolCallLifecycle({
+      id: "tool-1",
+      tool: "run_command",
+      status: "running",
+      argsSummary: "npm test",
+      createdAt: "2026-05-29T00:00:00.000Z",
+    }));
+    const snapshot = store.updateToolCall("tool-1", { status: "completed", resultText: "ok" });
+
+    expect(snapshot.toolCalls).toHaveLength(1);
+    expect(snapshot.toolCalls[0]).toMatchObject({
+      id: "tool-1",
+      status: "completed",
+      resultText: "ok",
+    });
+    expect(snapshot.toolCalls[0].updatedAt).toBeTruthy();
+  });
+
   it("expires blocking actions through the ActionRequiredStore", () => {
     const store = new ActionRequiredStore({
       actionRequired: [createActionRequiredEvent({

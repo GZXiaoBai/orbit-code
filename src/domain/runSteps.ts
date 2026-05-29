@@ -17,22 +17,6 @@ export interface RunStep {
   createdAt: string;
 }
 
-interface ApprovalLike {
-  id: string;
-  tool: string;
-  params: Record<string, unknown>;
-  reason: string;
-  status: "pending" | "approved" | "denied" | "cancelled";
-  createdAt: string;
-}
-
-function statusFromApproval(status: ApprovalLike["status"]): RunStepStatus {
-  if (status === "approved") return "done";
-  if (status === "denied") return "denied";
-  if (status === "cancelled") return "cancelled";
-  return "waiting";
-}
-
 function statusFromActionRequired(status: ActionRequiredEvent["status"]): RunStepStatus {
   if (status === "approved" || status === "resolved") return "done";
   if (status === "denied") return "denied";
@@ -76,18 +60,6 @@ function createdAtFromEvent(event: ThreadEvent): string {
   return event.timestamp;
 }
 
-export function runStepsFromApprovals(requests: ApprovalLike[]): RunStep[] {
-  return requests.map((request) => ({
-    id: `approval:${request.id}`,
-    kind: request.tool === "run_command" ? "command" : "approval",
-    status: statusFromApproval(request.status),
-    title: request.tool,
-    detail: request.reason || JSON.stringify(request.params),
-    approvalId: request.id,
-    createdAt: request.createdAt,
-  }));
-}
-
 export function runStepsFromActionRequired(actions: ActionRequiredEvent[]): RunStep[] {
   return actions.map((action) => ({
     id: `action:${action.id}`,
@@ -116,8 +88,9 @@ export function runStepsFromToolLifecycle(toolCalls: ToolCallLifecycle[]): RunSt
               ? "running"
               : "waiting",
     title: String(call.tool),
-    detail: call.resultText || call.error || call.policyDecision?.reason || JSON.stringify(call.args || {}),
+    detail: call.resultText || call.error || call.policyDecision?.reason || call.argsSummary || String(call.tool),
     approvalId: call.actionRequiredId,
+    eventId: call.threadEventId,
     createdAt: call.createdAt,
   }));
 }
@@ -132,15 +105,6 @@ export function runStepsFromEvents(events: ThreadEvent[]): RunStep[] {
     eventId: event.id,
     createdAt: createdAtFromEvent(event),
   }));
-}
-
-export function mergeRunSteps(events: ThreadEvent[], approvals: ApprovalLike[] = [], actions: ActionRequiredEvent[] = []): RunStep[] {
-  return [...runStepsFromEvents(events), ...runStepsFromApprovals(approvals), ...runStepsFromActionRequired(actions)].sort((a, b) => {
-    const aTime = Date.parse(a.createdAt);
-    const bTime = Date.parse(b.createdAt);
-    if (Number.isNaN(aTime) || Number.isNaN(bTime)) return 0;
-    return aTime - bTime;
-  });
 }
 
 export function selectRunSteps(input: RuntimeLedgerSelectorSnapshot): RunStep[] {

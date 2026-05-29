@@ -1,23 +1,23 @@
 import type { ActionRequiredEvent } from "../domain/actionRequired";
 import {
+  actionRequiredResolution,
   actionRequiredToolResult,
   createActionRequiredEvent,
   resolveActionRequiredEvent,
+  type ActionRequiredResolution,
 } from "../domain/actionRequired";
 import type { AgentRuntimeMode, ToolName, ToolParams } from "../domain/agentLoop";
-import type { ApprovalCreatedCallback } from "../state/useApprovalQueue";
+import type { PolicyGrant } from "../domain/approvalGrant";
 import type { ApprovalRequest } from "../state/useApprovalQueue";
 import type { ProjectSecurityOverride, SecuritySettings } from "../domain/types";
 import { defaultPolicyEngine, type PolicyDecision, type PolicyEngine } from "./policyEngine";
 import { formatCommandForDisplay } from "./commandParser";
 
 export interface PermissionSchedulerAdapter {
-  enqueueApproval: (
-    tool: string,
-    params: ToolParams,
-    reason?: string,
-    onCreated?: ApprovalCreatedCallback,
-  ) => Promise<boolean>;
+  requestAction: (
+    action: ActionRequiredEvent,
+    policy: PolicyDecision,
+  ) => Promise<ActionRequiredResolution>;
 }
 
 export interface PermissionSchedulerRequest {
@@ -32,6 +32,7 @@ export interface PermissionSchedulerRequest {
   reason?: string;
   security?: SecuritySettings;
   projectOverride?: ProjectSecurityOverride;
+  approvalGrants?: PolicyGrant[];
   onActionCreated?: (action: ActionRequiredEvent, policy: PolicyDecision) => void;
   onActionResolved?: (action: ActionRequiredEvent, policy: PolicyDecision) => void;
   onCreated?: (request: ApprovalRequest, action: ActionRequiredEvent, policy: PolicyDecision) => void;
@@ -40,6 +41,7 @@ export interface PermissionSchedulerRequest {
 export interface PermissionSchedulerResult {
   approved: boolean;
   action: ActionRequiredEvent;
+  resolution: ActionRequiredResolution;
   policy: PolicyDecision;
   toolResult: string;
 }
@@ -66,6 +68,28 @@ function describeTool(tool: string, params: ToolParams, fallback = ""): string {
   return fallback || tool;
 }
 
+function actionToApprovalRequest(action: ActionRequiredEvent): ApprovalRequest {
+  return {
+    id: action.id,
+    workspacePath: action.workspacePath,
+    threadId: action.threadId,
+    taskId: action.taskId,
+    tool: action.tool || action.kind,
+    params: action.params || {},
+    reason: action.reason || action.description,
+    grantScope: action.grantScope || "once",
+    status: action.status === "pending"
+      ? "pending"
+      : action.status === "approved" || action.status === "resolved"
+        ? "approved"
+        : action.status === "cancelled" || action.status === "expired"
+          ? "cancelled"
+          : "denied",
+    createdAt: action.createdAt,
+    resolvedAt: action.resolvedAt,
+  };
+}
+
 export class PermissionScheduler {
   private adapter: PermissionSchedulerAdapter;
   private policyEngine: PolicyEngine;
@@ -84,6 +108,7 @@ export class PermissionScheduler {
       threadId: input.threadId,
       security: input.security,
       projectOverride: input.projectOverride,
+      approvalGrants: input.approvalGrants,
     });
     const action = createActionRequiredEvent({
       kind: actionKindForTool(input.tool, input.params),
@@ -106,6 +131,7 @@ export class PermissionScheduler {
       return {
         approved: false,
         action: denied,
+        resolution: actionRequiredResolution(denied),
         policy,
         toolResult: actionRequiredToolResult(denied),
       };
@@ -118,36 +144,35 @@ export class PermissionScheduler {
       return {
         approved: true,
         action: approved,
+        resolution: actionRequiredResolution(approved),
         policy,
         toolResult: actionRequiredToolResult(approved),
       };
     }
 
-    let createdRequest: ApprovalRequest | undefined;
-    const approved = await this.adapter.enqueueApproval(
-      input.tool,
-      input.params,
-      input.reason || policy.reason,
-      (request) => {
-        createdRequest = request;
-        const pendingAction = {
-          ...action,
-          id: request.id,
-          resumeAction: { type: "approval" as const, payloadId: request.id },
-        };
-        input.onActionCreated?.(pendingAction, policy);
-        input.onCreated?.(request, pendingAction, policy);
-      },
-    );
+    input.onActionCreated?.(action, policy);
+    input.onCreated?.(actionToApprovalRequest(action), action, policy);
+    const resolution = await this.adapter.requestAction(action, policy);
+    const approved = resolution.status === "approved" || resolution.status === "resolved";
     const resolved = resolveActionRequiredEvent(
-      { ...action, id: createdRequest?.id || action.id, resumeAction: { type: "approval", payloadId: createdRequest?.id || action.id } },
-      { approved, reason: approved ? policy.reason : "User denied this action." },
+      action,
+      {
+        status: resolution.status === "resolved"
+          ? "approved"
+          : resolution.status === "pending"
+            ? "cancelled"
+            : resolution.status,
+        reason: approved ? policy.reason : "User denied this action.",
+        toolResultText: resolution.toolResultText,
+        resolvedAt: resolution.resolvedAt,
+      },
     );
     input.onActionResolved?.(resolved, policy);
 
     return {
       approved,
       action: resolved,
+      resolution: actionRequiredResolution(resolved),
       policy,
       toolResult: actionRequiredToolResult(resolved),
     };

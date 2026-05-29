@@ -1,7 +1,7 @@
 import type { ActionRequiredEvent } from "../domain/actionRequired";
 import type { TerminalRun } from "../domain/terminalRun";
 import type { ThreadEvent } from "../domain/threadEvents";
-import type { ToolCallLifecycle } from "../domain/toolCallLifecycle";
+import { updateToolCallLifecycle, type ToolCallLifecycle } from "../domain/toolCallLifecycle";
 import { ActionRequiredStore } from "./actionRequiredStore";
 import {
   restoreThreadEventStore,
@@ -14,6 +14,7 @@ export interface ThreadRuntimeSnapshot {
   actionRequired?: ActionRequiredEvent[] | null;
   toolCalls?: ToolCallLifecycle[] | null;
   terminalRuns?: TerminalRun[] | null;
+  checkpointRuntimeSnapshots?: Record<string, CheckpointRuntimeSnapshot> | null;
 }
 
 export interface ThreadRuntimeState {
@@ -21,6 +22,7 @@ export interface ThreadRuntimeState {
   actionRequired: ActionRequiredEvent[];
   toolCalls: ToolCallLifecycle[];
   terminalRuns: TerminalRun[];
+  checkpointRuntimeSnapshots: Record<string, CheckpointRuntimeSnapshot>;
 }
 
 export interface RuntimeLedgerSnapshot {
@@ -29,6 +31,16 @@ export interface RuntimeLedgerSnapshot {
   toolCalls: ToolCallLifecycle[];
   terminalRuns: TerminalRun[];
   checkpoints: ThreadEvent[];
+  checkpointRuntimeSnapshots: Record<string, CheckpointRuntimeSnapshot>;
+}
+
+export interface CheckpointRuntimeSnapshot {
+  checkpointId: string;
+  threadId?: string;
+  workspacePath?: string;
+  runtimeLedgerSnapshot: ThreadRuntimeSnapshot;
+  agentRunSession?: unknown;
+  createdAt: string;
 }
 
 export class RuntimeLedger {
@@ -42,6 +54,7 @@ export class RuntimeLedger {
       actionRequired: this.actionStore.snapshot(),
       toolCalls: (snapshot.toolCalls || []).map((call) => ({ ...call })),
       terminalRuns: (snapshot.terminalRuns || []).map((run) => ({ ...run })),
+      checkpointRuntimeSnapshots: { ...(snapshot.checkpointRuntimeSnapshots || {}) },
     };
   }
 
@@ -100,9 +113,12 @@ export class RuntimeLedger {
   }
 
   appendToolCall(call: ToolCallLifecycle): ThreadRuntimeState {
+    const exists = this.state.toolCalls.some((item) => item.id === call.id);
     this.state = {
       ...this.state,
-      toolCalls: [{ ...call }, ...this.state.toolCalls],
+      toolCalls: exists
+        ? this.state.toolCalls.map((item) => item.id === call.id ? updateToolCallLifecycle(item, call) : item)
+        : [{ ...call }, ...this.state.toolCalls],
     };
     return this.snapshot();
   }
@@ -112,7 +128,7 @@ export class RuntimeLedger {
       ...this.state,
       toolCalls: this.state.toolCalls.map((call) => {
         if (call.id !== id) return call;
-        return typeof update === "function" ? update(call) : { ...call, ...update };
+        return typeof update === "function" ? update(call) : updateToolCallLifecycle(call, update);
       }),
     };
     return this.snapshot();
@@ -126,14 +142,37 @@ export class RuntimeLedger {
     return this.snapshot();
   }
 
+  saveCheckpointRuntimeSnapshot(input: CheckpointRuntimeSnapshot): ThreadRuntimeState {
+    this.state = {
+      ...this.state,
+      checkpointRuntimeSnapshots: {
+        ...this.state.checkpointRuntimeSnapshots,
+        [input.checkpointId]: {
+          ...input,
+          runtimeLedgerSnapshot: {
+            threadEvents: input.runtimeLedgerSnapshot.threadEvents?.map((event) => ({ ...event })),
+            actionRequired: input.runtimeLedgerSnapshot.actionRequired?.map((action) => ({ ...action })),
+            toolCalls: input.runtimeLedgerSnapshot.toolCalls?.map((call) => ({ ...call })),
+            terminalRuns: input.runtimeLedgerSnapshot.terminalRuns?.map((run) => ({ ...run })),
+          },
+        },
+      },
+    };
+    return this.snapshot();
+  }
+
   serializeSnapshot(): ThreadRuntimeSnapshot {
     const snapshot = this.snapshot();
-    return {
+    const serialized: ThreadRuntimeSnapshot = {
       threadEvents: snapshot.events,
       actionRequired: snapshot.actionRequired,
       toolCalls: snapshot.toolCalls,
       terminalRuns: snapshot.terminalRuns,
     };
+    if (Object.keys(snapshot.checkpointRuntimeSnapshots).length > 0) {
+      serialized.checkpointRuntimeSnapshots = snapshot.checkpointRuntimeSnapshots;
+    }
+    return serialized;
   }
 
   append(event: ThreadEvent): ThreadRuntimeState {
@@ -186,6 +225,7 @@ export class RuntimeLedger {
       actionRequired: this.state.actionRequired.map((event) => ({ ...event })),
       toolCalls: this.state.toolCalls.map((call) => ({ ...call })),
       terminalRuns: this.state.terminalRuns.map((run) => ({ ...run })),
+      checkpointRuntimeSnapshots: { ...this.state.checkpointRuntimeSnapshots },
     };
   }
 
@@ -197,6 +237,7 @@ export class RuntimeLedger {
       toolCalls: snapshot.toolCalls,
       terminalRuns: snapshot.terminalRuns,
       checkpoints: snapshot.events.filter((event) => event.kind === "checkpoint" || Boolean(event.checkpoint)),
+      checkpointRuntimeSnapshots: snapshot.checkpointRuntimeSnapshots,
     };
   }
 }

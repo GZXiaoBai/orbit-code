@@ -18,6 +18,8 @@ export type ActionRequiredStatus =
   | "expired"
   | "resolved";
 
+export type ActionGrantScope = "once" | "session" | "project";
+
 export interface ResumeAction {
   type: "approval" | "question" | "patchReview" | "verification";
   payloadId: string;
@@ -36,8 +38,10 @@ export interface ActionRequiredEvent {
   taskId?: string;
   runSessionId?: string;
   toolCallId?: string;
+  sourceEventId?: string;
   title: string;
   description: string;
+  grantScope?: ActionGrantScope;
   status: ActionRequiredStatus;
   createdAt: string;
   resolvedAt?: string;
@@ -54,6 +58,16 @@ export interface ActionResolution {
   status?: Extract<ActionRequiredStatus, "approved" | "denied" | "cancelled" | "expired" | "resolved">;
   resolvedAt?: string;
   reason?: string;
+  toolResultText?: string;
+}
+
+export interface ActionRequiredResolution {
+  status: ActionRequiredStatus;
+  toolResultText: string;
+  resumeAction?: ResumeAction;
+  resolvedAt?: string;
+  answer?: string;
+  hadLiveResolver?: boolean;
 }
 
 export function createActionRequiredEvent(
@@ -93,12 +107,27 @@ export function resolveActionRequiredEvent(
 ): ActionRequiredEvent {
   const status = resolution.status
     || (typeof resolution.approved === "boolean" ? (resolution.approved ? "approved" : "denied") : "resolved");
-  return {
+  const next = {
     ...event,
     status,
     answer: resolution.answer === null ? undefined : resolution.answer ?? event.answer,
     reason: resolution.reason ?? event.reason,
     resolvedAt: resolution.resolvedAt || new Date().toISOString(),
+    toolResultText: resolution.toolResultText ?? event.toolResultText,
+  };
+  return {
+    ...next,
+    toolResultText: next.toolResultText || actionRequiredToolResult(next),
+  };
+}
+
+export function actionRequiredResolution(event: ActionRequiredEvent): ActionRequiredResolution {
+  return {
+    status: event.status,
+    toolResultText: actionRequiredToolResult(event),
+    resumeAction: event.resumeAction,
+    resolvedAt: event.resolvedAt,
+    answer: event.answer,
   };
 }
 

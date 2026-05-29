@@ -5,6 +5,9 @@ import { EmptyState, StatusBadge } from "../../ui/primitives";
 import { localizedRuntimeText } from "../../components/thread/agentDisplayText";
 
 export function terminalStatusLabel(copy: AppCopy, run: TerminalRun): string {
+  if (run.recoveredState === "unknown-needs-continue") {
+    return copy.language === "中" ? "需手动继续" : "Needs continue";
+  }
   if (run.status === "running") return copy.terminal.executing;
   if (run.exitCode !== null && run.exitCode !== 0) return copy.terminal.failed;
   if (run.status === "failed") return copy.terminal.failed;

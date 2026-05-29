@@ -112,7 +112,7 @@ export interface AgentLoopCallbacks {
   onIteration?: (iteration: number, summary: string) => void;
   onToolCall: (toolCall: ToolCall) => void;
   onToolResult: (toolCallId: string, result: string) => void;
-  onRequestApproval: (tool: string, params: ToolParams) => Promise<boolean>;
+  onRequestApproval: (tool: string, params: ToolParams) => Promise<boolean | ToolApprovalOutcome>;
   onAskUser?: (question: string, params: ToolParams) => Promise<string | null>;
   onPatchProposed?: (params: ToolParams) => Promise<string>;
   onToolDeniedByMode?: (tool: ToolName, mode: AgentRuntimeMode, params: ToolParams) => void;
@@ -130,6 +130,22 @@ export interface AgentLoopCallbacks {
   onStreamStart?: (streamId: string) => void;
   onStreamChunk?: (streamId: string, content: string, accumulated: string) => void;
   onStreamEnd?: (streamId: string, finalContent: string) => void;
+}
+
+export interface ToolApprovalOutcome {
+  approved: boolean;
+  toolResult: string;
+  actionRequiredId?: string;
+}
+
+function normalizeApprovalOutcome(value: boolean | ToolApprovalOutcome, tool: string, params: ToolParams): ToolApprovalOutcome {
+  if (typeof value !== "boolean") return value;
+  return {
+    approved: value,
+    toolResult: value
+      ? `Approved ${tool}: ${JSON.stringify(params)}`
+      : `Denied ${tool}: ${JSON.stringify(params)}`,
+  };
 }
 
 export class AgentLoopEngine {
@@ -403,7 +419,9 @@ export class AgentLoopEngine {
           const rawToolName = tc.name as ToolName;
           if (!isToolAllowedInMode(this.runtimeMode, rawToolName)) {
             const result = `Tool denied by ${this.runtimeMode} mode: ${rawToolName}. Use only tools exposed by the current mode contract.`;
+            this.callbacks.onToolCall({ ...tc, name: rawToolName, status: "pending", startedAt: new Date().toISOString() });
             this.callbacks.onToolDeniedByMode?.(rawToolName, this.runtimeMode, tc.params);
+            this.callbacks.onToolResult(tc.id, result);
             toolResults.push({ id: tc.id, name: rawToolName, result });
             continue;
           }
@@ -427,6 +445,7 @@ export class AgentLoopEngine {
             this.isRunning = false;
             return summary;
           }
+          this.callbacks.onToolCall({ ...tc, name: toolName, status: "pending", startedAt: new Date().toISOString() });
 
           // Handle ask_user
           if (toolName === "ask_user") {
@@ -434,7 +453,7 @@ export class AgentLoopEngine {
             this.setPhase("waiting_approval", question);
             const answer = this.callbacks.onAskUser
               ? await this.callbacks.onAskUser(question, tc.params)
-              : (await this.callbacks.onRequestApproval("ask_user", { question }) ? "approved" : null);
+              : (normalizeApprovalOutcome(await this.callbacks.onRequestApproval("ask_user", { question }), "ask_user", { question }).approved ? "approved" : null);
             toolResults.push({
               id: tc.id,
               name: toolName,
@@ -476,14 +495,14 @@ export class AgentLoopEngine {
             }
             if (approvalMode === "ask") {
               this.setPhase("waiting_approval", `${toolName}: ${JSON.stringify(tc.params)}`);
-              const approved = await this.callbacks.onRequestApproval(toolName, tc.params);
-              if (!approved) {
+              const approvalParams = { ...tc.params, toolCallId: tc.id };
+              const approval = normalizeApprovalOutcome(await this.callbacks.onRequestApproval(toolName, approvalParams), toolName, approvalParams);
+              if (!approval.approved) {
                 toolResults.push({
                   id: tc.id,
                   name: toolName,
-                  result: [
+                  result: approval.toolResult || [
                     "User denied this action.",
-                    `Denied params: ${JSON.stringify(tc.params)}`,
                     "Do not retry the same action. Replan around the denial, fix the workspace/cwd/patch approach if relevant, and explain the corrected next step before requesting another risky action.",
                   ].join("\n"),
                 });

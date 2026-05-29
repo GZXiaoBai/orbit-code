@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEventPatch } from "../domain/agentEvents";
-import { createQuestionRequest } from "../domain/questionRequest";
+import { createActionRequiredEvent } from "../domain/actionRequired";
+import type { RuntimeLedgerSelectorSnapshot } from "../domain/threadEventSelectors";
 import type { ThreadEvent } from "../domain/threadEvents";
 import { createTerminalRun } from "../domain/terminalRun";
-import { createApprovalRequest } from "../state/useApprovalQueue";
 import { buildReviewDockModel } from "../features/review/reviewDockModel";
 
-describe("review dock queue model", () => {
+describe("review dock inspector model", () => {
   function patchEvent(overrides: Partial<ThreadEvent> & { patches: AgentEventPatch[] }): ThreadEvent {
     return {
       id: "patch-1",
@@ -20,14 +20,25 @@ describe("review dock queue model", () => {
     };
   }
 
-  it("groups command, question, patch, verification, and terminal queues", () => {
-    const command = createApprovalRequest("run_command", { command: "npm", args: ["test"] });
-    const verification = createApprovalRequest("run_command", {
-      command: "npm",
-      args: ["run", "build"],
-      sourceEventId: "patch-1",
+  function ledger(partial: Partial<RuntimeLedgerSelectorSnapshot>): RuntimeLedgerSelectorSnapshot {
+    return {
+      threadEvents: [],
+      actionRequired: [],
+      toolCalls: [],
+      terminalRuns: [],
+      checkpoints: [],
+      ...partial,
+    };
+  }
+
+  it("projects questions, patches, and terminal details from the ledger snapshot", () => {
+    const question = createActionRequiredEvent({
+      id: "question-1",
+      kind: "question",
+      title: "Question",
+      description: "Which target?",
+      question: "Which target?",
     });
-    const question = createQuestionRequest({ taskId: "task-1", question: "Which target?" });
     const pendingPatchEvent = patchEvent({
       patches: [{ path: "a.ts", oldContent: "a", newContent: "b", applied: false }],
     });
@@ -38,19 +49,19 @@ describe("review dock queue model", () => {
     const terminal = createTerminalRun({ taskId: "task-1", command: "npm", args: ["test"], status: "done", exitCode: 0 });
 
     const model = buildReviewDockModel({
-      approvals: [command, verification],
-      questions: [question],
-      events: [pendingPatchEvent, appliedPatchEvent],
-      terminalRuns: [terminal],
+      ledger: ledger({
+        threadEvents: [pendingPatchEvent, appliedPatchEvent],
+        actionRequired: [question],
+        terminalRuns: [terminal],
+      }),
     });
 
-    expect(model.commandApprovals).toHaveLength(1);
-    expect(model.verificationApprovals).toHaveLength(1);
-    expect(model.questions).toHaveLength(1);
+    expect(model.actionRequired).toHaveLength(1);
     expect(model.patchReviews).toHaveLength(1);
     expect(model.appliedPatchReviews).toHaveLength(1);
     expect(model.terminalRuns).toHaveLength(1);
     expect(model.counts.changes).toBe(1);
+    expect(model.counts.questions).toBe(1);
   });
 
   it("orders pending patch reviews newest first", () => {
@@ -68,10 +79,7 @@ describe("review dock queue model", () => {
     });
 
     const model = buildReviewDockModel({
-      approvals: [],
-      questions: [],
-      events: [oldPatch, newPatch],
-      terminalRuns: [],
+      ledger: ledger({ threadEvents: [oldPatch, newPatch] }),
     });
 
     expect(model.patchReviews.map((event) => event.id)).toEqual(["patch-new", "patch-old"]);
@@ -93,10 +101,7 @@ describe("review dock queue model", () => {
     });
 
     const model = buildReviewDockModel({
-      approvals: [],
-      questions: [],
-      events: [failedPatch],
-      terminalRuns: [],
+      ledger: ledger({ threadEvents: [failedPatch] }),
     });
 
     expect(model.patchReviews.map((event) => event.id)).toEqual(["patch-failed"]);
@@ -122,10 +127,7 @@ describe("review dock queue model", () => {
     });
 
     const model = buildReviewDockModel({
-      approvals: [],
-      questions: [],
-      events: [conflictPatch],
-      terminalRuns: [],
+      ledger: ledger({ threadEvents: [conflictPatch] }),
     });
 
     expect(model.patchReviews.map((event) => event.id)).toEqual(["patch-conflict"]);
@@ -133,17 +135,23 @@ describe("review dock queue model", () => {
     expect(model.counts.changes).toBe(1);
   });
 
-  it("scopes queues to the active workspace, thread, and task", () => {
-    const currentCommand = createApprovalRequest("run_command", {
-      command: "npm",
-      args: ["test"],
+  it("scopes inspector details to the active workspace, thread, and task", () => {
+    const currentAction = createActionRequiredEvent({
+      id: "action-current",
+      kind: "command",
+      tool: "run_command",
+      title: "Run command",
+      description: "npm test",
       workspacePath: "/tmp/project",
       threadId: "thread-a",
       taskId: "task-a",
     });
-    const otherCommand = createApprovalRequest("run_command", {
-      command: "npm",
-      args: ["build"],
+    const otherAction = createActionRequiredEvent({
+      id: "action-other",
+      kind: "command",
+      tool: "run_command",
+      title: "Run command",
+      description: "npm build",
       workspacePath: "/tmp/project",
       threadId: "thread-b",
       taskId: "task-b",
@@ -179,16 +187,17 @@ describe("review dock queue model", () => {
     });
 
     const model = buildReviewDockModel({
-      approvals: [currentCommand, otherCommand],
-      questions: [],
-      events: [currentPatch, otherPatch],
-      terminalRuns: [currentTerminal, otherTerminal],
+      ledger: ledger({
+        threadEvents: [currentPatch, otherPatch],
+        actionRequired: [currentAction, otherAction],
+        terminalRuns: [currentTerminal, otherTerminal],
+      }),
       workspacePath: "/tmp/project",
       threadId: "thread-a",
       taskId: "task-a",
     });
 
-    expect(model.commandApprovals.map((item) => item.params.command)).toEqual(["npm"]);
+    expect(model.actionRequired.map((item) => item.id)).toEqual(["action-current"]);
     expect(model.patchReviews.map((event) => event.id)).toEqual(["patch-current"]);
     expect(model.historyPatchReviews.map((event) => event.id)).toEqual(["patch-other"]);
     expect(model.terminalRuns.map((run) => run.taskId)).toEqual(["task-a"]);

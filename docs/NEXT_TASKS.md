@@ -78,13 +78,28 @@ Done:
 - Added `SmokeRunController` so fixture providers cannot mark the DeepSeek smoke gate as passed.
 - Added accepted-Plan `todoList` events and external rule import candidates (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules`) that remain disabled unless explicitly imported.
 - Tightened `PolicyEngine` so dynamic project-rule decisions cannot make the effective security policy more permissive.
+- Made `ReviewDockModel`, `selectPendingActions`, and `selectRunSteps` consume the runtime ledger snapshot instead of legacy approval/question queues, and persisted tool-call lifecycle records in session/thread snapshots.
+- Unified command approval, verification approval, structured questions, and patch review into `ActionRequiredOverlay`. `PermissionScheduler`, `ask_user`, and patch proposals now publish durable `ActionRequired` records through `ActionRequiredController`; old approval/question queues are no longer the UI main input.
+- Moved `ToolCallLifecycle` storage out of `useAgentRun`; tool-call creation and updates now write through `RuntimeLedger.appendToolCall/updateToolCall`, and `useAgentRun` only emits lifecycle write intents.
+- Added a non-React `ToolCallExecutor` for generated/result/approval lifecycle updates and a non-React `ResumeController` for explicit-continue restored action handling.
+- Fed persisted session/project approval grants into `PolicyEngine` with workspace, mode, tool, action, and cwd/path scope checks; Plan grants do not expand Build write permissions.
+- Added Active Grants visibility and revoke controls in the Inspector.
+- Moved legacy empty queue props behind `legacyQueuesForMigrationOnly`; new UI surfaces should not accept `approvalRequests`, `questionRequests`, or `AgentEvent` arrays as runtime facts.
+- Added `SessionRestoreController` and `CheckpointRestoreController` so restored pending actions, recovered terminal state, checkpoint runtime snapshots, and explicit-continue results have non-React test coverage.
+- Extended `ToolCallExecutor` with a permission-scheduling execution seam that records policy evaluation, ActionRequired linkage, and denied/approved tool results through the lifecycle store.
+- Added Context rule `globs / regex / policy` filtering and surfaced match reasons in the Current Context Inspector while preserving `permissionImpact: none`.
+- Added dedicated install/network risk copy in the unified approval overlay.
+- Added `AgentRunKernel` as the first deeper Runner Kernel extraction. `useAgentRun` now delegates Build-turn guard/provider/task/resume/final-summary preparation to a non-React module, and legacy-boundary tests prevent the hook from re-owning provider lookup.
+- Moved the Rust gateway monolith from `src-tauri/src/commands.rs` to `src-tauri/src/commands/mod.rs` and added file/command/patch/context/provider/vault child-module entry points while keeping public Tauri command names stable.
 
 Next:
 
 1. Extract `StreamingMessage` if the streaming surface grows beyond the current inline node.
 2. Move runtime/generated Agent status strings into an i18n-aware message layer.
-3. Decide whether approval grant scopes should persist across full app restart beyond restored session/thread snapshots.
-4. Add E2E coverage for:
+3. Add E2E coverage for Active Grants revoke; after revoke, the same command should request approval again.
+4. Move more of `useAgentRun`'s callback-heavy approval/question/patch result wiring into `AgentTurnRunner` + `ToolCallExecutor`; the current `AgentRunKernel` covers turn preparation but not streaming/tool-result callbacks.
+5. Remove the remaining legacy approval/question queue hooks after old snapshot migration no longer needs them.
+6. Add E2E coverage for:
    - Send button imports Plan.
    - Real provider/key form flow with manual API smoke against OpenAI/Anthropic/Gemini/DeepSeek.
    - Composer paste/drop attachment chips and explicit YAML Plan import choice.
@@ -98,11 +113,12 @@ Next:
 
 1. Turn `useWorkspace.ts` into a coordinator with a narrow Interface.
 2. Extract Modules:
-   - `useAgentRun` for Agent Loop phase, streaming, tool calls, cancellation. (done; writes typed ThreadEvent directly)
+   - `useAgentRun` for Agent Loop phase, streaming, tool calls, cancellation. (done; writes typed ThreadEvent directly and delegates tool lifecycle writes to `ToolCallExecutor`)
    - `usePatchWorkflow` for event patches, three-way conflict checks, transaction apply, refine. (done; updates typed ThreadEvent directly)
    - `useEmbeddingIndex` for build progress and index events. (done)
    - `useWindowActions` for multi-window. (done)
-3. Define a `ThreadViewModel` returned to `App.tsx` so components receive fewer workflow internals.
+3. Complete the non-React runner split: expand `AgentRunKernel` / `AgentTurnRunner` from Build-turn preparation into streaming, strict envelope repair, tool-result callbacks, cancellation, and error state; keep `ToolCallExecutor` as the only policy/action/tool lifecycle writer, and keep `SessionRestoreController` / `ResumeController` as the restored-action interpreters.
+4. Define a `ThreadViewModel` returned to `App.tsx` so components receive fewer workflow internals.
 
 ## P3 - Runtime Safety
 
@@ -125,13 +141,17 @@ Done:
 - Install/network command requests are classified as dedicated `ActionRequired` kinds before UI approval; fixture E2E covers install denial without terminal execution.
 - `RuntimeLedger` can carry tool-call lifecycle and terminal-run records; `useWorkspace` now derives pending actions and run steps from a ledger snapshot rather than merging legacy approval queues.
 - Context provider inspection now surfaces external assistant rule files only as disabled import candidates; these candidates do not enter prompt context and do not change permissions.
+- Session/project approval grants now participate in `PolicyEngine.evaluate()` instead of being only restored UI state; grants are mode-aware and can be revoked from the Inspector.
+- Session restore and checkpoint restore now have dedicated non-React controllers. Checkpoint restore can restore the ledger snapshot and create a fresh patch-review action when no pending patch review exists.
+- User context rules now support glob/regex/policy filtering; these filters only decide context injection and never widen runtime permissions.
 
 Next:
 
-1. Make Rust command execution fully explicit about workspace root/project id in every remaining compatibility path.
-2. Add E2E for verification approval reload recovery and terminal run completion after restored command execution.
-3. Add more localized install/network risk copy in the central approval overlay and Inspector history.
-4. Add real-project smoke coverage for user rules, `.orbit/rules`, `ORBIT.md`, and read-only skill manifests without allowing those sources to change permissions.
+1. Move implementations out of `src-tauri/src/commands/mod.rs` into the file/command/patch/context/provider/vault child modules, then make Rust command execution fully explicit about workspace root/project id in every remaining compatibility path.
+2. Add stale-write DeepSeek smoke coverage that verifies sandbox-preview conflict, replan, retry, and final typed event recovery.
+3. Add E2E for verification approval reload recovery and terminal run completion after restored command execution.
+4. Add more localized install/network risk copy in Inspector history.
+5. Add real-project smoke coverage for user rules, `.orbit/rules`, `ORBIT.md`, and read-only skill manifests without allowing those sources to change permissions.
 
 ## P4 - Product Design Cleanup
 

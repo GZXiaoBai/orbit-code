@@ -1,12 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentEvent } from "../domain/agentEvents";
 import type { AgentRunSession } from "../domain/agentRunSession";
-import { formatQuestionAnswer, type QuestionAnswerInput, type QuestionRequest } from "../domain/questionRequest";
+import { createQuestionRequest, formatQuestionAnswer, type QuestionAnswerInput, type QuestionRequest } from "../domain/questionRequest";
 import type { TerminalRun } from "../domain/terminalRun";
+import type { ToolCallLifecycle } from "../domain/toolCallLifecycle";
 import { createThreadEvent, type CreateThreadEventInput, type ThreadEvent } from "../domain/threadEvents";
 import { serializeThreadEvents } from "../domain/threadEvents";
-import type { ActionRequiredEvent } from "../domain/actionRequired";
+import {
+  createActionRequiredEvent,
+  type ActionRequiredEvent,
+} from "../domain/actionRequired";
 import type { ToolParams } from "../domain/agentLoop";
 import type { PermissionAction, PermissionDecision, PermissionPreset, ProjectSecurityOverride } from "../domain/types";
 import { selectRunSteps } from "../domain/runSteps";
@@ -18,8 +22,6 @@ import { useSession } from "./useSession";
 import { useFileSystem } from "./useFileSystem";
 import { useEmbeddingIndex } from "./useEmbeddingIndex";
 import { useWindowActions } from "./useWindowActions";
-import { useApprovalQueue } from "./useApprovalQueue";
-import { useQuestionQueue } from "./useQuestionQueue";
 import { useProjectStore } from "./useProjectStore";
 import { usePatchWorkflow } from "./usePatchWorkflow";
 import { useAgentRun } from "./useAgentRun";
@@ -27,6 +29,7 @@ import { useRunControls } from "./useRunControls";
 import { useLayoutPreferences } from "./useLayoutPreferences";
 import { useProjectActions } from "./useProjectActions";
 import { useThreadUiState } from "./useThreadUiState";
+import { useActionRequiredController } from "./actionRequiredController";
 import type { ImportedPlanState } from "./useSession";
 import { formatCommandForDisplay } from "../runtime/commandParser";
 import { selectVerificationCommand } from "../runtime/verificationCommand";
@@ -36,15 +39,21 @@ import { PermissionScheduler } from "../runtime/permissionScheduler";
 import { invokeDesktop } from "../runtime/desktopGateway";
 import { buildUsageSnapshot } from "./usageSnapshot";
 import { buildReviewDockModel } from "../features/review/reviewDockModel";
-import type { ApprovalGrant, ApprovalRequest } from "./useApprovalQueue";
+import { approvalGrantKey, persistableApprovalGrants, recoverApprovalGrants, type ApprovalGrant } from "../domain/approvalGrant";
+import type { ApprovalRequest } from "./useApprovalQueue";
 import { isTauri } from "../utils/tauri";
 import { findProvider } from "../providers/providerRegistry";
 import { runPlannerTurn, summarizePlanDraft } from "./plannerEngine";
 import {
   restoreThreadEventStore,
 } from "./threadEventStore";
-import { RuntimeLedger } from "./threadRuntimeStore";
+import { RuntimeLedger, type CheckpointRuntimeSnapshot, type ThreadRuntimeSnapshot, type ThreadRuntimeState } from "./threadRuntimeStore";
 import { createDeepSeekSmokeRunRecord, type SmokeRunRecord } from "../runtime/deepSeekSmokeHarness";
+import { buildSessionBrowserModel } from "../domain/sessionBrowser";
+import { inferPermissionActions } from "../runtime/policyEngine";
+import { ResumeController } from "./resumeController";
+import { CheckpointRestoreController } from "./checkpointRestoreController";
+import { SessionRestoreController } from "./sessionRestoreController";
 
 export type { AgentEvent } from "../domain/agentEvents";
 export type { ImportedPlanState, ImportErrorState, ProviderSettings } from "./useSession";
@@ -81,7 +90,10 @@ interface ThreadSnapshot {
   approvalGrants?: ApprovalGrant[];
   questionRequests?: QuestionRequest[];
   actionRequired?: ActionRequiredEvent[];
+  toolCalls?: ToolCallLifecycle[];
   terminalRuns?: TerminalRun[];
+  runtimeLedgerSnapshot?: ThreadRuntimeSnapshot;
+  checkpointRuntimeSnapshots?: Record<string, CheckpointRuntimeSnapshot>;
   updatedAt: string;
 }
 
@@ -93,6 +105,68 @@ function loadThreadSnapshots(): Record<string, ThreadSnapshot> {
   } catch {
     return {};
   }
+}
+
+function approvalKindForTool(tool: string): ActionRequiredEvent["kind"] {
+  if (tool === "run_command") return "command";
+  if (tool === "apply_patch" || tool === "propose_patch") return "write";
+  return "command";
+}
+
+function migrateLegacyQueuesToActions(input: {
+  approvals?: ApprovalRequest[] | null;
+  questions?: QuestionRequest[] | null;
+  existing?: ActionRequiredEvent[] | null;
+}): ActionRequiredEvent[] {
+  const actions = [...(input.existing || [])];
+  const ids = new Set(actions.map((action) => action.id));
+  for (const request of input.approvals || []) {
+    if (ids.has(request.id)) continue;
+    const action = createActionRequiredEvent({
+      id: request.id,
+      kind: approvalKindForTool(request.tool),
+      tool: request.tool,
+      params: request.params,
+      workspacePath: request.workspacePath,
+      threadId: request.threadId,
+      taskId: request.taskId,
+      title: request.tool === "run_command" ? "Run command" : `Authorize ${request.tool}`,
+      description: request.reason || request.tool,
+      reason: request.reason,
+      grantScope: request.grantScope,
+    });
+    actions.push({
+      ...action,
+      status: request.status === "approved" ? "approved" : request.status,
+      resolvedAt: request.resolvedAt,
+      toolResultText: request.status === "pending" ? undefined : `Legacy approval ${request.status}: ${request.tool}`,
+    });
+    ids.add(request.id);
+  }
+  for (const request of input.questions || []) {
+    if (ids.has(request.id)) continue;
+    const action = createActionRequiredEvent({
+      id: request.id,
+      kind: "question",
+      question: request.question,
+      options: request.options,
+      allowFreeform: request.allowFreeform,
+      workspacePath: request.workspacePath,
+      threadId: request.threadId,
+      taskId: request.taskId,
+      title: "Question",
+      description: request.question,
+    });
+    actions.push({
+      ...action,
+      status: request.status === "answered" ? "resolved" : request.status === "cancelled" ? "cancelled" : "pending",
+      answer: request.answer,
+      resolvedAt: request.resolvedAt,
+      toolResultText: request.answer ? `User answered: ${request.answer}` : undefined,
+    });
+    ids.add(request.id);
+  }
+  return actions;
 }
 
 async function readPackageScripts(workspacePath: string, cwd?: string): Promise<Record<string, string> | undefined> {
@@ -110,8 +184,34 @@ async function readPackageScripts(workspacePath: string, cwd?: string): Promise<
 export function useWorkspace() {
   const session = useSession();
 
-  const [threadEvents, setThreadEvents] = useState<ThreadEvent[]>([]);
-  const [actionRequired, setActionRequired] = useState<ActionRequiredEvent[]>([]);
+  const [runtimeState, setRuntimeState] = useState<ThreadRuntimeState>(() => new RuntimeLedger().snapshot());
+  const threadEvents = runtimeState.events;
+  const actionRequired = runtimeState.actionRequired;
+  const toolCallLifecycles = runtimeState.toolCalls;
+  const setThreadEvents = useCallback((next: SetStateAction<ThreadEvent[]>) => {
+    setRuntimeState((prev) => {
+      const events = typeof next === "function"
+        ? (next as (value: ThreadEvent[]) => ThreadEvent[])(prev.events)
+        : next;
+      return { ...prev, events };
+    });
+  }, []);
+  const setActionRequired = useCallback((next: SetStateAction<ActionRequiredEvent[]>) => {
+    setRuntimeState((prev) => {
+      const actions = typeof next === "function"
+        ? (next as (value: ActionRequiredEvent[]) => ActionRequiredEvent[])(prev.actionRequired)
+        : next;
+      return { ...prev, actionRequired: actions };
+    });
+  }, []);
+  const setToolCallLifecycles = useCallback((next: SetStateAction<ToolCallLifecycle[]>) => {
+    setRuntimeState((prev) => {
+      const calls = typeof next === "function"
+        ? (next as (value: ToolCallLifecycle[]) => ToolCallLifecycle[])(prev.toolCalls)
+        : next;
+      return { ...prev, toolCalls: calls.map((call) => ({ ...call })) };
+    });
+  }, []);
   const [currentContextInspector, setCurrentContextInspector] = useState<ContextInspectorModel>(() => emptyContextInspector());
   const [healingAttempts, setHealingAttempts] = useState<Record<string, number>>({});
 
@@ -127,16 +227,28 @@ export function useWorkspace() {
   const recoverAgentRunSessionRef = useRef<((session: AgentRunSession | null) => void) | null>(null);
   const recoverTerminalRunsRef = useRef<((runs: TerminalRun[], replace?: boolean) => void) | null>(null);
   const agentRunSessionRef = useRef<AgentRunSession | null>(null);
-  const approvalRequestsRef = useRef<ApprovalRequest[]>([]);
-  const questionRequestsRef = useRef<QuestionRequest[]>([]);
   const actionRequiredRef = useRef<ActionRequiredEvent[]>([]);
   const terminalRunsRef = useRef<TerminalRun[]>([]);
+  const toolCallLifecyclesRef = useRef<ToolCallLifecycle[]>([]);
+  const [approvalGrants, setApprovalGrants] = useState<ApprovalGrant[]>([]);
+  const resumeController = useMemo(() => new ResumeController(), []);
+  const checkpointRestoreController = useMemo(() => new CheckpointRestoreController(), []);
+  const sessionRestoreController = useMemo(() => new SessionRestoreController(resumeController), [resumeController]);
 
   useEffect(() => { threadEventsRef.current = threadEvents; }, [threadEvents]);
   useEffect(() => { actionRequiredRef.current = actionRequired; }, [actionRequired]);
+  useEffect(() => { toolCallLifecyclesRef.current = toolCallLifecycles; }, [toolCallLifecycles]);
   useEffect(() => { isRealLLMActiveRef.current = session.isRealLLMActive; }, [session.isRealLLMActive]);
   useEffect(() => { activeLLMConfigRef.current = session.activeLLMConfig; }, [session.activeLLMConfig]);
   useEffect(() => { healingAttemptsRef.current = healingAttempts; }, [healingAttempts]);
+
+  const getRuntimeThreadEvents = useCallback(() => threadEventsRef.current, []);
+  const getRuntimeActions = useCallback(() => actionRequiredRef.current, []);
+  const actionRequiredController = useActionRequiredController({
+    getThreadEvents: getRuntimeThreadEvents,
+    getActions: getRuntimeActions,
+    setActions: setActionRequired,
+  });
 
   useEffect(() => {
     return () => {
@@ -179,6 +291,51 @@ export function useWorkspace() {
     }).updateThreadEvent(id, update).events);
   }, []);
 
+  const appendPatchReviewAction = useCallback((event: ThreadEvent) => {
+    if (!event.patches?.some((patch) => !patch.applied)) return;
+    setActionRequired((prev) => {
+      if (prev.some((action) => action.sourceEventId === event.id || action.id === `patch-review-${event.id}`)) return prev;
+      return new RuntimeLedger({
+        threadEvents: threadEventsRef.current,
+        actionRequired: prev,
+      }).appendActionRequired(createActionRequiredEvent({
+        id: `patch-review-${event.id}`,
+        kind: "patchReview",
+        sourceEventId: event.id,
+        workspacePath: event.workspacePath,
+        threadId: event.threadId,
+        taskId: event.taskId,
+        runSessionId: event.runSessionId,
+        title: "Patch Review",
+        description: event.patches?.map((patch) => patch.path).join(", ") || event.message,
+      })).actionRequired;
+    });
+  }, []);
+
+  const appendToolCallLifecycle = useCallback((call: ToolCallLifecycle) => {
+    setRuntimeState((prev) => new RuntimeLedger({
+      threadEvents: prev.events,
+      actionRequired: prev.actionRequired,
+      toolCalls: prev.toolCalls,
+      terminalRuns: prev.terminalRuns,
+      checkpointRuntimeSnapshots: prev.checkpointRuntimeSnapshots,
+    }).appendToolCall(call));
+  }, []);
+
+  const updateToolCallLifecycle = useCallback((id: string, update: Partial<ToolCallLifecycle> | ((call: ToolCallLifecycle) => ToolCallLifecycle)) => {
+    setRuntimeState((prev) => new RuntimeLedger({
+      threadEvents: prev.events,
+      actionRequired: prev.actionRequired,
+      toolCalls: prev.toolCalls,
+      terminalRuns: prev.terminalRuns,
+      checkpointRuntimeSnapshots: prev.checkpointRuntimeSnapshots,
+    }).updateToolCall(id, update));
+  }, []);
+
+  const recoverToolCallLifecycles = useCallback((calls: ToolCallLifecycle[] = [], replace = true) => {
+    setToolCallLifecycles((prev) => replace ? calls : [...calls, ...prev]);
+  }, [setToolCallLifecycles]);
+
   const embeddingIndex = useEmbeddingIndex({ onEvent: (event) => emitWorkspaceEvent({
     kind: "agentMessage",
     workspacePath: event.workspacePath,
@@ -195,12 +352,10 @@ export function useWorkspace() {
     planDraft: event.planDraft,
   }) });
   const windowActions = useWindowActions();
-  const approvalQueue = useApprovalQueue();
-  const questionQueue = useQuestionQueue();
   const contextProviderRegistry = useMemo(() => new ContextProviderRegistry(), []);
   const permissionScheduler = useMemo(
-    () => new PermissionScheduler({ enqueueApproval: approvalQueue.requestApproval }),
-    [approvalQueue.requestApproval],
+    () => new PermissionScheduler({ requestAction: actionRequiredController.request }),
+    [actionRequiredController.request],
   );
   const projectStore = useProjectStore();
   const layout = useLayoutPreferences();
@@ -208,28 +363,95 @@ export function useWorkspace() {
   const runControls = useRunControls(session.providerSettings, session.apiKeys, session.credentialVaultProviders);
 
   useEffect(() => {
-    if (session.loadedQuestionRequests && session.loadedQuestionRequests.length > 0) {
-      questionQueue.recoverQuestions(session.loadedQuestionRequests);
-    }
-  }, [questionQueue.recoverQuestions, session.loadedQuestionRequests]);
-
-  useEffect(() => {
-    if (session.loadedApprovalRequests && session.loadedApprovalRequests.length > 0) {
-      approvalQueue.recoverApprovals(session.loadedApprovalRequests);
-    }
-  }, [approvalQueue.recoverApprovals, session.loadedApprovalRequests]);
-
-  useEffect(() => {
     if (session.loadedApprovalGrants && session.loadedApprovalGrants.length > 0) {
-      approvalQueue.recoverGrants(session.loadedApprovalGrants);
+      setApprovalGrants((prev) => persistableApprovalGrants([
+        ...recoverApprovalGrants(session.loadedApprovalGrants ?? []),
+        ...prev,
+      ]));
     }
-  }, [approvalQueue.recoverGrants, session.loadedApprovalGrants]);
+  }, [session.loadedApprovalGrants]);
 
   useEffect(() => {
-    if (session.loadedActionRequired && session.loadedActionRequired.length > 0 && actionRequired.length === 0) {
-      setActionRequired(session.loadedActionRequired);
+    if (actionRequired.length > 0) return;
+    const migrated = migrateLegacyQueuesToActions({
+      existing: session.loadedActionRequired,
+      approvals: session.loadedApprovalRequests,
+      questions: session.loadedQuestionRequests,
+    });
+    if (migrated.length > 0) {
+      setActionRequired(migrated);
     }
-  }, [actionRequired.length, session.loadedActionRequired]);
+  }, [actionRequired.length, session.loadedActionRequired, session.loadedApprovalRequests, session.loadedQuestionRequests]);
+
+  useEffect(() => {
+    const pendingPatchEvents = threadEvents.filter((event) =>
+      event.patches?.some((patch) => !patch.applied)
+    );
+    if (pendingPatchEvents.length === 0) return;
+    const existingSources = new Set(actionRequired.map((action) => action.sourceEventId).filter(Boolean));
+    const missing = pendingPatchEvents.filter((event) => !existingSources.has(event.id));
+    if (missing.length === 0) return;
+    setActionRequired((prev) => {
+      let next = prev;
+      for (const event of missing) {
+        next = new RuntimeLedger({
+          threadEvents,
+          actionRequired: next,
+        }).appendActionRequired(createActionRequiredEvent({
+          id: `patch-review-${event.id}`,
+          kind: "patchReview",
+          sourceEventId: event.id,
+          workspacePath: event.workspacePath,
+          threadId: event.threadId,
+          taskId: event.taskId,
+          runSessionId: event.runSessionId,
+          title: "Patch Review",
+          description: event.patches?.map((patch) => patch.path).join(", ") || event.message,
+        })).actionRequired;
+      }
+      return next;
+    });
+  }, [actionRequired, threadEvents]);
+
+  useEffect(() => {
+    const completedPatchActions = actionRequired.filter((action) => {
+      if (action.kind !== "patchReview" || action.status !== "pending" || !action.sourceEventId) return false;
+      const event = threadEvents.find((item) => item.id === action.sourceEventId);
+      return Boolean(event?.patches?.length && event.patches.every((patch) => patch.applied));
+    });
+    if (completedPatchActions.length === 0) return;
+    setActionRequired((prev) => {
+      let next = prev;
+      for (const action of completedPatchActions) {
+        next = new RuntimeLedger({
+          threadEvents,
+          actionRequired: next,
+        }).resolveActionRequired(action.id, {
+          status: "approved",
+          toolResultText: `Patch review approved and applied for ${action.sourceEventId}.`,
+        }).actionRequired;
+      }
+      return next;
+    });
+  }, [actionRequired, threadEvents]);
+
+  useEffect(() => {
+    if (session.loadedToolCalls && session.loadedToolCalls.length > 0 && toolCallLifecyclesRef.current.length === 0) {
+      recoverToolCallLifecycles(session.loadedToolCalls, true);
+    }
+  }, [recoverToolCallLifecycles, session.loadedToolCalls]);
+
+  useEffect(() => {
+    const snapshots = session.loadedRuntimeLedgerSnapshot?.checkpointRuntimeSnapshots;
+    if (!snapshots || Object.keys(snapshots).length === 0) return;
+    setRuntimeState((prev) => ({
+      ...prev,
+      checkpointRuntimeSnapshots: {
+        ...snapshots,
+        ...prev.checkpointRuntimeSnapshots,
+      },
+    }));
+  }, [session.loadedRuntimeLedgerSnapshot?.checkpointRuntimeSnapshots]);
 
   const startCollaborationFlow = useCallback(async (plan: ImportedPlanState) => {
     const task = plan?.plan.tasks.find(t => t.status !== "done" && t.status !== "verified");
@@ -428,6 +650,7 @@ export function useWorkspace() {
   const fs = useFileSystem(session.providerSettings, session.updateTask, handleCommandComplete, session.loadedTerminalRuns || []);
   const threadUi = useThreadUiState(fs.workspaceRoot, "default-thread");
   const [threadSnapshots, setThreadSnapshots] = useState<Record<string, ThreadSnapshot>>(() => loadThreadSnapshots());
+  const [sessionSearchQuery, setSessionSearchQuery] = useState("");
 
   const collectRuntimeContext = useCallback(async () => {
     const readWorkspaceFile = async (path: string) => {
@@ -667,59 +890,91 @@ export function useWorkspace() {
     localStorage.setItem(THREAD_SNAPSHOTS_KEY, JSON.stringify(threadSnapshots));
   }, [threadSnapshots]);
 
+  const cancelRuntimeActionsByKind = useCallback((kind: "question" | "approval" | "all" = "all") => {
+    const pending = actionRequiredRef.current.filter((action) => {
+      if (action.status !== "pending") return false;
+      if (kind === "all") return true;
+      if (kind === "question") return action.kind === "question";
+      return action.kind !== "question";
+    });
+    for (const action of pending) {
+      actionRequiredController.cancel(action.id);
+    }
+  }, [actionRequiredController]);
+
   const persistCurrentThreadSnapshot = useCallback((threadId = threadUi.threadId) => {
     if (!threadId) return;
     setThreadSnapshots((prev) => ({
       ...prev,
       [threadId]: {
         importedPlan: session.importedPlan,
+        runtimeLedgerSnapshot: new RuntimeLedger({
+          threadEvents: serializeThreadEvents(threadEventsRef.current),
+          actionRequired: actionRequiredRef.current,
+          toolCalls: toolCallLifecyclesRef.current,
+          terminalRuns: terminalRunsRef.current,
+          checkpointRuntimeSnapshots: runtimeState.checkpointRuntimeSnapshots,
+        }).serializeSnapshot(),
         threadEvents: serializeThreadEvents(threadEventsRef.current),
         agentRunSession: agentRunSessionRef.current,
-        approvalRequests: approvalRequestsRef.current,
-        approvalGrants: approvalQueue.approvalGrants,
-        questionRequests: questionRequestsRef.current,
+        approvalGrants: persistableApprovalGrants(approvalGrants),
         actionRequired: actionRequiredRef.current,
+        toolCalls: toolCallLifecyclesRef.current,
         terminalRuns: terminalRunsRef.current,
+        checkpointRuntimeSnapshots: runtimeState.checkpointRuntimeSnapshots,
         updatedAt: new Date().toISOString(),
       },
     }));
-  }, [approvalQueue.approvalGrants, session.importedPlan, threadUi.threadId]);
+  }, [approvalGrants, runtimeState.checkpointRuntimeSnapshots, session.importedPlan, threadUi.threadId]);
 
   const restoreThreadSnapshot = useCallback((threadId: string) => {
     const snapshot = threadSnapshots[threadId];
-    approvalQueue.cancelPendingApprovals();
-    questionQueue.cancelPendingQuestions();
+    const runtimeSnapshot = snapshot?.runtimeLedgerSnapshot;
+    const restoredSession = sessionRestoreController.restore({
+      runtimeLedgerSnapshot: runtimeSnapshot,
+      agentRunSession: snapshot?.agentRunSession ?? null,
+      threadEvents: snapshot?.threadEvents,
+      actionRequired: snapshot?.actionRequired,
+      terminalRuns: snapshot?.terminalRuns,
+    });
+    cancelRuntimeActionsByKind("all");
     session.restoreImportedPlan(snapshot?.importedPlan ?? null);
     setThreadEvents(restoreThreadEventStore({
-      threadEvents: snapshot?.threadEvents,
+      threadEvents: restoredSession.ledger.threadEvents.length > 0 ? restoredSession.ledger.threadEvents : snapshot?.threadEvents,
       agentEvents: snapshot?.agentEvents,
     }));
-    setActionRequired(snapshot?.actionRequired ?? []);
-    approvalQueue.recoverApprovals(snapshot?.approvalRequests ?? [], true);
-    approvalQueue.recoverGrants([
-      ...approvalQueue.approvalGrants.filter((grant) => grant.scope === "project"),
+    setActionRequired(migrateLegacyQueuesToActions({
+      existing: restoredSession.ledger.actionRequired.length > 0 ? restoredSession.ledger.actionRequired : snapshot?.actionRequired || [],
+      approvals: snapshot?.approvalRequests,
+      questions: snapshot?.questionRequests,
+    }));
+    setApprovalGrants((prev) => persistableApprovalGrants([
+      ...prev.filter((grant) => grant.scope === "project"),
       ...(snapshot?.approvalGrants ?? []),
-    ], true);
-    questionQueue.recoverQuestions(snapshot?.questionRequests ?? [], true);
-    recoverTerminalRunsRef.current?.(snapshot?.terminalRuns ?? [], true);
+    ]));
+    recoverTerminalRunsRef.current?.(restoredSession.ledger.terminalRuns.length > 0 ? restoredSession.ledger.terminalRuns : snapshot?.terminalRuns || [], true);
+    recoverToolCallLifecycles(restoredSession.ledger.toolCalls.length > 0 ? restoredSession.ledger.toolCalls : snapshot?.toolCalls || [], true);
+    setRuntimeState((prev) => ({
+      ...prev,
+      checkpointRuntimeSnapshots: runtimeSnapshot?.checkpointRuntimeSnapshots || snapshot?.checkpointRuntimeSnapshots || {},
+    }));
     recoverAgentRunSessionRef.current?.(snapshot?.agentRunSession ?? null);
-  }, [approvalQueue, questionQueue, session, threadSnapshots]);
+  }, [cancelRuntimeActionsByKind, recoverToolCallLifecycles, session, sessionRestoreController, threadSnapshots]);
 
   const createThread = useCallback(() => {
     persistCurrentThreadSnapshot();
     const nextThreadId = threadUi.createThread();
-    approvalQueue.cancelPendingApprovals();
-    questionQueue.cancelPendingQuestions();
-    approvalQueue.recoverApprovals([], true);
-    approvalQueue.recoverGrants(approvalQueue.approvalGrants.filter((grant) => grant.scope === "project"), true);
-    questionQueue.recoverQuestions([], true);
+    cancelRuntimeActionsByKind("all");
+    setApprovalGrants((prev) => prev.filter((grant) => grant.scope === "project"));
     setActionRequired([]);
+    recoverToolCallLifecycles([], true);
     recoverTerminalRunsRef.current?.([], true);
     recoverAgentRunSessionRef.current?.(null);
     session.restoreImportedPlan(null);
     setThreadEvents([]);
+    setRuntimeState((prev) => ({ ...prev, checkpointRuntimeSnapshots: {} }));
     return nextThreadId;
-  }, [approvalQueue, persistCurrentThreadSnapshot, questionQueue, session, threadUi]);
+  }, [cancelRuntimeActionsByKind, persistCurrentThreadSnapshot, recoverToolCallLifecycles, session, threadUi]);
 
   const switchThread = useCallback((nextThreadId: string) => {
     if (!nextThreadId || nextThreadId === threadUi.threadId) return;
@@ -727,6 +982,12 @@ export function useWorkspace() {
     threadUi.switchThread(nextThreadId);
     restoreThreadSnapshot(nextThreadId);
   }, [persistCurrentThreadSnapshot, restoreThreadSnapshot, threadUi]);
+
+  const restoreArchivedThreadById = useCallback((targetThreadId: string) => {
+    if (!targetThreadId) return;
+    threadUi.archiveThreadById(targetThreadId, false);
+    switchThread(targetThreadId);
+  }, [switchThread, threadUi]);
 
   const openFallbackThread = useCallback((removedThreadId: string) => {
     const fallback = threadUi.threadList.find((thread) => thread.threadId !== removedThreadId);
@@ -852,6 +1113,7 @@ export function useWorkspace() {
     reason,
     security: session.providerSettings.security,
     projectOverride: projectSecurityOverride,
+    approvalGrants,
     onActionCreated: (action) => {
       setActionRequired((prev) => new RuntimeLedger({
         threadEvents: threadEventsRef.current,
@@ -865,14 +1127,56 @@ export function useWorkspace() {
       }).updateActionRequired(action.id, action).actionRequired);
     },
     onCreated: (request) => onCreated?.(request),
-  }).then((result) => result.approved), [
+  }), [
     fs.workspaceRoot,
     permissionScheduler,
     projectSecurityOverride,
     runControls.mode,
     session.providerSettings.security,
     threadUi.threadId,
+    approvalGrants,
   ]);
+
+  const requestRuntimeQuestion = useCallback((
+    question: string,
+    taskId: string,
+    scope?: {
+      workspacePath?: string;
+      threadId?: string;
+      kind?: QuestionRequest["kind"];
+      source?: QuestionRequest["source"];
+      options?: QuestionRequest["options"];
+      allowFreeform?: boolean;
+    },
+    onCreated?: (request: QuestionRequest) => void,
+  ) => {
+    const request = createQuestionRequest({
+      taskId,
+      question,
+      workspacePath: scope?.workspacePath,
+      threadId: scope?.threadId,
+      kind: scope?.kind,
+      source: scope?.source,
+      options: scope?.options,
+      allowFreeform: scope?.allowFreeform,
+    });
+    onCreated?.(request);
+    return actionRequiredController.request({
+      id: request.id,
+      kind: "question",
+      question: request.question,
+      options: request.options,
+      allowFreeform: request.allowFreeform,
+      workspacePath: request.workspacePath,
+      threadId: request.threadId,
+      taskId: request.taskId,
+      title: "Question",
+      description: request.question,
+    }).then((resolution) => {
+      if (resolution.status === "cancelled" || resolution.status === "expired" || resolution.status === "denied") return null;
+      return resolution.answer || resolution.toolResultText.replace(/^User answered:\s*/i, "");
+    });
+  }, [actionRequiredController]);
 
   useEffect(() => {
     if (restoredRecentWorkspaceRef.current) return;
@@ -967,8 +1271,8 @@ export function useWorkspace() {
       sourceEventId: eventId,
       threadId: threadUi.threadId,
       workspacePath: fs.workspaceRoot,
-    }, reason).then((approved) => {
-      if (!approved) {
+    }, reason).then((permission) => {
+      if (!permission.approved) {
         emitWorkspaceEvent({
           id: `verify-denied-${Date.now()}`,
           kind: "verification",
@@ -1030,18 +1334,22 @@ export function useWorkspace() {
     securitySettings: session.providerSettings.security,
     projectSecurityOverride,
     requestApproval: requestRuntimePermission,
-    cancelPendingApprovals: approvalQueue.cancelPendingApprovals,
-    requestQuestion: questionQueue.requestQuestion,
-    cancelPendingQuestions: questionQueue.cancelPendingQuestions,
+    cancelPendingApprovals: () => cancelRuntimeActionsByKind("approval"),
+    requestQuestion: requestRuntimeQuestion,
+    cancelPendingQuestions: () => cancelRuntimeActionsByKind("question"),
     recordTerminalResult: fs.recordTerminalResult,
     emitThreadEvent,
     updateThreadEvent,
+    onPatchReviewRequired: appendPatchReviewAction,
+    toolCallLifecycleStore: {
+      list: () => toolCallLifecyclesRef.current,
+      append: appendToolCallLifecycle,
+      update: updateToolCallLifecycle,
+    },
     getExtensionContext: collectRuntimeContext,
     initialAgentRunSession: session.loadedAgentRunSession,
   });
 
-  useEffect(() => { approvalRequestsRef.current = approvalQueue.approvalRequests; }, [approvalQueue.approvalRequests]);
-  useEffect(() => { questionRequestsRef.current = questionQueue.questionRequests; }, [questionQueue.questionRequests]);
   useEffect(() => { terminalRunsRef.current = fs.terminalRuns; }, [fs.terminalRuns]);
   useEffect(() => { agentRunSessionRef.current = agentRun.agentRunSession; }, [agentRun.agentRunSession]);
 
@@ -1061,6 +1369,28 @@ export function useWorkspace() {
     };
   }, [agentRun.markVerificationCompletedForContinue]);
 
+  const saveCheckpointRuntimeSnapshot = useCallback((checkpointId: string, event: ThreadEvent) => {
+    setRuntimeState((prev) => new RuntimeLedger({
+      threadEvents: prev.events,
+      actionRequired: prev.actionRequired,
+      toolCalls: prev.toolCalls,
+      terminalRuns: terminalRunsRef.current,
+      checkpointRuntimeSnapshots: prev.checkpointRuntimeSnapshots,
+    }).saveCheckpointRuntimeSnapshot({
+      checkpointId,
+      threadId: event.threadId || threadUi.threadId,
+      workspacePath: event.workspacePath || fs.workspaceRoot,
+      runtimeLedgerSnapshot: {
+        threadEvents: serializeThreadEvents(prev.events),
+        actionRequired: prev.actionRequired,
+        toolCalls: prev.toolCalls,
+        terminalRuns: terminalRunsRef.current,
+      },
+      agentRunSession: agentRunSessionRef.current || undefined,
+      createdAt: new Date().toISOString(),
+    }));
+  }, [fs.workspaceRoot, threadUi.threadId]);
+
   const patchWorkflow = usePatchWorkflow({
     threadEventsRef,
     updateThreadEvent,
@@ -1068,6 +1398,7 @@ export function useWorkspace() {
     fs,
     isRealLLMActiveRef,
     activeLLMConfigRef,
+    onCheckpointCreated: saveCheckpointRuntimeSnapshot,
     onPatchApplied: (eventId) => {
       void requestPostPatchVerification(eventId);
       const event = threadEventsRef.current.find((item) => item.id === eventId);
@@ -1086,153 +1417,209 @@ export function useWorkspace() {
     },
   });
 
-  const reviewDockModel = useMemo(() => buildReviewDockModel({
-    approvals: approvalQueue.approvalRequests,
-    questions: questionQueue.questionRequests,
-    events: threadEvents,
-    terminalRuns: fs.terminalRuns,
-    workspacePath: fs.workspaceRoot,
-    threadId: threadUi.threadId,
-    taskId: agentRun.agentRunSession.taskId,
-  }), [agentRun.agentRunSession.taskId, approvalQueue.approvalRequests, fs.terminalRuns, fs.workspaceRoot, questionQueue.questionRequests, threadEvents, threadUi.threadId]);
-
   const runtimeLedgerSnapshot = useMemo(() => new RuntimeLedger({
     threadEvents,
     actionRequired,
+    toolCalls: toolCallLifecycles,
     terminalRuns: fs.terminalRuns,
-  }).ledgerSnapshot(), [actionRequired, fs.terminalRuns, threadEvents]);
+    checkpointRuntimeSnapshots: runtimeState.checkpointRuntimeSnapshots,
+  }).ledgerSnapshot(), [actionRequired, fs.terminalRuns, runtimeState.checkpointRuntimeSnapshots, threadEvents, toolCallLifecycles]);
 
-  const resolveRecoveredApprovalAction = useCallback((request: ApprovalRequest, approved: boolean) => {
-    const tool = request.tool;
-    const params = request.params as Record<string, unknown>;
-    const command = typeof params.command === "string" ? params.command : "";
-    const args = Array.isArray(params.args) ? params.args.filter((arg): arg is string => typeof arg === "string") : [];
-    const taskId = typeof params.taskId === "string"
-      ? params.taskId
-      : agentRun.agentRunSession.taskId || session.importedPlan?.plan.tasks[0]?.id || request.id;
-    const reason = typeof params.reason === "string" ? params.reason : request.reason;
-    const workspacePath = typeof params.workspacePath === "string" ? params.workspacePath : fs.workspaceRoot;
-    const cwd = typeof params.cwd === "string" ? params.cwd : undefined;
+  const reviewDockModel = useMemo(() => buildReviewDockModel({
+    ledger: runtimeLedgerSnapshot,
+    workspacePath: fs.workspaceRoot,
+    threadId: threadUi.threadId,
+    taskId: agentRun.agentRunSession.taskId,
+    approvalGrants,
+  }), [agentRun.agentRunSession.taskId, approvalGrants, fs.workspaceRoot, runtimeLedgerSnapshot, threadUi.threadId]);
 
-    emitWorkspaceEvent({
-      id: `recovered-approval-${Date.now()}`,
-      kind: "approval",
-      workspacePath,
-      threadId: request.threadId || agentRun.agentRunSession.threadId || threadUi.threadId,
-      taskId,
-      role: "reviewer",
-      title: approved ? "Recovered Approval Granted" : "Recovered Approval Denied",
-      status: "done",
-      message: approved
-        ? `你已批准恢复的 ${tool} 操作。`
-        : `你已拒绝恢复的 ${tool} 操作。`,
-      approval: {
-        requestId: request.id,
-        tool,
-        params: params as ToolParams,
-        status: approved ? "approved" : "denied",
-        grantScope: request.grantScope,
-        reason,
-      },
+  const sessionBrowserModel = useMemo(() => buildSessionBrowserModel({
+    threads: threadUi.allThreadsForWorkspace,
+    snapshots: threadSnapshots,
+    workspacePath: fs.workspaceRoot,
+    activeThreadId: threadUi.threadId,
+    searchQuery: sessionSearchQuery,
+  }), [fs.workspaceRoot, sessionSearchQuery, threadSnapshots, threadUi.allThreadsForWorkspace, threadUi.threadId]);
+
+  const resolveActionRequired = useCallback((id: string, approved: boolean) => {
+    const action = actionRequiredRef.current.find((item) => item.id === id);
+    const result = actionRequiredController.resolve(id, {
+      status: approved ? "approved" : "denied",
+      reason: approved ? "User approved this action." : "User denied this action.",
     });
+    if (approved && action && action.grantScope && action.grantScope !== "once") {
+      setApprovalGrants((prev) => persistableApprovalGrants([
+        {
+          id: `grant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          tool: action.tool || action.kind,
+          key: approvalGrantKey(action.tool || action.kind, action.params || {}),
+          mode: runControls.mode,
+          actions: inferPermissionActions(action.tool || action.kind, action.params || {}),
+          cwdOrPathScope: typeof action.params?.cwd === "string" ? action.params.cwd : undefined,
+          workspacePath: action.workspacePath,
+          threadId: action.threadId,
+          scope: action.grantScope as "session" | "project",
+          createdAt: new Date().toISOString(),
+        },
+        ...prev,
+      ]));
+    }
+    if (!action || result.hadLiveResolver) return;
+    if (approved && action.tool === "run_command") {
+      const params = action.params as Record<string, unknown> | undefined;
+      const command = typeof params?.command === "string" ? params.command : "";
+      const args = Array.isArray(params?.args) ? params.args.filter((arg): arg is string => typeof arg === "string") : [];
+      if (command) {
+        fs.executeStructuredCommand({
+          taskId: action.taskId || agentRun.agentRunSession.taskId || action.id,
+          threadId: action.threadId || agentRun.agentRunSession.threadId || threadUi.threadId,
+          approvalId: action.id,
+          command,
+          args,
+          reason: action.reason || action.description,
+          workspacePath: action.workspacePath || fs.workspaceRoot,
+          cwd: typeof params?.cwd === "string" ? params.cwd : undefined,
+        });
+        return;
+      }
+    }
+    agentRun.markRecoveredActionForContinue(
+      action.kind === "verification" ? "verification" : "approval",
+      action.resumeAction || { type: action.kind === "verification" ? "verification" : "approval", payloadId: id },
+      result.toolResultText,
+      approved
+        ? "恢复的授权已批准。点击“继续执行”后，Agent 会继续当前任务。"
+        : "恢复的授权已拒绝。点击“继续执行”后，Agent 会把拒绝结果纳入下一步。",
+    );
+  }, [actionRequiredController, agentRun, fs, runControls.mode, threadUi.threadId]);
 
-    if (!approved) {
-      agentRun.markRecoveredActionForContinue(
-        "approval",
-        { type: "approval", payloadId: request.id },
-        `Denied ${tool}: ${JSON.stringify(params)}`,
-        "恢复的审批已被拒绝。点击“继续执行”后，Agent 会把拒绝结果纳入下一步规划。",
-      );
-      return;
-    }
-    if (tool !== "run_command" || !command) {
-      agentRun.markRecoveredActionForContinue(
-        "approval",
-        { type: "approval", payloadId: request.id },
-        `Approved ${tool}: ${JSON.stringify(params)}`,
-        "恢复的审批已通过。点击“继续执行”后，Agent 会继续当前任务。",
-      );
-      return;
-    }
-    fs.executeStructuredCommand({
-      taskId,
-      threadId: request.threadId || agentRun.agentRunSession.threadId || threadUi.threadId,
-      approvalId: request.id,
-      command,
-      args,
-      reason,
-      workspacePath,
-      cwd,
+  const cancelActionRequired = useCallback((id: string) => {
+    const action = actionRequiredRef.current.find((item) => item.id === id);
+    const result = actionRequiredController.cancel(id);
+    if (!action || result.hadLiveResolver) return;
+    agentRun.markRecoveredActionForContinue(
+      action.kind === "question" ? "question" : action.kind === "patchReview" ? "patchReview" : action.kind === "verification" ? "verification" : "approval",
+      action.resumeAction || { type: action.kind === "question" ? "question" : action.kind === "patchReview" ? "patchReview" : action.kind === "verification" ? "verification" : "approval", payloadId: id },
+      result.toolResultText,
+      "恢复的待处理操作已取消。点击“继续执行”后，Agent 会继续当前任务。",
+    );
+  }, [actionRequiredController, agentRun]);
+
+  const answerActionRequiredQuestion = useCallback((id: string, input: string | QuestionAnswerInput) => {
+    const action = actionRequiredRef.current.find((item) => item.id === id);
+    const question: QuestionRequest = {
+      id,
+      workspacePath: action?.workspacePath || fs.workspaceRoot,
+      threadId: action?.threadId || threadUi.threadId,
+      taskId: action?.taskId || "",
+      kind: action?.options?.length ? "singleChoice" : "text",
+      source: "agent",
+      question: action?.question || action?.description || "",
+      options: action?.options,
+      allowFreeform: action?.allowFreeform,
+      status: "pending",
+      createdAt: action?.createdAt || new Date().toISOString(),
+    };
+    const formatted = formatQuestionAnswer(question, input);
+    const result = actionRequiredController.resolve(id, {
+      status: "resolved",
+      answer: formatted.answer,
+      toolResultText: `User answered: ${formatted.answer}`,
     });
-  }, [agentRun, emitWorkspaceEvent, fs, session.importedPlan?.plan.tasks, threadUi.threadId]);
-
-  const resolveApproval = useCallback((id: string, approved: boolean) => {
-    const request = approvalQueue.approvalRequests.find((item) => item.id === id);
-    const hadLiveResolver = approvalQueue.resolveApproval(id, approved);
-    if (!request || hadLiveResolver) return;
-    resolveRecoveredApprovalAction(request, approved);
-  }, [approvalQueue, resolveRecoveredApprovalAction]);
-
-  const answerQuestion = useCallback((id: string, input: string | QuestionAnswerInput) => {
-    const question = questionQueue.questionRequests.find((item) => item.id === id);
-    const answer = question ? formatQuestionAnswer(question, input).answer : typeof input === "string" ? input : input.answer || "";
-    const hadLiveResolver = questionQueue.answerQuestion(id, input);
-    if (!question || hadLiveResolver) return;
     emitWorkspaceEvent({
-      id: `recovered-question-${Date.now()}`,
+      id: `question-result-${Date.now()}`,
       kind: "question",
-      workspacePath: question.workspacePath || fs.workspaceRoot,
-      threadId: question.threadId || threadUi.threadId,
+      workspacePath: question.workspacePath,
+      threadId: question.threadId,
       taskId: question.taskId,
       role: "planner",
-      title: "Recovered Question Answered",
+      title: "Question Answered",
       status: "done",
-      message: `你已回答恢复的问题：${answer}`,
+      message: `你已回答 Agent 的问题：${formatted.answer}。点击“继续执行”后 Agent 才会继续。`,
       question: {
         requestId: id,
         question: question.question,
         status: "answered",
-        answer,
-        selectedOptionId: typeof input === "string" ? undefined : input.selectedOptionId,
+        answer: formatted.answer,
+        selectedOptionId: formatted.selectedOptionId,
         options: question.options,
       },
     });
+    if (result.hadLiveResolver) return;
     agentRun.markRecoveredActionForContinue(
       "question",
-      { type: "question", payloadId: id },
-      `User answered: ${answer}`,
+      action?.resumeAction || { type: "question", payloadId: id },
+      result.toolResultText,
       "恢复的问题已回答。点击“继续执行”后，Agent 会继续当前任务。",
     );
-  }, [agentRun, emitWorkspaceEvent, fs.workspaceRoot, questionQueue, threadUi.threadId]);
+  }, [actionRequiredController, agentRun, emitWorkspaceEvent, fs.workspaceRoot, threadUi.threadId]);
 
-  const cancelQuestion = useCallback((id: string) => {
-    const question = questionQueue.questionRequests.find((item) => item.id === id);
-    const hadLiveResolver = questionQueue.cancelQuestion(id);
-    if (!question || hadLiveResolver) return;
-    emitWorkspaceEvent({
-      id: `recovered-question-cancel-${Date.now()}`,
-      kind: "question",
-      workspacePath: question.workspacePath || fs.workspaceRoot,
-      threadId: question.threadId || threadUi.threadId,
-      taskId: question.taskId,
-      role: "planner",
-      title: "Recovered Question Cancelled",
-      status: "done",
-      message: "你取消了恢复的问题。",
-      question: {
-        requestId: id,
-        question: question.question,
-        status: "cancelled",
-        options: question.options,
-      },
+  const updateActionRequiredGrantScope = useCallback((id: string, grantScope: "once" | "session" | "project") => {
+    setActionRequired((prev) => new RuntimeLedger({
+      threadEvents: threadEventsRef.current,
+      actionRequired: prev,
+    }).updateActionRequired(id, { grantScope }).actionRequired);
+  }, []);
+
+  const revokeApprovalGrant = useCallback((id: string) => {
+    setApprovalGrants((prev) => prev.filter((grant) => grant.id !== id));
+  }, []);
+
+  const applyActionRequiredPatch = useCallback(async (eventId: string) => {
+    await patchWorkflow.applyEventPatch(eventId);
+  }, [patchWorkflow]);
+
+  const restoreCheckpointRuntime = useCallback((checkpointId: string) => {
+    const saved = runtimeState.checkpointRuntimeSnapshots[checkpointId];
+    if (!saved) return false;
+    const checkpointEvent = threadEventsRef.current.find((item) => item.checkpoint?.checkpointId === checkpointId);
+    const restored = checkpointRestoreController.restore({
+      checkpointId,
+      checkpointEvent,
+      runtimeSnapshot: saved,
+      fallbackWorkspacePath: fs.workspaceRoot,
+      fallbackThreadId: threadUi.threadId,
+    });
+    setRuntimeState({
+      events: serializeThreadEvents(restored.ledger.threadEvents),
+      actionRequired: restored.ledger.actionRequired,
+      toolCalls: restored.ledger.toolCalls,
+      terminalRuns: restored.ledger.terminalRuns,
+      checkpointRuntimeSnapshots: runtimeState.checkpointRuntimeSnapshots,
+    });
+    recoverTerminalRunsRef.current?.(restored.ledger.terminalRuns || [], true);
+    recoverToolCallLifecycles(restored.ledger.toolCalls || [], true);
+    recoverAgentRunSessionRef.current?.((saved.agentRunSession as AgentRunSession | undefined) ?? null);
+    const resume = resumeController.resume({
+      kind: "patchReview",
+      resumeAction: restored.action.resumeAction || { type: "patchReview", payloadId: restored.action.id },
+      toolResultText: `Checkpoint ${checkpointId} restored. User must explicitly continue.`,
+      message: "已恢复 checkpoint。点击“继续执行”后，Agent 会基于恢复后的状态继续。",
     });
     agentRun.markRecoveredActionForContinue(
-      "question",
-      { type: "question", payloadId: id },
-      "User cancelled question.",
-      "恢复的问题已取消。点击“继续执行”后，Agent 会收到取消结果并重新规划。",
+      "patchReview",
+      resume.resumeAction,
+      resume.toolResultText,
+      resume.message,
     );
-  }, [agentRun, emitWorkspaceEvent, fs.workspaceRoot, questionQueue, threadUi.threadId]);
+    return true;
+  }, [agentRun, checkpointRestoreController, fs.workspaceRoot, recoverToolCallLifecycles, resumeController, runtimeState.checkpointRuntimeSnapshots, threadUi.threadId]);
+
+  const rollbackEventPatch = useCallback(async (eventId: string) => {
+    const event = threadEventsRef.current.find((item) => item.id === eventId);
+    const checkpointId = event?.checkpoint?.checkpointId;
+    await patchWorkflow.rollbackEventPatch(eventId);
+    if (checkpointId) restoreCheckpointRuntime(checkpointId);
+  }, [patchWorkflow, restoreCheckpointRuntime]);
+
+  const restoreCheckpoint = useCallback(async (checkpointId: string) => {
+    const event = threadEventsRef.current.find((item) => item.checkpoint?.checkpointId === checkpointId);
+    if (event?.id) {
+      await rollbackEventPatch(event.id);
+      return;
+    }
+    restoreCheckpointRuntime(checkpointId);
+  }, [rollbackEventPatch, restoreCheckpointRuntime]);
 
   useEffect(() => {
     if (session.isLoading) return;
@@ -1242,23 +1629,24 @@ export function useWorkspace() {
         activeThreadId: threadUi.threadId,
         importedPlan: session.importedPlan,
         providerSettings: session.providerSettings,
-        agentEvents: [],
-        threadEvents: serializeThreadEvents(threadEvents),
+        runtimeLedgerSnapshot: new RuntimeLedger({
+          threadEvents: serializeThreadEvents(threadEvents),
+          actionRequired,
+          toolCalls: toolCallLifecycles,
+          terminalRuns: fs.terminalRuns,
+          checkpointRuntimeSnapshots: runtimeState.checkpointRuntimeSnapshots,
+        }).serializeSnapshot(),
         agentRunSession: agentRun.agentRunSession,
-        approvalRequests: approvalQueue.approvalRequests,
-        approvalGrants: approvalQueue.approvalGrants,
-        questionRequests: questionQueue.questionRequests,
-        actionRequired,
-        terminalRuns: fs.terminalRuns,
+        approvalGrants: persistableApprovalGrants(approvalGrants),
         lastActiveAt: new Date().toISOString(),
       }).catch(console.error);
     }, 2000);
     return () => clearTimeout(timer);
-  }, [session.importedPlan, session.providerSettings, threadEvents, actionRequired, agentRun.agentRunSession, approvalQueue.approvalRequests, questionQueue.questionRequests, fs.terminalRuns, session.isLoading, threadUi.threadId]);
+  }, [session.importedPlan, session.providerSettings, threadEvents, actionRequired, agentRun.agentRunSession, toolCallLifecycles, runtimeState.checkpointRuntimeSnapshots, approvalGrants, fs.terminalRuns, session.isLoading, threadUi.threadId]);
 
   useEffect(() => {
     persistCurrentThreadSnapshot();
-  }, [threadEvents, actionRequired, approvalQueue.approvalGrants, approvalQueue.approvalRequests, fs.terminalRuns, persistCurrentThreadSnapshot, questionQueue.questionRequests, session.importedPlan]);
+  }, [threadEvents, actionRequired, toolCallLifecycles, approvalGrants, fs.terminalRuns, persistCurrentThreadSnapshot, session.importedPlan]);
 
   return {
     // From session
@@ -1309,7 +1697,6 @@ export function useWorkspace() {
     threadEvents,
     emitThreadEvent,
     updateThreadEvent,
-    agentEvents: [],
     actionRequired,
     pendingActions: selectPendingActions(runtimeLedgerSnapshot),
     runSteps: selectRunSteps(runtimeLedgerSnapshot),
@@ -1318,8 +1705,9 @@ export function useWorkspace() {
         startCollaborationFlow(session.importedPlan);
       }
     },
-    applyEventPatch: patchWorkflow.applyEventPatch,
-    rollbackEventPatch: patchWorkflow.rollbackEventPatch,
+    applyEventPatch: applyActionRequiredPatch,
+    rollbackEventPatch,
+    restoreCheckpoint,
     refinePatch: patchWorkflow.refinePatch,
     updateEventPatch: patchWorkflow.updateEventPatch,
     agentLoopPhase: agentRun.agentLoopPhase,
@@ -1335,19 +1723,24 @@ export function useWorkspace() {
     streamingActive: agentRun.streamingActive,
     agentRunSession: agentRun.agentRunSession,
     reviewDockModel,
+    sessionBrowserModel,
+    sessionSearchQuery,
+    setSessionSearchQuery,
     currentContextInspector,
     refreshCurrentContext,
     evaluateDeepSeekSmokeRun,
     writeProjectContextFile,
-    questionRequests: questionQueue.questionRequests,
-    pendingQuestions: questionQueue.pendingQuestions,
-    answerQuestion,
-    cancelQuestion,
+    legacyQueuesForMigrationOnly: {
+      agentEvents: [] as AgentEvent[],
+      approvalRequests: [] as ApprovalRequest[],
+      questionRequests: [] as QuestionRequest[],
+    },
+    answerActionRequiredQuestion,
+    cancelActionRequired,
     openNewWindow: () => windowActions.openNewWindow(fs.workspaceRoot || undefined),
-    approvalRequests: approvalQueue.approvalRequests,
-    pendingApprovals: approvalQueue.pendingApprovals,
-    resolveApproval,
-    updateApprovalGrantScope: approvalQueue.updateGrantScope,
+    resolveActionRequired,
+    updateActionRequiredGrantScope,
+    revokeApprovalGrant,
     recentProjects: projectStore.recentProjects,
     visibleProjects: projectActions.visibleProjects,
     archivedProjects: projectActions.archivedProjects,
@@ -1369,6 +1762,7 @@ export function useWorkspace() {
     threadsByProject: threadUi.threadsByProject,
     createThread,
     switchThread,
+    restoreThreadById: restoreArchivedThreadById,
     updateThreadUiState: threadUi.updateThreadUiState,
     togglePinnedThread: threadUi.togglePinnedThread,
     renameThread: threadUi.renameThread,

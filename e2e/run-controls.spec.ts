@@ -513,6 +513,33 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(page.locator(".plan-card")).toBeVisible({ timeout: 5000 });
   });
 
+  test("long thread history scrolls without pushing the file tree below the rail", async ({ page }) => {
+    await installDesktopFixture(page);
+    await page.setViewportSize({ width: 1440, height: 920 });
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+
+    await page.getByRole("button", { name: "手动路径" }).click();
+    await page.getByPlaceholder(/输入本地项目目录/).fill(fixtureWorkspace);
+    await page.getByRole("button", { name: "应用" }).click();
+
+    for (let i = 0; i < 14; i += 1) {
+      await page.locator(".project-threads header button").click();
+    }
+
+    await expect(page.locator(".project-thread-list")).toBeVisible();
+    await expect(page.locator(".rail-files")).toBeVisible();
+    const threadListCanScroll = await page.locator(".project-thread-list").evaluate((element) => element.scrollHeight > element.clientHeight);
+    expect(threadListCanScroll).toBe(true);
+
+    const railFilesBox = await page.locator(".rail-files").boundingBox();
+    const footerBox = await page.locator(".rail-footer").boundingBox();
+    expect(railFilesBox).not.toBeNull();
+    expect(footerBox).not.toBeNull();
+    expect(railFilesBox?.height || 0).toBeGreaterThan(180);
+    expect((railFilesBox?.y || 0) + (railFilesBox?.height || 0)).toBeLessThanOrEqual((footerBox?.y || 0) + 1);
+  });
+
   test("new threads stay blank after session restore and thread rows can archive or delete", async ({ page }) => {
     await installDesktopFixture(page);
     await page.addInitScript(() => {

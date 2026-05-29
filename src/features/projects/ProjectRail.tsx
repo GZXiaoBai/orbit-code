@@ -222,21 +222,31 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
               <MessageSquarePlus size={14} />
             </button>
           </header>
+          <div className="thread-search">
+            <Search size={13} />
+            <input
+              value={workspace.sessionSearchQuery}
+              onChange={(event) => workspace.setSessionSearchQuery(event.target.value)}
+              placeholder={copy.language === "中" ? "搜索会话 / 恢复归档" : "Search sessions / restore archived"}
+            />
+          </div>
           <div className="project-thread-list">
-            {workspace.threadList.map((thread) => (
+            {workspace.sessionBrowserModel.sessions.map((thread) => (
               <div
                 key={thread.threadId}
-                className={`project-thread-row ${workspace.threadId === thread.threadId ? "active" : ""}`}
+                className={`project-thread-row ${workspace.threadId === thread.threadId ? "active" : ""} ${thread.archived ? "archived" : ""}`}
               >
                 <button
                   type="button"
                   className={`project-thread-select ${workspace.threadId === thread.threadId ? "active" : ""}`}
-                  onClick={() => workspace.switchThread(thread.threadId)}
+                  onClick={() => thread.archived ? workspace.restoreThreadById(thread.threadId) : workspace.switchThread(thread.threadId)}
                   title={thread.title || copy.workbench.untitledThread}
                 >
                   <MessageSquare size={13} />
                   <span>{thread.title || copy.workbench.untitledThread}</span>
-                  <small>{formatThreadAge(thread.updatedAt)}</small>
+                  <small>
+                    {thread.pendingActionCount > 0 ? `${thread.pendingActionCount} pending` : thread.archived ? copy.workbench.restoreThread : formatThreadAge(thread.lastActiveAt)}
+                  </small>
                 </button>
                 <button
                   type="button"
@@ -266,6 +276,12 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
                       <Archive size={15} />
                       {copy.workbench.archiveThread}
                     </button>
+                    {thread.archived ? (
+                      <button type="button" role="menuitem" onClick={() => { workspace.restoreThreadById(thread.threadId); closeProjectMenu(); }}>
+                        <RefreshCcw size={15} />
+                        {copy.workbench.restoreThread}
+                      </button>
+                    ) : null}
                     <button type="button" role="menuitem" onClick={() => { workspace.deleteThreadById(thread.threadId); closeProjectMenu(); }}>
                       <Trash2 size={15} />
                       {copy.workbench.removeThread}

@@ -1,10 +1,9 @@
 import { CheckCircle2, CircleAlert, Clock3, FileText, MessageSquare, Play, RefreshCw, TerminalSquare, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import type { AgentLoopPhase, ToolCall } from "../../domain/agentLoop";
-import type { QuestionRequest } from "../../domain/questionRequest";
+import type { PendingAction } from "../../domain/threadEventSelectors";
 import type { ThreadEvent } from "../../domain/threadEvents";
 import type { AppCopy } from "../../i18n/copy";
-import type { ApprovalRequest } from "../../state/useApprovalQueue";
 import { compactRuntimeTextForTimeline, localizedAgentEventName } from "./agentDisplayText";
 import { RichFileText } from "./RichFileText";
 
@@ -14,9 +13,7 @@ interface AgentTimelineProps {
   agentLoopPhase?: AgentLoopPhase;
   agentLoopRunning?: boolean;
   agentLoopToolCalls?: ToolCall[];
-  pendingApprovals?: ApprovalRequest[];
-  pendingQuestions?: QuestionRequest[];
-  pendingPatchEvents?: ThreadEvent[];
+  pendingActions?: PendingAction[];
   onStartAgentLoop?: () => void;
   onContinueAgentRun?: () => void;
   canContinueAgentRun?: boolean;
@@ -36,9 +33,7 @@ export function AgentTimeline({
   agentLoopPhase,
   agentLoopRunning,
   agentLoopToolCalls = [],
-  pendingApprovals = [],
-  pendingQuestions = [],
-  pendingPatchEvents = [],
+  pendingActions = [],
   onStartAgentLoop,
   onContinueAgentRun,
   canContinueAgentRun,
@@ -92,9 +87,7 @@ export function AgentTimeline({
         })}
         <PendingActionStrip
           copy={copy}
-          approvals={pendingApprovals}
-          questions={pendingQuestions}
-          patchEvents={pendingPatchEvents}
+          actions={pendingActions}
         />
         {streamingActive && (
           <div className="timeline-node message-stream-item message-assistant role-coder status-thinking">
@@ -152,32 +145,27 @@ export function AgentTimeline({
 
 function PendingActionStrip({
   copy,
-  approvals,
-  questions,
-  patchEvents,
+  actions,
 }: {
   copy: AppCopy;
-  approvals: ApprovalRequest[];
-  questions: QuestionRequest[];
-  patchEvents: ThreadEvent[];
+  actions: PendingAction[];
 }) {
-  const items = [
-    approvals.length > 0 ? {
-      key: "approval",
-      label: copy.language === "中" ? `批准命令 ${approvals.length}` : `Approve command ${approvals.length}`,
-      onClick: () => focusElement(".approval-dialog"),
-    } : null,
-    questions.length > 0 ? {
-      key: "question",
-      label: copy.language === "中" ? `回答问题 ${questions.length}` : `Answer question ${questions.length}`,
-      onClick: () => focusElement(".structured-question-dialog"),
-    } : null,
-    patchEvents.length > 0 ? {
-      key: "patch",
-      label: copy.language === "中" ? `审查补丁 ${patchEvents.length}` : `Review patch ${patchEvents.length}`,
-      onClick: () => focusElement(".patch-review-dialog"),
-    } : null,
-  ].filter(Boolean) as Array<{ key: string; label: string; onClick: () => void }>;
+  const grouped = actions.reduce<Record<string, number>>((acc, action) => {
+    acc[action.kind] = (acc[action.kind] || 0) + 1;
+    return acc;
+  }, {});
+  const labelFor = (kind: string, count: number) => {
+    if (kind === "question") return copy.language === "中" ? `回答问题 ${count}` : `Answer question ${count}`;
+    if (kind === "patch") return copy.language === "中" ? `审查补丁 ${count}` : `Review patch ${count}`;
+    if (kind === "verification") return copy.language === "中" ? `批准验证 ${count}` : `Approve verification ${count}`;
+    if (kind === "rollback") return copy.language === "中" ? `处理回滚 ${count}` : `Handle rollback ${count}`;
+    return copy.language === "中" ? `批准命令 ${count}` : `Approve command ${count}`;
+  };
+  const items = Object.entries(grouped).map(([kind, count]) => ({
+    key: kind,
+    label: labelFor(kind, count),
+    onClick: () => focusElement(".action-required-overlay [role='dialog']"),
+  }));
 
   if (items.length === 0) return null;
 

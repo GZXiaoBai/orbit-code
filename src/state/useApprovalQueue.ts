@@ -1,8 +1,16 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { ToolParams } from "../domain/agentLoop";
+import {
+  approvalGrantKey,
+  persistableApprovalGrants,
+  recoverApprovalGrants,
+  type ApprovalGrant,
+  type ApprovalGrantScope,
+} from "../domain/approvalGrant";
+export { approvalGrantKey, persistableApprovalGrants, recoverApprovalGrants } from "../domain/approvalGrant";
 
 export type ApprovalStatus = "pending" | "approved" | "denied" | "cancelled";
-export type ApprovalGrantScope = "once" | "session" | "project";
+export type { ApprovalGrant, ApprovalGrantScope } from "../domain/approvalGrant";
 
 export interface ApprovalRequest {
   id: string;
@@ -16,16 +24,6 @@ export interface ApprovalRequest {
   status: ApprovalStatus;
   createdAt: string;
   resolvedAt?: string;
-}
-
-export interface ApprovalGrant {
-  id: string;
-  tool: string;
-  key: string;
-  workspacePath?: string;
-  threadId?: string;
-  scope: Exclude<ApprovalGrantScope, "once">;
-  createdAt: string;
 }
 
 export type ApprovalCreatedCallback = (request: ApprovalRequest) => void;
@@ -62,28 +60,6 @@ function normalizeApprovalRequest(request: ApprovalRequest): ApprovalRequest {
     ...request,
     grantScope: request.grantScope || "once",
   };
-}
-
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .filter(([key]) => !["workspacePath", "threadId", "taskId", "sourceEventId"].includes(key))
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-export function approvalGrantKey(tool: string, params: ToolParams): string {
-  if (tool === "run_command") {
-    const command = typeof params.command === "string" ? params.command : "";
-    const args = Array.isArray(params.args) ? params.args.filter((arg): arg is string => typeof arg === "string") : [];
-    const cwd = typeof params.cwd === "string" ? params.cwd : "";
-    return `${tool}:${command}\u0000${args.join("\u0000")}\u0000${cwd}`;
-  }
-  return `${tool}:${stableStringify(params)}`;
 }
 
 function grantMatchesRequest(grant: ApprovalGrant, request: ApprovalRequest): boolean {
@@ -133,17 +109,6 @@ export function recoverApprovalRequests(
   recovered: ApprovalRequest[],
 ): ApprovalRequest[] {
   return current.length > 0 ? current : recovered.map(normalizeApprovalRequest);
-}
-
-export function recoverApprovalGrants(recovered: ApprovalGrant[] = []): ApprovalGrant[] {
-  return recovered.filter((grant) =>
-    (grant.scope === "session" && Boolean(grant.workspacePath && grant.threadId))
-    || (grant.scope === "project" && Boolean(grant.workspacePath))
-  );
-}
-
-export function persistableApprovalGrants(grants: ApprovalGrant[]): ApprovalGrant[] {
-  return grants.filter((grant) => grant.scope === "session" || grant.scope === "project");
 }
 
 export function useApprovalQueue(initialRequests: ApprovalRequest[] = [], initialGrants: ApprovalGrant[] = []) {

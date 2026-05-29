@@ -73,7 +73,13 @@ describe("threadEventSelectors", () => {
       },
     });
 
-    expect(selectPendingActions({ events: [patch, rollback] }).map((item) => item.kind)).toEqual(["patch", "rollback"]);
+    expect(selectPendingActions({
+      threadEvents: [patch, rollback],
+      actionRequired: [],
+      toolCalls: [],
+      terminalRuns: [],
+      checkpoints: [],
+    }).map((item) => item.kind)).toEqual(["patch", "rollback"]);
     const inspector = selectInspectorModel([patch, rollback], "patch-1");
     expect(inspector.selectedEvent?.id).toBe("patch-1");
     expect(inspector.patchEvents.map((item) => item.id)).toEqual(["patch-1"]);
@@ -82,7 +88,7 @@ describe("threadEventSelectors", () => {
 
   it("projects pending actions from ActionRequired without approval/question queues", () => {
     const actions = selectPendingActions({
-      events: [],
+      threadEvents: [],
       actionRequired: [
         createActionRequiredEvent({
           id: "action-1",
@@ -92,6 +98,9 @@ describe("threadEventSelectors", () => {
           description: "npm install",
         }),
       ],
+      toolCalls: [],
+      terminalRuns: [],
+      checkpoints: [],
     });
 
     expect(actions).toEqual([

@@ -14,6 +14,9 @@ export interface RuleDocument {
   title?: string;
   enabled?: boolean;
   mode?: ContextRuleMode;
+  globs?: string[];
+  regex?: string[];
+  policy?: "on" | "off" | "always";
 }
 
 export interface ContextBlock {
@@ -24,6 +27,7 @@ export interface ContextBlock {
   mode?: AgentRuntimeMode;
   tokenEstimate?: number;
   matchedRules?: string[];
+  matchReason?: string;
   permissionImpact?: "none";
 }
 
@@ -78,6 +82,56 @@ function ruleAppliesToMode(ruleMode: ContextRuleMode | undefined, mode: AgentRun
   return !ruleMode || ruleMode === "both" || ruleMode === mode;
 }
 
+function globToRegExp(glob: string): RegExp {
+  const escaped = glob
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*\//g, "\u0001")
+    .replace(/\*\*/g, "\u0000")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\u0001/g, "(?:.*/)?")
+    .replace(/\u0000/g, ".*");
+  return new RegExp(`^${escaped}$`);
+}
+
+function pathMatchesGlobs(path: string, globs?: string[]): boolean {
+  if (!globs || globs.length === 0) return true;
+  const positives = globs.filter((glob) => !glob.startsWith("!"));
+  const negatives = globs.filter((glob) => glob.startsWith("!")).map((glob) => glob.slice(1));
+  if (negatives.some((glob) => globToRegExp(glob).test(path))) return false;
+  if (positives.length === 0) return true;
+  return positives.some((glob) => globToRegExp(glob).test(path));
+}
+
+function contentMatchesRegex(content: string, patterns?: string[]): boolean {
+  if (!patterns || patterns.length === 0) return true;
+  return patterns.some((pattern) => {
+    try {
+      return new RegExp(pattern).test(content);
+    } catch {
+      return false;
+    }
+  });
+}
+
+function ruleMatch(input: {
+  rule: RuleDocument | ContextRule;
+  mode: AgentRuntimeMode;
+  workspaceFiles: string[];
+}): { enabled: boolean; reason: string } {
+  const rule = input.rule;
+  if (rule.enabled === false || rule.policy === "off") return { enabled: false, reason: "disabled by rule policy" };
+  if (!ruleAppliesToMode(rule.mode, input.mode)) return { enabled: false, reason: `not active in ${input.mode} mode` };
+  if (rule.policy === "always") return { enabled: true, reason: "policy always" };
+  if (rule.globs && rule.globs.length > 0) {
+    const matched = input.workspaceFiles.some((file) => pathMatchesGlobs(file, rule.globs));
+    if (!matched) return { enabled: false, reason: "no workspace file matched globs" };
+  }
+  if (rule.regex && rule.regex.length > 0 && !contentMatchesRegex(rule.content, rule.regex)) {
+    return { enabled: false, reason: "rule content did not match regex" };
+  }
+  return { enabled: true, reason: rule.globs?.length || rule.regex?.length ? "matched rule filters" : "mode matched" };
+}
+
 function sanitizeInstructionContent(content: string): string {
   return content
     .replace(/\0/g, "")
@@ -111,6 +165,7 @@ export class RuleContextProvider implements ContextProvider {
       }
       return rule;
     });
+    const workspaceFiles = input.listWorkspaceFiles ? await input.listWorkspaceFiles().catch(() => []) : [];
     const workspaceRules = await this.readWorkspaceRules(input);
     const editableSources = EDITABLE_CONTEXT_RULE_PATHS.map((path): ContextInspectorModel["editableSources"][number] => {
       const found = workspaceRules.find((rule) => rule.path === path);
@@ -125,6 +180,7 @@ export class RuleContextProvider implements ContextProvider {
     for (const rule of [...userRules, ...workspaceRules]) {
       const content = sanitizeInstructionContent(rule.content);
       if (!content) continue;
+      const match = ruleMatch({ rule, mode: input.mode, workspaceFiles });
       const block = {
         id: rule.id,
         title: rule.title || rule.path || `${rule.source} rules`,
@@ -133,9 +189,10 @@ export class RuleContextProvider implements ContextProvider {
         mode: input.mode,
         tokenEstimate: estimateTokens(content),
         matchedRules: [rule.title || rule.path || `${rule.source} rules`],
+        matchReason: match.reason,
         permissionImpact: "none",
       } satisfies ContextBlock;
-      if (rule.enabled === false || !ruleAppliesToMode(rule.mode, input.mode)) disabled.push(block);
+      if (!match.enabled) disabled.push(block);
       else enabled.push(block);
     }
     return { enabled, disabled, editableSources };

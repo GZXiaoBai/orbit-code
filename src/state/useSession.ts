@@ -18,8 +18,11 @@ import type { AgentRunSession } from "../domain/agentRunSession";
 import type { QuestionRequest } from "../domain/questionRequest";
 import type { ActionRequiredEvent } from "../domain/actionRequired";
 import type { TerminalRun } from "../domain/terminalRun";
+import type { ToolCallLifecycle } from "../domain/toolCallLifecycle";
 import type { ThreadEvent } from "../domain/threadEvents";
-import type { ApprovalGrant, ApprovalRequest } from "./useApprovalQueue";
+import type { ApprovalGrant } from "../domain/approvalGrant";
+import type { ApprovalRequest } from "./useApprovalQueue";
+import type { ThreadRuntimeSnapshot } from "./threadRuntimeStore";
 import { parseCodingPlan } from "../domain/planSchema";
 import { tauriWorkspaceStorage } from "../storage/tauriStorage";
 import { keychainStorage } from "../storage/keychain";
@@ -83,7 +86,9 @@ export interface SessionState {
   loadedApprovalGrants: ApprovalGrant[] | null;
   loadedQuestionRequests: QuestionRequest[] | null;
   loadedActionRequired: ActionRequiredEvent[] | null;
+  loadedToolCalls: ToolCallLifecycle[] | null;
   loadedTerminalRuns: TerminalRun[] | null;
+  loadedRuntimeLedgerSnapshot: ThreadRuntimeSnapshot | null;
 
   importPlan: (source: string, fileName?: string) => Promise<boolean>;
   restoreImportedPlan: (plan: ImportedPlanState | null) => void;
@@ -197,7 +202,9 @@ export function useSession(): SessionState {
   const [loadedApprovalGrants, setLoadedApprovalGrants] = useState<ApprovalGrant[] | null>(null);
   const [loadedQuestionRequests, setLoadedQuestionRequests] = useState<QuestionRequest[] | null>(null);
   const [loadedActionRequired, setLoadedActionRequired] = useState<ActionRequiredEvent[] | null>(null);
+  const [loadedToolCalls, setLoadedToolCalls] = useState<ToolCallLifecycle[] | null>(null);
   const [loadedTerminalRuns, setLoadedTerminalRuns] = useState<TerminalRun[] | null>(null);
+  const [loadedRuntimeLedgerSnapshot, setLoadedRuntimeLedgerSnapshot] = useState<ThreadRuntimeSnapshot | null>(null);
   const importRequestSeqRef = useRef(0);
 
   useEffect(() => {
@@ -242,6 +249,21 @@ export function useSession(): SessionState {
           if (session.threadEvents && session.threadEvents.length > 0) {
             setLoadedThreadEvents(session.threadEvents);
           }
+          if (session.runtimeLedgerSnapshot) {
+            setLoadedRuntimeLedgerSnapshot(session.runtimeLedgerSnapshot);
+            if (session.runtimeLedgerSnapshot.threadEvents) {
+              setLoadedThreadEvents(session.runtimeLedgerSnapshot.threadEvents);
+            }
+            if (session.runtimeLedgerSnapshot.actionRequired) {
+              setLoadedActionRequired(session.runtimeLedgerSnapshot.actionRequired);
+            }
+            if (session.runtimeLedgerSnapshot.toolCalls) {
+              setLoadedToolCalls(session.runtimeLedgerSnapshot.toolCalls);
+            }
+            if (session.runtimeLedgerSnapshot.terminalRuns) {
+              setLoadedTerminalRuns(session.runtimeLedgerSnapshot.terminalRuns);
+            }
+          }
           if (session.agentEvents && session.agentEvents.length > 0) {
             setLoadedAgentEvents(session.agentEvents);
           }
@@ -259,6 +281,9 @@ export function useSession(): SessionState {
           }
           if (session.actionRequired) {
             setLoadedActionRequired(session.actionRequired);
+          }
+          if (session.toolCalls) {
+            setLoadedToolCalls(session.toolCalls);
           }
           if (session.terminalRuns) {
             setLoadedTerminalRuns(session.terminalRuns);
@@ -568,7 +593,9 @@ export function useSession(): SessionState {
     loadedApprovalGrants,
     loadedQuestionRequests,
     loadedActionRequired,
+    loadedToolCalls,
     loadedTerminalRuns,
+    loadedRuntimeLedgerSnapshot,
     importPlan,
     restoreImportedPlan,
     clearImportedPlan,

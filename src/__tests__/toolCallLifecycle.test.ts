@@ -11,6 +11,7 @@ describe("ToolCallLifecycle", () => {
       id: "tool-1",
       tool: "run_command",
       args: { command: "npm", args: ["test"] },
+      argsSummary: "npm test",
       createdAt: "2026-05-29T00:00:00.000Z",
     });
     const policy = updateToolCallLifecycle(generated, {
@@ -22,6 +23,7 @@ describe("ToolCallLifecycle", () => {
 
     expect(generated.status).toBe("generated");
     expect(policy.policyDecision?.decision).toBe("ask");
+    expect(generated.argsSummary).toBe("npm test");
     expect(completed.updatedAt).toBe("2026-05-29T00:00:03.000Z");
     expect(toolCallLifecycleToolResult(completed)).toBe("Tests passed.");
   });

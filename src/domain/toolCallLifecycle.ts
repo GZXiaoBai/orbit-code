@@ -15,9 +15,11 @@ export interface ToolCallLifecycle {
   id: string;
   tool: ToolName | string;
   args?: ToolParams;
+  argsSummary?: string;
   status: ToolCallLifecycleStatus;
   policyDecision?: PolicyDecision;
   actionRequiredId?: string;
+  threadEventId?: string;
   resultText?: string;
   error?: string;
   createdAt: string;

@@ -113,9 +113,7 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
           agentLoopPhase={workspace.agentLoopPhase}
           agentLoopRunning={workspace.agentLoopRunning}
           agentLoopToolCalls={workspace.agentLoopToolCalls}
-          pendingApprovals={workspace.pendingApprovals}
-          pendingQuestions={workspace.pendingQuestions}
-          pendingPatchEvents={workspace.reviewDockModel.patchReviews}
+          pendingActions={workspace.pendingActions}
           onStartAgentLoop={isBuildMode ? workspace.startAgentLoop : undefined}
           onContinueAgentRun={workspace.continueAgentRun}
           canContinueAgentRun={Boolean(workspace.agentRunSession.canContinue)}

@@ -102,6 +102,25 @@ describe("ContextProviderRegistry", () => {
     expect(inspector.blocks.every((block) => block.permissionImpact === "none")).toBe(true);
   });
 
+  it("filters user rules by globs, regex, and rule policy without changing permissions", async () => {
+    const registry = new ContextProviderRegistry();
+    const inspector = await registry.collectInspector({
+      mode: "build",
+      listWorkspaceFiles: async () => ["src/App.tsx", "README.md"],
+      userRules: [
+        { id: "matched", title: "React Rule", content: "Prefer hooks", enabled: true, mode: "both", source: "user", globs: ["src/**/*.tsx"], regex: ["hooks"] },
+        { id: "missed-glob", title: "Server Rule", content: "Server only", enabled: true, mode: "both", source: "user", globs: ["server/**"] },
+        { id: "off", title: "Off Rule", content: "Nope", enabled: true, mode: "both", source: "user", policy: "off" },
+        { id: "always", title: "Always Rule", content: "Always include", enabled: true, mode: "build", source: "user", globs: ["missing/**"], policy: "always" },
+      ],
+    });
+
+    expect(inspector.blocks.map((block) => block.title)).toEqual(["React Rule", "Always Rule"]);
+    expect(inspector.blocks.map((block) => block.matchReason)).toEqual(["matched rule filters", "policy always"]);
+    expect(inspector.disabledBlocks.map((block) => block.title)).toEqual(["Server Rule", "Off Rule"]);
+    expect(inspector.permissionImpact).toBe("none");
+  });
+
   it("discovers mode-filtered project skills as read-only context", async () => {
     const registry = new ContextProviderRegistry();
     const inspector = await registry.collectInspector({
