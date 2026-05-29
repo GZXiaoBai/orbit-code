@@ -1,17 +1,22 @@
 import { CheckCircle2, CircleAlert, Clock3, FileText, MessageSquare, Play, RefreshCw, TerminalSquare, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import type { AgentLoopPhase, ToolCall } from "../../domain/agentLoop";
-import { buildThreadEvents, type ThreadEvent } from "../../domain/threadEvents";
+import type { QuestionRequest } from "../../domain/questionRequest";
+import type { ThreadEvent } from "../../domain/threadEvents";
 import type { AppCopy } from "../../i18n/copy";
-import type { AgentEvent } from "../../state/useWorkspace";
+import type { ApprovalRequest } from "../../state/useApprovalQueue";
 import { compactRuntimeTextForTimeline, localizedAgentEventName } from "./agentDisplayText";
+import { RichFileText } from "./RichFileText";
 
 interface AgentTimelineProps {
   copy: AppCopy;
-  agentEvents: AgentEvent[];
+  threadEvents: ThreadEvent[];
   agentLoopPhase?: AgentLoopPhase;
   agentLoopRunning?: boolean;
   agentLoopToolCalls?: ToolCall[];
+  pendingApprovals?: ApprovalRequest[];
+  pendingQuestions?: QuestionRequest[];
+  pendingPatchEvents?: ThreadEvent[];
   onStartAgentLoop?: () => void;
   onContinueAgentRun?: () => void;
   canContinueAgentRun?: boolean;
@@ -20,16 +25,20 @@ interface AgentTimelineProps {
   onApplyEventPatch?: (eventId: string) => Promise<void>;
   onRefinePatch?: (eventId: string, feedback: string) => Promise<void> | void;
   onUpdatePatch?: (eventId: string, path: string, updates: Partial<any>) => void;
+  onAcceptPlanDraft?: (eventId: string) => void;
   streamingContent?: string;
   streamingActive?: boolean;
 }
 
 export function AgentTimeline({
   copy,
-  agentEvents,
+  threadEvents,
   agentLoopPhase,
   agentLoopRunning,
   agentLoopToolCalls = [],
+  pendingApprovals = [],
+  pendingQuestions = [],
+  pendingPatchEvents = [],
   onStartAgentLoop,
   onContinueAgentRun,
   canContinueAgentRun,
@@ -38,6 +47,7 @@ export function AgentTimeline({
   onApplyEventPatch: _onApplyEventPatch,
   onRefinePatch: _onRefinePatch,
   onUpdatePatch: _onUpdatePatch,
+  onAcceptPlanDraft,
   streamingContent,
   streamingActive,
 }: AgentTimelineProps) {
@@ -49,8 +59,7 @@ export function AgentTimeline({
     agentLoopRunning ||
     streamingActive,
   );
-  if (agentEvents.length === 0 && !hasActions) return null;
-  const threadEvents = buildThreadEvents(agentEvents);
+  if (threadEvents.length === 0 && !hasActions) return null;
   const visibleEvents = compactThreadEvents(threadEvents);
   const hiddenCount = Math.max(0, threadEvents.length - visibleEvents.length);
   const localizedPhase = agentLoopPhase
@@ -74,13 +83,19 @@ export function AgentTimeline({
               className={`timeline-node message-stream-item message-${display.variant} role-${evt.role} status-${evt.status} thread-event-${evt.kind}`}
             >
               {display.variant === "tool" ? (
-                <ToolEventRow copy={copy} event={evt} icon={display.icon} label={display.label} />
+                <ToolEventRow copy={copy} event={evt} icon={display.icon} label={display.label} onAcceptPlanDraft={onAcceptPlanDraft} />
               ) : (
                 <MessageBubble copy={copy} event={evt} label={display.label} isUser={display.variant === "user"} />
               )}
             </div>
           );
         })}
+        <PendingActionStrip
+          copy={copy}
+          approvals={pendingApprovals}
+          questions={pendingQuestions}
+          patchEvents={pendingPatchEvents}
+        />
         {streamingActive && (
           <div className="timeline-node message-stream-item message-assistant role-coder status-thinking">
             <article className="assistant-message">
@@ -135,6 +150,54 @@ export function AgentTimeline({
   );
 }
 
+function PendingActionStrip({
+  copy,
+  approvals,
+  questions,
+  patchEvents,
+}: {
+  copy: AppCopy;
+  approvals: ApprovalRequest[];
+  questions: QuestionRequest[];
+  patchEvents: ThreadEvent[];
+}) {
+  const items = [
+    approvals.length > 0 ? {
+      key: "approval",
+      label: copy.language === "中" ? `批准命令 ${approvals.length}` : `Approve command ${approvals.length}`,
+      onClick: () => focusElement(".approval-dialog"),
+    } : null,
+    questions.length > 0 ? {
+      key: "question",
+      label: copy.language === "中" ? `回答问题 ${questions.length}` : `Answer question ${questions.length}`,
+      onClick: () => focusElement(".structured-question-dialog"),
+    } : null,
+    patchEvents.length > 0 ? {
+      key: "patch",
+      label: copy.language === "中" ? `审查补丁 ${patchEvents.length}` : `Review patch ${patchEvents.length}`,
+      onClick: () => focusElement(".patch-review-dialog"),
+    } : null,
+  ].filter(Boolean) as Array<{ key: string; label: string; onClick: () => void }>;
+
+  if (items.length === 0) return null;
+
+  return (
+    <div className="timeline-pending-actions" data-testid="timeline-pending-actions">
+      {items.map((item) => (
+        <button key={item.key} type="button" className="timeline-pending-action" onClick={item.onClick}>
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function focusElement(selector: string) {
+  const target = document.querySelector<HTMLElement>(selector);
+  target?.focus();
+  target?.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
 function LiveAgentOperations({ copy, toolCalls }: { copy: AppCopy; toolCalls: ToolCall[] }) {
   const compactCalls = compactToolCalls(toolCalls);
   const exploredFiles = new Set(
@@ -187,8 +250,11 @@ function localizedToolName(copy: AppCopy, name: ToolCall["name"]): string {
     list_files: "列出文件",
     run_command: "运行命令",
     apply_patch: "提出补丁",
+    propose_patch: "提出补丁",
     ask_user: "询问用户",
     done: "完成",
+    done_plan: "完成计划",
+    done_build: "完成执行",
   };
   const en: Record<ToolCall["name"], string> = {
     read_file: "Read file",
@@ -196,8 +262,11 @@ function localizedToolName(copy: AppCopy, name: ToolCall["name"]): string {
     list_files: "List files",
     run_command: "Run command",
     apply_patch: "Propose patch",
+    propose_patch: "Propose patch",
     ask_user: "Ask user",
     done: "Done",
+    done_plan: "Done planning",
+    done_build: "Done building",
   };
   return copy.language === "中" ? zh[name] : en[name];
 }
@@ -206,7 +275,7 @@ function summarizeLiveToolCall(copy: AppCopy, call: ToolCall, exploredFileCount:
   if (exploredFileCount > 0 && ["read_file", "search_code", "list_files"].includes(call.name)) {
     return copy.workbench.agentOperationFiles.replace("{count}", String(exploredFileCount));
   }
-  if (call.name === "apply_patch") {
+  if (call.name === "apply_patch" || call.name === "propose_patch") {
     const patches = Array.isArray(call.params.patches) ? call.params.patches : [];
     const target = patches.length > 0
       ? `${patches.length} ${copy.workbench.filesCount}`
@@ -228,7 +297,7 @@ function formatToolCallDetails(call: ToolCall): string {
     const command = typeof call.params.command === "string" ? call.params.command : "";
     const args = Array.isArray(call.params.args) ? call.params.args.filter((arg): arg is string => typeof arg === "string") : [];
     details.push([command, ...args].filter(Boolean).join(" "));
-  } else if (call.name === "apply_patch") {
+  } else if (call.name === "apply_patch" || call.name === "propose_patch") {
     const patches = Array.isArray(call.params.patches) ? call.params.patches : [];
     const files = patches
       .map((patch) => typeof patch === "object" && patch && "path" in patch ? String((patch as { path?: unknown }).path || "") : "")
@@ -258,7 +327,14 @@ function MessageBubble({
   return (
     <article className={isUser ? "user-message" : "assistant-message"}>
       {!isUser ? <div className="message-author">{label}</div> : null}
-      <div className="node-message" dangerouslySetInnerHTML={{ __html: renderAgentMessage(copy, event.message) }} />
+      <div className="node-message">
+        <RichFileText
+          copy={copy}
+          text={compactRuntimeTextForTimeline(copy, event.message)}
+          workspacePath={event.workspacePath}
+          surface="timeline"
+        />
+      </div>
       <footer className="message-meta">
         {isUser ? <span>{label}</span> : null}
         <span>{event.timestamp}</span>
@@ -272,11 +348,13 @@ function ToolEventRow({
   event,
   icon,
   label,
+  onAcceptPlanDraft,
 }: {
   copy: AppCopy;
   event: ThreadEvent;
   icon: ReactNode;
   label: string;
+  onAcceptPlanDraft?: (eventId: string) => void;
 }) {
   return (
     <div className="message-tool-row">
@@ -285,12 +363,24 @@ function ToolEventRow({
         <span className="tool-row-icon">{icon}</span>
         <span className="tool-row-copy">
           <strong>{label}</strong>
-          <span dangerouslySetInnerHTML={{ __html: renderAgentMessage(copy, summarizeToolEvent(copy, event)) }} />
+          <span>
+            <RichFileText
+              copy={copy}
+              text={summarizeToolEvent(copy, event)}
+              workspacePath={event.workspacePath}
+              surface="timeline"
+            />
+          </span>
         </span>
         {event.patches && event.patches.length > 0 ? (
           <span className="tool-row-pill">
             {event.patches.length} {copy.workbench.filesCount}
           </span>
+        ) : null}
+        {event.kind === "planDraft" && event.planDraft && onAcceptPlanDraft ? (
+          <button type="button" className="tool-row-action" onClick={() => onAcceptPlanDraft(event.id)}>
+            {copy.language === "中" ? "采纳并进入 Build" : "Accept and enter Build"}
+          </button>
         ) : null}
       </span>
       <span className="tool-row-line" aria-hidden="true" />
@@ -306,7 +396,7 @@ function getThreadEventDisplay(copy: AppCopy, event: ThreadEvent): {
   if (event.kind === "userMessage") {
     return { variant: "user", label: copy.language === "中" ? "你" : "You", icon: <MessageSquare size={14} /> };
   }
-  if (["plan", "commandBegin", "commandEnd", "commandExecution", "approvalRequest", "approvalResult", "patchProposal", "question", "verification", "finalSummary", "contextCompaction"].includes(event.kind)) {
+  if (["plan", "planDraft", "toolCall", "approval", "terminalRun", "error", "commandBegin", "commandEnd", "commandExecution", "approvalRequest", "approvalResult", "patchProposal", "question", "verification", "finalSummary", "contextCompaction", "modeSwitch", "toolDeniedByMode"].includes(event.kind)) {
     return {
       variant: "tool",
       label: getToolEventLabel(copy, event),
@@ -322,10 +412,13 @@ function getThreadEventDisplay(copy: AppCopy, event: ThreadEvent): {
 
 function getToolEventIcon(event: ThreadEvent): ReactNode {
   if (event.kind === "plan") return <CheckCircle2 size={14} />;
+  if (event.kind === "planDraft") return <FileText size={14} />;
   if (event.kind === "patchProposal") return <FileText size={14} />;
-  if (["commandBegin", "commandEnd", "commandExecution", "approvalRequest", "approvalResult", "verification"].includes(event.kind)) return <TerminalSquare size={14} />;
+  if (["commandBegin", "commandEnd", "commandExecution", "toolCall", "terminalRun", "approval", "approvalRequest", "approvalResult", "verification"].includes(event.kind)) return <TerminalSquare size={14} />;
   if (event.kind === "question") return <CircleAlert size={14} />;
   if (event.kind === "contextCompaction") return <CheckCircle2 size={14} />;
+  if (event.kind === "modeSwitch") return <Play size={14} />;
+  if (event.kind === "toolDeniedByMode") return <CircleAlert size={14} />;
   return <Clock3 size={14} />;
 }
 
@@ -333,7 +426,12 @@ function getToolEventLabel(copy: AppCopy, event: ThreadEvent): string {
   const text = `${event.title} ${event.message}`;
   const isZh = copy.language === "中";
   if (event.kind === "plan") return isZh ? "计划已就绪" : "Plan ready";
+  if (event.kind === "planDraft") return isZh ? "计划草案" : "Plan draft";
   if (event.kind === "patchProposal") return isZh ? "等待审查：补丁" : "Waiting for review: patch";
+  if (event.kind === "approval") return isZh ? "等待授权" : "Waiting for approval";
+  if (event.kind === "toolCall") return isZh ? "工具调用" : "Tool call";
+  if (event.kind === "terminalRun") return isZh ? "终端运行" : "Terminal run";
+  if (event.kind === "error") return isZh ? "错误" : "Error";
   if (event.kind === "approvalRequest") return isZh ? "等待审查：命令" : "Waiting for review: command";
   if (event.kind === "approvalResult") {
     if (/denied|拒绝/i.test(text)) return isZh ? "已拒绝" : "Denied";
@@ -348,6 +446,8 @@ function getToolEventLabel(copy: AppCopy, event: ThreadEvent): string {
     return isZh ? "等待审查：验证" : "Waiting for review: verification";
   }
   if (event.kind === "contextCompaction") return isZh ? "上下文已压缩" : "Context compacted";
+  if (event.kind === "modeSwitch") return isZh ? "模式切换" : "Mode switched";
+  if (event.kind === "toolDeniedByMode") return isZh ? "模式已拒绝工具" : "Tool denied by mode";
   if (event.kind === "finalSummary") return isZh ? "最终总结" : "Final summary";
   if (/denied|拒绝/i.test(text)) return isZh ? "已拒绝" : "Denied";
   if (/granted|approved|批准|已批准/i.test(text)) return isZh ? "已批准" : "Approved";
@@ -361,10 +461,29 @@ function summarizeToolEvent(copy: AppCopy, event: ThreadEvent): string {
   if (event.kind === "plan") {
     return copy.language === "中" ? "计划已导入；切换 Build 后开始执行。" : "Plan imported; switch to Build to execute.";
   }
+  if (event.kind === "planDraft" && event.planDraft) {
+    return copy.language === "中"
+      ? `只读 Planner 生成了草案：${event.planDraft.tasks.length} 个任务。采纳后才会进入 Build。`
+      : `Read-only Planner generated a draft: ${event.planDraft.tasks.length} tasks. Accept it to enter Build.`;
+  }
   if (event.kind === "patchProposal" && event.patches?.length) {
     return copy.language === "中"
       ? `Agent 提出了补丁审查：${event.patches.length} ${copy.workbench.filesCount}`
       : `Agent proposed a patch review: ${event.patches.length} ${copy.workbench.filesCount}`;
+  }
+  if (event.kind === "question" && event.question) {
+    if (event.question.status === "answered" && event.question.answer) {
+      return copy.language === "中"
+        ? `已回答：${event.question.answer}`
+        : `Answered: ${event.question.answer}`;
+    }
+    if (event.question.status === "cancelled") {
+      return copy.language === "中" ? "问题已忽略，Agent 将重新规划。" : "Question ignored; the Agent will re-plan.";
+    }
+    const optionCount = event.question.options?.length || 0;
+    return optionCount > 0
+      ? `${event.question.question} (${optionCount} ${copy.workbench.optionsCount})`
+      : event.question.question;
   }
   const command = extractCommandHint(event.message);
   if (command) {
@@ -382,7 +501,7 @@ function summarizeToolEvent(copy: AppCopy, event: ThreadEvent): string {
 function compactThreadEvents(events: ThreadEvent[]): ThreadEvent[] {
   const important = events.filter((event) => {
     if (event.patches?.length) return true;
-    if (["userMessage", "plan", "commandBegin", "commandEnd", "commandExecution", "approvalRequest", "approvalResult", "patchProposal", "question", "verification", "finalSummary", "contextCompaction"].includes(event.kind)) return true;
+    if (["userMessage", "plan", "planDraft", "toolCall", "approval", "terminalRun", "error", "commandBegin", "commandEnd", "commandExecution", "approvalRequest", "approvalResult", "patchProposal", "question", "verification", "finalSummary", "contextCompaction", "modeSwitch", "toolDeniedByMode"].includes(event.kind)) return true;
     if (/final summary|最终总结|完成总结/i.test(`${event.title} ${event.message}`)) return true;
     if (/failed|error|denied|self-heal|run guard|guard|模型|model|api key|ollama|build 执行通道/i.test(`${event.title} ${event.message}`)) return true;
     return false;
@@ -441,24 +560,4 @@ function extractCommandHint(message: string): string | null {
   const waiting = message.match(/批准命令[:：]\s*([^\n。]+)/) || message.match(/command approval.*?([a-z][^\n。]+)/i);
   if (waiting) return waiting[1].trim();
   return null;
-}
-
-function escapeHtml(text: string): string {
-  const map: Record<string, string> = {
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#039;",
-  };
-  return text.replace(/[&<>"']/g, (c) => map[c]);
-}
-
-function renderAgentMessage(copy: AppCopy, message: string): string {
-  const localized = compactRuntimeTextForTimeline(copy, message);
-  let safe = escapeHtml(localized);
-  safe = safe.replace(/`([^`]+)`/g, "<code>$1</code>");
-  safe = safe.replace(/\[([^\]]+)\]\(file:\/\/(?:\/|\.\/)([^)]+)\)/g, '<a href="file:///$2" class="file-link">$1</a>');
-  safe = safe.replace(/\n/g, "<br />");
-  return safe;
 }

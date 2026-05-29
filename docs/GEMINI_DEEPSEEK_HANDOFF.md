@@ -1,6 +1,6 @@
 # Gemini / DeepSeek Handoff
 
-Last updated: 2026-05-25.
+Last updated: 2026-05-29.
 
 This document is written for the next model taking over the project. Treat `docs/STATUS_MATRIX.md` as the source of truth and this file as the practical handoff narrative.
 
@@ -29,31 +29,33 @@ Weak areas:
 - Frontend architecture is still broad around `useWorkspace.ts`, though Review Dock, Agent run, patch, approval, file-system, layout, and project Modules now exist.
 - Runtime/generated Agent messages still need a proper i18n-aware message layer.
 - Real provider smoke for OpenAI/Anthropic/Gemini/DeepSeek remains manual because CI uses the offline Fixture provider.
+- Real DeepSeek mini-lab smoke has a current verified manual path from 2026-05-29: Plan generated a 2-task draft, user accepted Build, DeepSeek proposed `SMOKE_LEDGER_20260529.md`, sandbox preview passed, the patch applied transactionally, command approval ran `npm run test:run`, verification passed, and final summary appeared. A previous taskBoard edit attempt correctly failed at stale-write sandbox preview and should be used as the next conflict-recovery regression.
 - Rust still has compatibility paths that fall back to `current_dir()`; new command paths should stay explicit about workspace root.
 
 ## Latest Verified State
 
-The latest stabilization pass focused on single-task Agent reliability:
+The latest stabilization pass focused on single-task Agent reliability and runtime protocol closure:
 
-- Agent waiting state now persists Agent run session, pending approvals, pending questions, patch proposals, terminal runs, and Agent events.
+- Agent waiting state now persists Agent run session, pending approvals, pending questions, patch proposals, terminal runs, and typed `ThreadEvent` records. Legacy `AgentEvent` is now a compatibility projection.
 - Reload recovery is covered for pending command approval, blocking question, and patch review. Recovery restores the pending UI and performs explicit local resume actions; it does not automatically continue model generation.
-- Review Dock now consumes `ReviewDockQueueModel` and delegates rendering to queue components:
-  - `CommandApprovalQueue`
-  - `QuestionQueue`
-  - `PatchReviewQueue`
-  - `VerificationQueue`
-  - `TerminalRunList`
+- Center thread now owns pending action affordances, while central overlays handle command/verification approvals and structured questions.
+- Review Dock is now an Inspector for file preview, patch diff/history, terminal records, and recent run details. It no longer duplicates the main approval/question action queue.
 - Desktop workspace reload now restores the current workspace root and file tree through the desktop gateway.
 - Ollama remains discovery-only and is blocked from Build execution.
+- `RuntimeLedger` now carries typed thread events, `ActionRequired`, tool-call lifecycle records, terminal runs, and checkpoint projections. Pending actions and run steps are now derived from a ledger snapshot.
+- `ToolCallLifecycle` tracks generated, policy-evaluated, action-required, running, completed, failed, denied, and cancelled states.
+- `SmokeRunController` blocks fixture providers from passing DeepSeek smoke and records typed milestone failures.
+- Manual DeepSeek smoke evidence exists in the desktop thread named `在 orbit-mini-lab 新增 SMOKE_LEDGER_20260529.md 并执行 smoke 验收`.
+- Context Inspector shows Orbit rules, skills, disabled blocks, and external rule import candidates; external files such as `AGENTS.md` and `CLAUDE.md` are not auto-injected.
 
 Latest verification:
 
 ```bash
-npm test -- --run                            # 89 passed
+npm test -- --run                            # 217 passed
 npm run build                                # passed
-cargo test --manifest-path src-tauri/Cargo.toml # 30 passed
-npm run test:e2e                              # 31 passed
-npm run tauri build -- --debug                # passed in latest matrix snapshot
+cargo test --manifest-path src-tauri/Cargo.toml # 48 passed
+npm run test:e2e                             # 42 passed
+npm run tauri build -- --debug               # passed
 ```
 
 Latest frontend stabilization pass:
@@ -68,14 +70,16 @@ Latest frontend stabilization pass:
 - Do not add more workflow logic to `Conversation.tsx`.
 - Do not add more top-level returns to `useWorkspace.ts` unless you are actively shrinking the Interface.
 - Do not claim Ollama desktop LLM support until Rust gateway support is implemented or documented as local-only.
+- Do not mark DeepSeek smoke verified from fixture/provider-simulated runs.
+- Do not auto-inject external agent rule files; surface them as import candidates only.
 - Do not bypass `apply_workspace_patches_transactional` for Agent-generated file changes.
 - Do not mark packaging complete without running a desktop debug build on the target platform.
 
 ## Recommended Next Implementation Order
 
-### 1. Keep E2E Green
+### 1. Expand Real DeepSeek Smoke Coverage
 
-Fix any remaining Playwright failures first. This is the only quick way to know whether UI behavior matches the stated product contract.
+The current happy path has passed once against `/Users/zhoujunjie/PersonalProjects/test for orbit/orbit-mini-lab`. Next, keep the same workspace and add targeted smoke cases for stale-write conflict recovery, restored verification approval, project rules/skills context visibility, and app restart resume behavior. If a case fails, record it as a failure ledger item and fix runtime before adding features.
 
 ### 2. Split Frontend Views
 
@@ -96,8 +100,8 @@ The goal is not cosmetic splitting. The goal is a deeper Interface for the conve
 
 Extract from `useWorkspace.ts`:
 
-- `useAgentRun`
-- `usePatchWorkflow`
+- `useAgentRun` (extracted and now writes typed `ThreadEvent` directly)
+- `usePatchWorkflow` (extracted and now updates typed `ThreadEvent` directly)
 - `useEmbeddingIndex` (done)
 - `useWindowActions` (done)
 
@@ -108,9 +112,10 @@ Leave `useWorkspace` as a composition layer returning a narrow view model.
 Fix these seams:
 
 - Keep `run_command` structured as `{ command, args, reason }`.
-- Keep command/write/install/network actions behind Review Dock approval.
+- Keep command/write/install/network actions behind central overlay approval.
 - Keep Agent patch proposals out of direct writes; apply only through sandbox preview, conflict handling, and `apply_workspace_patches_transactional`.
 - Continue removing implicit workspace fallback from Rust commands.
+- Finish removing legacy approval/question adapters from Review Dock projections; it should consume ledger selectors only.
 
 ### 5. Redesign Frontend Identity
 

@@ -286,6 +286,8 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
 
         {fileTree.filteredNodes.length > 0 ? (
           <FileTree
+            copy={copy}
+            workspacePath={workspace.workspaceRoot}
             nodes={fileTree.filteredNodes}
             expandedDirs={fileTree.expandedDirs}
             activeFilePath={workspace.activeFilePath || undefined}

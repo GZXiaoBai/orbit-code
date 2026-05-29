@@ -1,4 +1,4 @@
-import type { AgentEvent } from "../../domain/agentEvents";
+import type { ThreadEvent } from "../../domain/threadEvents";
 import type { QuestionRequest } from "../../domain/questionRequest";
 import type { TerminalRun } from "../../domain/terminalRun";
 import type { ApprovalRequest } from "../../state/useApprovalQueue";
@@ -6,14 +6,14 @@ import type { ApprovalRequest } from "../../state/useApprovalQueue";
 export interface ReviewDockQueueModel {
   commandApprovals: ApprovalRequest[];
   questions: QuestionRequest[];
-  patchReviews: AgentEvent[];
-  appliedPatchReviews: AgentEvent[];
-  failedPatchReviews: AgentEvent[];
+  patchReviews: ThreadEvent[];
+  appliedPatchReviews: ThreadEvent[];
+  failedPatchReviews: ThreadEvent[];
   verificationApprovals: ApprovalRequest[];
   otherApprovals: ApprovalRequest[];
   terminalRuns: TerminalRun[];
   historyTerminalRuns: TerminalRun[];
-  historyPatchReviews: AgentEvent[];
+  historyPatchReviews: ThreadEvent[];
   counts: {
     changes: number;
     terminal: number;
@@ -27,7 +27,7 @@ function isVerificationApproval(request: ApprovalRequest): boolean {
     && request.params.sourceEventId.length > 0;
 }
 
-function isTerminalFailedPatchReview(event: AgentEvent): boolean {
+function isTerminalFailedPatchReview(event: ThreadEvent): boolean {
   const patches = event.patches || [];
   return patches.length > 0
     && patches.every((patch) =>
@@ -40,7 +40,7 @@ function isTerminalFailedPatchReview(event: AgentEvent): boolean {
 export function buildReviewDockModel(input: {
   approvals: ApprovalRequest[];
   questions: QuestionRequest[];
-  events: AgentEvent[];
+  events: ThreadEvent[];
   terminalRuns: TerminalRun[];
   workspacePath?: string;
   threadId?: string;
@@ -75,7 +75,7 @@ export function buildReviewDockModel(input: {
     .filter((event) => event.patches && event.patches.length > 0 && !inScope(event))
     .reverse();
   const failedPatchReviews = patchEvents.filter(isTerminalFailedPatchReview);
-  const patchReviews = patchEvents.filter((event) => event.patches?.some((patch) => !patch.applied) && !isTerminalFailedPatchReview(event));
+  const patchReviews = patchEvents.filter((event) => event.patches?.some((patch) => !patch.applied));
   const appliedPatchReviews = patchEvents.filter((event) => event.patches?.length && event.patches.every((patch) => patch.applied));
 
   return {
@@ -90,7 +90,7 @@ export function buildReviewDockModel(input: {
     historyTerminalRuns,
     historyPatchReviews,
     counts: {
-      changes: commandApprovals.length + questions.length + patchReviews.length + verificationApprovals.length + otherApprovals.length,
+      changes: patchReviews.length,
       terminal: scopedTerminalRuns.length,
       questions: questions.length,
     },

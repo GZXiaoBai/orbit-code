@@ -1,14 +1,69 @@
-import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
-import type { AgentEvent } from "../domain/agentEvents";
+import { useCallback, type MutableRefObject } from "react";
+import type { ThreadEvent } from "../domain/threadEvents";
 import { callLLMApi, CODER_SYSTEM_PROMPT } from "../services/llmService";
 import type { FileSystemState } from "./useFileSystem";
 import type { SessionState } from "./useSession";
 import { markEventPatchesApplied, type PatchItem } from "./patchWorkflow";
 import { invokeDesktop, isDesktopRuntime } from "../runtime/desktopGateway";
+import { createThreadEvent } from "../domain/threadEvents";
+import { createPatchCheckpoint, restorePatchCheckpoint } from "./patchCheckpoint";
+
+interface SandboxPreviewResult {
+  id: string;
+  proposal_id: string;
+  sandbox_path: string;
+  status: "sandboxed" | "failed";
+  output: string;
+  created_at: string;
+}
+
+async function previewWorkspacePatches(
+  proposalId: string,
+  workspacePath: string,
+  patches: PatchItem[],
+): Promise<PatchItem[]> {
+  if (!isDesktopRuntime()) {
+    return patches.map((patch) => ({
+      ...patch,
+      sandboxStatus: "sandboxed",
+      sandboxPath: "browser-fixture",
+      sandboxOutput: "Browser fixture sandbox preview completed. No workspace files were changed.",
+      applyStatus: "proposed",
+    }));
+  }
+
+  try {
+    const preview = await invokeDesktop<SandboxPreviewResult>("preview_workspace_patches_in_sandbox", {
+      workspacePath,
+      proposalId,
+      patches: patches.map((patch) => ({
+        path: patch.path,
+        old_content: patch.oldContent,
+        new_content: patch.newContent,
+      })),
+    });
+    return patches.map((patch) => ({
+      ...patch,
+      sandboxStatus: preview.status,
+      sandboxPath: preview.sandbox_path,
+      sandboxOutput: preview.output,
+      applyStatus: "proposed",
+    }));
+  } catch (err: any) {
+    const message = err?.message || String(err);
+    return patches.map((patch) => ({
+      ...patch,
+      sandboxStatus: "failed",
+      sandboxOutput: message,
+      applyStatus: "failed",
+    }));
+  }
+}
 
 interface UsePatchWorkflowArgs {
-  agentEventsRef: MutableRefObject<AgentEvent[]>;
-  setAgentEvents: Dispatch<SetStateAction<AgentEvent[]>>;
+  threadEventsRef: MutableRefObject<ThreadEvent[]>;
+  updateThreadEvent: (id: string, update: Partial<ThreadEvent> | ((event: ThreadEvent) => ThreadEvent)) => void;
+  emitThreadEvent: (event: ThreadEvent) => void;
   fs: FileSystemState;
   isRealLLMActiveRef: MutableRefObject<boolean>;
   activeLLMConfigRef: MutableRefObject<SessionState["activeLLMConfig"]>;
@@ -16,17 +71,35 @@ interface UsePatchWorkflowArgs {
 }
 
 export function usePatchWorkflow({
-  agentEventsRef,
-  setAgentEvents,
+  threadEventsRef,
+  updateThreadEvent,
+  emitThreadEvent,
   fs,
   isRealLLMActiveRef,
   activeLLMConfigRef,
   onPatchApplied,
 }: UsePatchWorkflowArgs) {
   const applyEventPatch = useCallback(async (eventId: string) => {
-    const event = agentEventsRef.current.find(e => e.id === eventId);
+    let event = threadEventsRef.current.find(e => e.id === eventId);
     if (!event || !event.patches || event.patches.length === 0) return;
-    const sandboxFailure = event.patches.find((patch) => patch.sandboxStatus === "failed");
+
+    if (event.patches.some((patch) => !patch.applied && patch.sandboxStatus !== "sandboxed")) {
+      const retriedPatches = await previewWorkspacePatches(eventId, fs.workspaceRoot, event.patches);
+      updateThreadEvent(eventId, (current) => ({
+        ...current,
+        message: retriedPatches.some((patch) => patch.sandboxStatus === "failed")
+          ? "沙盒预演重试失败。当前工作区没有被修改，请调整补丁后再次重试。"
+          : "沙盒预演重试通过。请重新确认后应用补丁。",
+        patches: retriedPatches,
+      }));
+      event = { ...event, patches: retriedPatches };
+      if (!retriedPatches.some((patch) => !patch.applied && patch.sandboxStatus === "failed")) {
+        return;
+      }
+    }
+
+    const eventPatches = event.patches || [];
+    const sandboxFailure = eventPatches.find((patch) => !patch.applied && patch.sandboxStatus === "failed");
     if (sandboxFailure) {
       throw new Error(sandboxFailure.sandboxOutput || "沙盒预演失败，真实工作区未写入。请修正补丁后重试。");
     }
@@ -36,7 +109,7 @@ export function usePatchWorkflow({
         const processedPatches: PatchItem[] = [];
         let hasAnyConflict = false;
 
-        for (const patch of event.patches) {
+        for (const patch of eventPatches) {
           if (patch.applied) {
             continue;
           }
@@ -98,18 +171,67 @@ export function usePatchWorkflow({
         }
 
         if (hasAnyConflict) {
-          setAgentEvents(prev => prev.map(e => {
-            if (e.id !== eventId) return e;
-            return {
-              ...e,
-              message: "检测到本地磁盘代码在协作等待期间发生了用户手动修改，触发了三方合并冲突！请解决冲突后再重新应用。",
+          updateThreadEvent(eventId, (event) => ({
+            ...event,
+            message: "检测到本地磁盘代码在协作等待期间发生了用户手动修改，触发了三方合并冲突！请解决冲突后再重新应用。",
             patches: processedPatches,
-          };
-        }));
-        return;
+          }));
+          return;
         }
 
         if (processedPatches.length === 0) return;
+
+        let checkpointId = "";
+        let checkpointStrategy: "git-shadow" | "file-snapshot" = "file-snapshot";
+        try {
+          const checkpoint = await createPatchCheckpoint({
+            eventId,
+            workspacePath: fs.workspaceRoot,
+            patches: processedPatches,
+          });
+          checkpointId = checkpoint.id;
+          checkpointStrategy = checkpoint.strategy;
+          emitThreadEvent(createThreadEvent({
+            kind: "checkpoint",
+            workspacePath: fs.workspaceRoot,
+            threadId: event.threadId,
+            taskId: event.taskId,
+            runSessionId: event.runSessionId,
+            role: "reviewer",
+            title: "Patch Checkpoint",
+            status: "done",
+            message: checkpoint.strategy === "git-shadow"
+              ? `已在应用补丁前创建 Git shadow checkpoint：${checkpoint.files.map((file) => file.path).join(", ")}`
+              : `已在应用补丁前创建文件快照：${checkpoint.files.map((file) => file.path).join(", ")}`,
+            checkpoint: {
+              checkpointId: checkpoint.id,
+              strategy: checkpoint.strategy,
+              filePaths: checkpoint.files.map((file) => file.path),
+              status: "created",
+            },
+          }));
+        } catch (err: any) {
+          const message = err?.message || String(err);
+          emitThreadEvent(createThreadEvent({
+            kind: "checkpoint",
+            workspacePath: fs.workspaceRoot,
+            threadId: event.threadId,
+            taskId: event.taskId,
+            runSessionId: event.runSessionId,
+            role: "reviewer",
+            title: "Patch Checkpoint Failed",
+            status: "done",
+            message: `应用补丁前创建文件快照失败：${message}`,
+            checkpoint: {
+              checkpointId: `checkpoint-failed-${Date.now()}`,
+              strategy: "file-snapshot",
+              filePaths: processedPatches.map((patch) => patch.path),
+              status: "failed",
+              error: message,
+            },
+          }));
+          throw new Error(`创建补丁 checkpoint 失败，已停止写入：${message}`);
+        }
 
         await invokeDesktop("apply_workspace_patches_transactional", {
           workspacePath: fs.workspaceRoot,
@@ -125,32 +247,89 @@ export function usePatchWorkflow({
           await fs.viewFile(fs.activeFilePath);
         }
 
-        setAgentEvents(prev => markEventPatchesApplied(prev, eventId, processedPatches).map(e => {
-          if (e.role !== "verifier") return e;
-          return {
-            ...e,
-            status: "thinking",
-            message: "多文件补丁已通过三方消解并安全写入。等待你批准验证命令后再运行测试。",
-          };
+        updateThreadEvent(eventId, (event) => ({
+          ...markEventPatchesApplied([event], eventId, processedPatches)[0],
+          checkpoint: checkpointId
+            ? {
+              checkpointId,
+              strategy: checkpointStrategy,
+              filePaths: processedPatches.map((patch) => patch.path),
+              status: "created",
+              }
+            : event.checkpoint,
         }));
 
         onPatchApplied?.(eventId);
       } else {
-        setAgentEvents(prev => prev.map(e => {
-          if (e.id !== eventId || !e.patches) return e;
-          return {
-            ...e,
-            message: "桌面运行时不可用，无法写入本地文件。",
-          };
-        }));
+        updateThreadEvent(eventId, (event) => event.patches
+          ? { ...event, message: "桌面运行时不可用，无法写入本地文件。" }
+          : event);
       }
     } catch (err: any) {
       throw new Error(err || "写入本地失败");
     }
-  }, [agentEventsRef, fs, onPatchApplied, setAgentEvents]);
+  }, [emitThreadEvent, fs, onPatchApplied, threadEventsRef, updateThreadEvent]);
+
+  const rollbackEventPatch = useCallback(async (eventId: string) => {
+    const event = threadEventsRef.current.find((item) => item.id === eventId);
+    const checkpointId = event?.checkpoint?.checkpointId;
+    if (!event || !checkpointId) {
+      throw new Error("该补丁没有可恢复的 checkpoint。");
+    }
+    const checkpointFilePaths = event.checkpoint?.filePaths || event.patches?.map((patch) => patch.path) || [];
+    const rollbackEventId = `rollback-${Date.now()}`;
+    emitThreadEvent(createThreadEvent({
+      id: rollbackEventId,
+      kind: "rollback",
+      workspacePath: event.workspacePath || fs.workspaceRoot,
+      threadId: event.threadId,
+      taskId: event.taskId,
+      runSessionId: event.runSessionId,
+      role: "reviewer",
+      title: "Patch Rollback",
+      status: "thinking",
+      message: `正在从 checkpoint 恢复：${checkpointId}`,
+      rollback: {
+        checkpointId,
+        filePaths: checkpointFilePaths,
+        status: "running",
+        actor: "user",
+      },
+    }));
+
+    try {
+      const checkpoint = await restorePatchCheckpoint(checkpointId);
+      await fs.refreshFileTree();
+      if (fs.activeFilePath) await fs.viewFile(fs.activeFilePath);
+      updateThreadEvent(rollbackEventId, {
+        status: "done",
+        message: `已回滚文件：${checkpoint.files.map((file) => file.path).join(", ")}`,
+        rollback: {
+          checkpointId,
+          filePaths: checkpoint.files.map((file) => file.path),
+          status: "restored",
+          actor: "user",
+        },
+      });
+    } catch (err: any) {
+      const message = err?.message || String(err);
+      updateThreadEvent(rollbackEventId, {
+        status: "done",
+        message: `回滚失败：${message}`,
+        rollback: {
+          checkpointId,
+          filePaths: checkpointFilePaths,
+          status: "failed",
+          actor: "user",
+          error: message,
+        },
+      });
+      throw new Error(message);
+    }
+  }, [emitThreadEvent, fs, threadEventsRef, updateThreadEvent]);
 
   const refinePatch = useCallback(async (eventId: string, feedback: string) => {
-    const event = agentEventsRef.current.find(e => e.id === eventId);
+    const event = threadEventsRef.current.find(e => e.id === eventId);
     if (!event || !event.patches || event.patches.length === 0) return;
 
     const patchItem = event.patches[0];
@@ -159,14 +338,10 @@ export function usePatchWorkflow({
     const lastFailedContent = patchItem.newContent;
 
     if (isRealLLMActiveRef.current && activeLLMConfigRef.current) {
-      setAgentEvents(prev => prev.map(e => {
-        if (e.id !== eventId) return e;
-        return {
-          ...e,
-          status: "thinking",
-          message: `正在接收微调反馈："${feedback}"，重新生成补丁中...`,
-        };
-      }));
+      updateThreadEvent(eventId, {
+        status: "thinking",
+        message: `正在接收微调反馈："${feedback}"，重新生成补丁中...`,
+      });
 
       try {
         const refinePrompt = `
@@ -190,53 +365,41 @@ export function usePatchWorkflow({
           activeLLMConfigRef.current.url
         );
 
-        setAgentEvents(prev => prev.map(e => {
-          if (e.id !== eventId) return e;
-          return {
-            ...e,
-            status: "done",
-            message: `根据您的微调意见："${feedback}"，我已重构了补丁内容。请在下方卡片中做 Diff 审查并批准应用更改。`,
-            patches: [{
-              path: filePath,
-              oldContent,
-              newContent: refinedCode,
-              applied: false,
-            }],
-          };
-        }));
+        updateThreadEvent(eventId, {
+          status: "done",
+          message: `根据您的微调意见："${feedback}"，我已重构了补丁内容。请在下方卡片中做 Diff 审查并批准应用更改。`,
+          patches: [{
+            path: filePath,
+            oldContent,
+            newContent: refinedCode,
+            applied: false,
+          }],
+        });
       } catch (err: any) {
-        setAgentEvents(prev => prev.map(e => {
-          if (e.id !== eventId) return e;
-          return {
-            ...e,
-            status: "done",
-            message: `重生成微调补丁失败: ${err?.message || String(err)}。原补丁仍然保留。`,
-          };
-        }));
+        updateThreadEvent(eventId, {
+          status: "done",
+          message: `重生成微调补丁失败: ${err?.message || String(err)}。原补丁仍然保留。`,
+        });
       }
     } else {
-      setAgentEvents(prev => prev.map(e => {
-        if (e.id !== eventId) return e;
-        return {
-          ...e,
-          message: `需要先在设置中配置模型 API Key，才能根据反馈重新生成补丁："${feedback}"。`,
-        };
-      }));
+      updateThreadEvent(eventId, {
+        message: `需要先在设置中配置模型 API Key，才能根据反馈重新生成补丁："${feedback}"。`,
+      });
     }
-  }, [activeLLMConfigRef, agentEventsRef, isRealLLMActiveRef, setAgentEvents]);
+  }, [activeLLMConfigRef, isRealLLMActiveRef, threadEventsRef, updateThreadEvent]);
 
   const updateEventPatch = useCallback((eventId: string, patchPath: string, updates: Partial<PatchItem>) => {
-    setAgentEvents(prev => prev.map(e => {
-      if (e.id !== eventId || !e.patches) return e;
-      return {
-        ...e,
-        patches: e.patches.map(patch => patch.path === patchPath ? { ...patch, ...updates } : patch),
-      };
-    }));
-  }, [setAgentEvents]);
+    updateThreadEvent(eventId, (event) => event.patches
+      ? {
+          ...event,
+          patches: event.patches.map(patch => patch.path === patchPath ? { ...patch, ...updates } : patch),
+        }
+      : event);
+  }, [updateThreadEvent]);
 
   return {
     applyEventPatch,
+    rollbackEventPatch,
     refinePatch,
     updateEventPatch,
   };

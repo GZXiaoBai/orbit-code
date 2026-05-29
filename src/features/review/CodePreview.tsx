@@ -1,8 +1,10 @@
 import { lazy, Suspense } from "react";
 import { Clipboard, Copy, FileCode2, X } from "lucide-react";
+import { createFileActionTarget } from "../../domain/fileActions";
 import type { AppCopy } from "../../i18n/copy";
 import type { FilePreviewState } from "../../domain/filePreview";
 import type { Theme } from "../../domain/types";
+import { FileActionMenu } from "../files/FileActionMenu";
 
 const MonacoEditor = lazy(async () => {
   const module = await import("@monaco-editor/react");
@@ -12,6 +14,7 @@ const MonacoEditor = lazy(async () => {
 interface CodePreviewProps {
   copy: AppCopy;
   preview: FilePreviewState;
+  workspacePath?: string;
   theme: Theme;
   onClose: () => void;
 }
@@ -36,12 +39,13 @@ async function copyText(text?: string) {
   }
 }
 
-export function CodePreview({ copy, preview, theme, onClose }: CodePreviewProps) {
+export function CodePreview({ copy, preview, workspacePath, theme, onClose }: CodePreviewProps) {
   const editorTheme = theme === "dark" ? "vs-dark" : "vs";
 
   if (!preview.path) {
     return null;
   }
+  const target = createFileActionTarget({ workspacePath, path: preview.path, sourceSurface: "review" });
 
   return (
     <section className="dock-file-preview monaco-readonly-preview" data-testid="monaco-readonly-preview">
@@ -50,7 +54,9 @@ export function CodePreview({ copy, preview, theme, onClose }: CodePreviewProps)
           <FileCode2 size={15} />
           <div>
             <strong>{fileName(preview.path)}</strong>
-            <small>{preview.path}</small>
+            <FileActionMenu copy={copy} target={target}>
+              <small className="file-action-path-label">{preview.path}</small>
+            </FileActionMenu>
           </div>
         </div>
         <div className="code-preview-actions">

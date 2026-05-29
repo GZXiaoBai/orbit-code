@@ -5,6 +5,7 @@ const fixtureFiles = [
   "CHANGELOG.md",
   "Dockerfile",
   "LICENSE",
+  "package.json",
   "README.md",
   "THIRD_PARTY.md",
   "analysis_options.yaml",
@@ -26,23 +27,57 @@ async function installDesktopFixture(page: import("@playwright/test").Page) {
       fileStore[path] = `# ${path}\nfixture preview`;
     }
     (window as any).__AGENT_GUI_DESKTOP_FIXTURE_LOG__ = [];
+    (window as any).__AGENT_GUI_DESKTOP_FIXTURE_ACTIONS__ = [];
+    (window as any).__AGENT_GUI_DESKTOP_FIXTURE_CLIPBOARD__ = "";
+    (window as any).__AGENT_GUI_DESKTOP_FIXTURE_SANDBOX_FAIL_ONCE__ = false;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          (window as any).__AGENT_GUI_DESKTOP_FIXTURE_CLIPBOARD__ = text;
+        },
+      },
+    });
     (window as any).__AGENT_GUI_DESKTOP_FIXTURE_MUTATE__ = (path: string, content: string) => {
       fileStore[path] = content;
     };
+    (window as any).__AGENT_GUI_DESKTOP_FIXTURE_READ__ = (path: string) => fileStore[path];
     (window as any).__AGENT_GUI_DESKTOP_FIXTURE__ = {
       async invoke(command: string, args?: Record<string, unknown>) {
         (window as any).__AGENT_GUI_DESKTOP_FIXTURE_LOG__.push(command);
         if (command === "set_workspace_root") return String(args?.path || workspacePath);
         if (command === "get_workspace_root") return workspacePath;
         if (command === "list_workspace_files") return Object.keys(fileStore);
+        if (command === "search_workspace_files") {
+          const query = String(args?.query || "").toLowerCase();
+          return Object.entries(fileStore)
+            .flatMap(([path, content]) => content.split("\n").map((line, index) => ({ path, line, index })))
+            .filter((item) => item.line.toLowerCase().includes(query))
+            .slice(0, Number(args?.maxResults || 30))
+            .map((item) => `${item.path}:${item.index + 1}:${item.line.trim().slice(0, 160)}`);
+        }
         if (command === "read_workspace_file") {
           const path = String(args?.path || "file");
           if (!(path in fileStore)) throw new Error(`missing fixture file: ${path}`);
           return fileStore[path];
         }
+        if (command === "write_workspace_context_file") {
+          const path = String(args?.path || "");
+          if (!path || path.includes("..")) throw new Error("invalid path");
+          if (!["ORBIT.md", ".orbit/rules", ".orbit/rules.md"].includes(path) && !/^\.orbit\/skills\/[^/]+\/SKILL\.md$/.test(path)) {
+            throw new Error("Context file path is not allowed");
+          }
+          fileStore[path] = String(args?.content ?? "");
+          return null;
+        }
         if (command === "list_projects") return [];
         if (command === "create_project") return null;
+        if (command === "open_workspace_path") {
+          (window as any).__AGENT_GUI_DESKTOP_FIXTURE_ACTIONS__.push(args);
+          return null;
+        }
         if (command === "run_command_async") return null;
+        if (command === "run_command_sync") return "Desktop runtime required for command execution.\n[exit_code: 1]";
         if (command === "resolve_patch_conflict") {
           const path = String(args?.path || "");
           const oldContent = String(args?.oldContent ?? "");
@@ -61,6 +96,25 @@ async function installDesktopFixture(page: import("@playwright/test").Page) {
             has_conflict: false,
           };
         }
+        if (command === "preview_workspace_patches_in_sandbox") {
+          const patches = Array.isArray(args?.patches) ? args?.patches as Array<Record<string, unknown>> : [];
+          for (const patch of patches) {
+            const path = String(patch.path || "");
+            if (!path || path.includes("..")) throw new Error("invalid path");
+          }
+          if ((window as any).__AGENT_GUI_DESKTOP_FIXTURE_SANDBOX_FAIL_ONCE__) {
+            (window as any).__AGENT_GUI_DESKTOP_FIXTURE_SANDBOX_FAIL_ONCE__ = false;
+            throw new Error("fixture sandbox preview failed once");
+          }
+          return {
+            id: String(args?.proposalId || "sandbox-fixture"),
+            proposal_id: String(args?.proposalId || "sandbox-fixture"),
+            sandbox_path: "/tmp/orbit-fixture-sandbox",
+            status: "sandboxed",
+            output: "Fixture sandbox preview completed. No workspace files were changed.",
+            created_at: new Date().toISOString(),
+          };
+        }
         if (command === "apply_workspace_patches_transactional") {
           const patches = Array.isArray(args?.patches) ? args?.patches as Array<Record<string, unknown>> : [];
           for (const patch of patches) {
@@ -72,6 +126,35 @@ async function installDesktopFixture(page: import("@playwright/test").Page) {
           for (const patch of patches) {
             const path = String(patch.path || "");
             fileStore[path] = String(patch.new_content ?? "");
+          }
+          return null;
+        }
+        if (command === "restore_workspace_file_snapshot") {
+          const filesToRestore = Array.isArray(args?.files) ? args?.files as Array<Record<string, unknown>> : [];
+          for (const file of filesToRestore) {
+            const path = String(file.path || "");
+            if (!path || path.includes("..")) throw new Error("invalid path");
+          }
+          for (const file of filesToRestore) {
+            const path = String(file.path || "");
+            if (file.existed === false) {
+              delete fileStore[path];
+            } else {
+              fileStore[path] = String(file.content ?? "");
+            }
+          }
+          return null;
+        }
+        if (command === "create_workspace_git_shadow_checkpoint") {
+          return { checkpoint_id: String(args?.checkpointId || "checkpoint-fixture"), shadow_path: "/tmp/orbit-fixture-shadow" };
+        }
+        if (command === "restore_workspace_git_shadow_checkpoint") {
+          const filesToRestore = Array.isArray(args?.files) ? args?.files as Array<Record<string, unknown>> : [];
+          for (const file of filesToRestore) {
+            const path = String(file.path || "");
+            if (!path || path.includes("..")) throw new Error("invalid path");
+            if (file.existed === false) delete fileStore[path];
+            else fileStore[path] = String(file.content ?? "");
           }
           return null;
         }
@@ -143,6 +226,38 @@ acceptanceCriteria: []
 risks: []
 references: []`;
 
+const multiFileRollbackPlan = `version: "1"
+title: "Multi File Rollback Fixture"
+goals: ["Exercise rollback"]
+constraints: []
+tasks:
+  - id: rb1
+    title: "Rollback fixture"
+    description: "MULTI_FILE_ROLLBACK_FIXTURE"
+    status: queued
+    dependsOn: []
+    filesHint: ["AGENT_GUI_FIXTURE.md", "AGENT_GUI_CREATED.md"]
+    verification: ["npm test"]
+acceptanceCriteria: []
+risks: []
+references: []`;
+
+const installApprovalPlan = `version: "1"
+title: "Install Approval Fixture"
+goals: ["Exercise install approval"]
+constraints: []
+tasks:
+  - id: install-fixture
+    title: "Install fixture"
+    description: "INSTALL_FIXTURE"
+    status: queued
+    dependsOn: []
+    filesHint: ["package.json"]
+    verification: ["npm test"]
+acceptanceCriteria: []
+risks: []
+references: []`;
+
 async function importFixtureProvider(page: import("@playwright/test").Page) {
   await page.locator(".workbench-header-actions").getByRole("button", { name: "设置" }).click();
   await page.getByRole("button", { name: "模型", exact: true }).click();
@@ -152,14 +267,35 @@ async function importFixtureProvider(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: /返回应用|Back to app/ }).click();
 }
 
-async function startFixtureBuild(page: import("@playwright/test").Page, plan = samplePlan) {
+async function startFixtureBuild(page: import("@playwright/test").Page, plan = samplePlan, options: { openChanges?: boolean } = {}) {
+  const openChanges = options.openChanges ?? true;
   await importFixtureProvider(page);
   await page.locator(".composer textarea").fill(plan);
   await page.locator(".composer textarea").press("Enter");
   await expect(page.locator(".plan-card")).toBeVisible({ timeout: 5000 });
   await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
   await page.getByRole("button", { name: /开始执行/ }).click();
+  if (openChanges) {
+    await page.getByRole("tab", { name: /变更|Changes/ }).click();
+  }
+}
+
+async function approveCurrentOverlay(page: import("@playwright/test").Page) {
+  const dialog = page.locator(".approval-dialog");
+  await expect(dialog).toBeVisible({ timeout: 10000 });
+  await dialog.getByRole("button", { name: /批准|Approve/ }).click();
+}
+
+async function openChangesInspector(page: import("@playwright/test").Page) {
+  if (await page.locator(".patch-review-overlay").isVisible().catch(() => false)) return;
   await page.getByRole("tab", { name: /变更|Changes/ }).click();
+}
+
+async function currentPatchReview(page: import("@playwright/test").Page) {
+  const overlay = page.locator(".patch-review-overlay");
+  if (await overlay.isVisible().catch(() => false)) return overlay;
+  await openChangesInspector(page);
+  return page.locator(".dock-diff-card");
 }
 
 test.describe("Orbit Code — Run Controls", () => {
@@ -189,6 +325,110 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(page.getByRole("button", { name: /DeepSeek/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /导入模型/ })).toBeVisible();
     await expect(page.locator(".model-toggle-row", { hasText: "gpt-5" })).toHaveCount(0);
+  });
+
+  test("fixture model import stays free of React update-depth console errors", async ({ page }) => {
+    const updateDepthErrors: string[] = [];
+    page.on("console", (message) => {
+      const text = message.text();
+      if (text.includes("Maximum update depth exceeded")) updateDepthErrors.push(text);
+    });
+    page.on("pageerror", (error) => {
+      if (error.message.includes("Maximum update depth exceeded")) updateDepthErrors.push(error.message);
+    });
+
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+    await importFixtureProvider(page);
+    await page.waitForTimeout(500);
+
+    expect(updateDepthErrors).toEqual([]);
+  });
+
+  test("plan composer sends a natural language request through the planner path", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+    await importFixtureProvider(page);
+
+    await page.locator(".composer textarea").fill("审查项目，制定改进项目的计划");
+    await page.locator(".send-button").click();
+
+    await expect(page.locator(".agent-collaboration-timeline")).toContainText(/计划草案|Plan Draft|Fixture planner draft/, { timeout: 5000 });
+    await expect(page.locator(".agent-collaboration-timeline")).toContainText(/采纳并进入 Build|Accept and enter Build/);
+    await expect(page.locator(".plan-card")).toHaveCount(0);
+    await expect(page.locator(".dock-diff-card")).toHaveCount(0);
+    await expect(page.locator(".approval-request-card")).toHaveCount(0);
+    await expect(page.locator(".composer textarea")).toHaveValue("");
+    await expect(page.locator(".plan-import-error")).toHaveCount(0);
+
+    await page.getByRole("button", { name: /采纳并进入 Build|Accept and enter Build/ }).click();
+    await expect(page.locator(".plan-card")).toBeVisible({ timeout: 5000 });
+    await expect(page.locator(".run-control-bar")).toContainText(/Build/);
+  });
+
+  test("current context inspector shows read-only ORBIT rules after planner collection", async ({ page }) => {
+    await installDesktopFixture(page);
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+
+    await page.evaluate(() => {
+      (window as any).__AGENT_GUI_DESKTOP_FIXTURE_MUTATE__("ORBIT.md", "Prefer typed runtime events.");
+      (window as any).__AGENT_GUI_DESKTOP_FIXTURE_MUTATE__(".orbit/rules", "Rules never grant tool permissions.");
+      (window as any).__AGENT_GUI_DESKTOP_FIXTURE_MUTATE__(".orbit/skills/review/SKILL.md", "---\nname: review\ndescription: Review patches\nmode: plan\n---\n\n# Review\nCheck tests.");
+    });
+    await page.getByRole("button", { name: "手动路径" }).click();
+    await page.getByPlaceholder(/输入本地项目目录/).fill(fixtureWorkspace);
+    await page.getByRole("button", { name: "应用" }).click();
+    await importFixtureProvider(page);
+
+    await page.locator(".composer textarea").fill("审查项目，制定改进项目的计划");
+    await page.locator(".send-button").click();
+    await expect(page.locator(".agent-collaboration-timeline")).toContainText(/计划草案|Plan Draft|Fixture planner draft/, { timeout: 5000 });
+
+    await page.getByRole("tab", { name: /上下文|Context/ }).click();
+    const inspector = page.getByTestId("current-context-inspector");
+    await expect(inspector).toContainText(/当前注入上下文|Current injected context/);
+    await expect(inspector).toContainText("ORBIT.md");
+    await expect(inspector).toContainText(".orbit/rules");
+    await expect(inspector).toContainText("Skill: review");
+    await expect(inspector).toContainText(/权限影响|Permission impact/);
+    await expect(inspector).toContainText(/无|none/);
+
+    await inspector.getByRole("button", { name: /评估当前线程|Evaluate thread/ }).click();
+    await expect(inspector).toContainText(/failed|missing/i);
+    await expect(inspector).toContainText("modeSwitch");
+
+    await inspector.locator("textarea").fill("Prefer RuntimeLedger-first context.");
+    await inspector.getByRole("button", { name: /保存项目规则|Save project rule/ }).click();
+    await expect(inspector).toContainText(/已保存|Saved/);
+    await expect.poll(() => page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_READ__("ORBIT.md"))).toContain("RuntimeLedger-first");
+  });
+
+  test("settings context panel manages user rules injected by mode", async ({ page }) => {
+    await installDesktopFixture(page);
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+
+    await page.locator(".workbench-header-actions").getByRole("button", { name: "设置" }).click();
+    await page.getByRole("button", { name: /上下文|Context/ }).click();
+    await page.getByRole("button", { name: /添加规则|Add rule/ }).click();
+    await page.getByLabel(/规则标题|Rule title/).fill("Planner preference");
+    await page.locator(".context-rule-editor textarea").fill("Prefer asking before proposing risky architecture changes.");
+    await page.getByRole("button", { name: /返回应用/ }).click();
+
+    await page.getByRole("button", { name: "手动路径" }).click();
+    await page.getByPlaceholder(/输入本地项目目录/).fill(fixtureWorkspace);
+    await page.getByRole("button", { name: "应用" }).click();
+    await importFixtureProvider(page);
+    await page.locator(".composer textarea").fill("审查项目，制定改进项目的计划");
+    await page.locator(".send-button").click();
+    await expect(page.locator(".agent-collaboration-timeline")).toContainText(/计划草案|Plan Draft|Fixture planner draft/, { timeout: 5000 });
+
+    await page.getByRole("tab", { name: /上下文|Context/ }).click();
+    const inspector = page.getByTestId("current-context-inspector");
+    await expect(inspector).toContainText("Planner preference");
+    await expect(inspector).toContainText("Prefer asking before proposing risky architecture changes.");
+    await expect(inspector).toContainText(/权限影响|Permission impact/);
   });
 
   test("settings exposes mature sections and composer shows project permission", async ({ page }) => {
@@ -354,6 +594,34 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(page.locator(".large-file-preview")).toContainText("文件较大");
   });
 
+  test("file action menu opens workspace files through controlled actions", async ({ page }) => {
+    await installDesktopFixture(page);
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+
+    await page.getByRole("button", { name: "手动路径" }).click();
+    await page.getByPlaceholder(/输入本地项目目录/).fill(fixtureWorkspace);
+    await page.getByRole("button", { name: "应用" }).click();
+
+    const packageRow = page.locator(".file-tree-node.file", { hasText: "package.json" });
+    await expect(packageRow).toBeVisible({ timeout: 10000 });
+    await packageRow.click();
+    await expect(page.locator(".monaco-readonly-preview")).toContainText("package.json", { timeout: 10000 });
+
+    await packageRow.click({ button: "right" });
+    await expect(page.getByRole("menu")).toContainText(/VS Code/);
+    await page.getByRole("menuitem", { name: /在 VS Code 中打开|Open in VS Code/ }).first().click();
+    await expect.poll(() => page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_ACTIONS__ || [])).toContainEqual({
+      path: "package.json",
+      workspacePath: fixtureWorkspace,
+      action: "vscode",
+    });
+
+    await page.locator(".file-action-path-label", { hasText: "package.json" }).click();
+    await page.getByRole("menuitem", { name: /复制路径|Copy path/ }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_CLIPBOARD__)).toBe(`${fixtureWorkspace}/package.json`);
+  });
+
   test("light theme keeps usage popover and primary hover readable", async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("agent-gui.app-preferences.v1", JSON.stringify({ language: "zh", theme: "light" }));
@@ -425,7 +693,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(page.locator(".thread-actions-menu")).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "复制线程摘要" })).toBeVisible();
 
-    await page.getByRole("menuitem", { name: "隐藏审查台" }).click();
+    await page.getByRole("menuitem", { name: "隐藏详情检查器" }).click();
     await expect(page.locator(".review-dock")).toHaveCount(0);
 
     await page.getByRole("button", { name: "线程操作" }).click();
@@ -483,25 +751,29 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
     await page.getByRole("button", { name: /开始执行/ }).click();
 
-    await page.getByRole("tab", { name: /变更|Changes/ }).click();
-    await expect(page.locator(".approval-request-card", { hasText: "run_command" })).toBeVisible({ timeout: 10000 });
-    await page.locator(".approval-request-card", { hasText: "run_command" }).getByRole("button", { name: /批准|Approve/ }).click();
+    await openChangesInspector(page);
+    await expect(page.locator(".approval-dialog")).toContainText(/需要授权|Authorization required/, { timeout: 10000 });
+    await expect(page.locator(".approval-dialog")).toContainText("npm test");
+    await expect(page.locator("[data-testid='timeline-pending-actions']")).toContainText(/批准命令|Approve command/, { timeout: 10000 });
+    await approveCurrentOverlay(page);
     await page.getByRole("button", { name: /继续执行|Continue/ }).click();
 
     await page.getByRole("tab", { name: /终端|Terminal/ }).click();
     await expect(page.locator(".dock-terminal")).toContainText("Desktop runtime required", { timeout: 10000 });
 
-    await page.getByRole("tab", { name: /变更|Changes/ }).click();
-    await expect(page.locator(".dock-diff-card")).toBeVisible({ timeout: 10000 });
-    await expect(page.locator(".dock-diff-card")).toContainText(/沙盒 已预演|沙盒 预演失败|Sandbox Previewed|Sandbox Preview failed/);
-    await expect(page.locator(".dock-diff-card")).toContainText("AGENT_GUI_FIXTURE.md");
+    const patchReview = await currentPatchReview(page);
+    await expect(patchReview).toBeVisible({ timeout: 10000 });
+    await expect(patchReview).toContainText(/沙盒 已预演|沙盒 预演失败|Sandbox Previewed|Sandbox Preview failed/);
+    await expect(patchReview).toContainText("AGENT_GUI_FIXTURE.md");
     await expect(page.locator(".agent-collaboration-timeline")).toContainText(/Agent 提出|Agent proposed|Agent 提出了/);
     await expect(page.locator(".agent-collaboration-timeline")).not.toContainText('"tool"');
 
-    await page.locator(".dock-diff-card .apply-patch-action-btn").click();
+    await patchReview.locator(".apply-patch-action-btn").first().click();
     await expect.poll(() => page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_LOG__ || [])).toContain("apply_workspace_patches_transactional");
+    await expect(page.locator(".approval-dialog")).toContainText("npm test", { timeout: 10000 });
+    await page.locator(".approval-dialog").getByRole("button", { name: /拒绝|Deny/ }).click();
+    await openChangesInspector(page);
     await expect(page.locator(".dock-applied-history")).toContainText(/所有修改已安全应用到本地|All changes have been applied locally/, { timeout: 10000 });
-    await expect(page.locator(".approval-request-card", { hasText: "npm test" })).toBeVisible({ timeout: 10000 });
 
     await page.getByRole("tab", { name: /文件|Files/ }).click();
     await page.getByPlaceholder("搜索文件").fill("AGENT_GUI_FIXTURE");
@@ -510,20 +782,21 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(page.locator(".monaco-editor")).toBeVisible({ timeout: 10000 });
   });
 
-  test("malformed patch prose is corrected into a strict apply_patch review item", async ({ page }) => {
+  test("malformed patch prose is corrected into a strict propose_patch review item", async ({ page }) => {
     await installDesktopFixture(page);
     await page.goto("/");
     await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
 
     await startFixtureBuild(page, malformedPatchPlan);
-    await page.locator(".approval-request-card", { hasText: "run_command" }).getByRole("button", { name: /批准|Approve/ }).click();
+    await approveCurrentOverlay(page);
     await page.getByRole("button", { name: /继续执行|Continue/ }).click();
+    const patchReview = await currentPatchReview(page);
 
-    await expect(page.locator(".dock-diff-card")).toBeVisible({ timeout: 10000 });
-    await expect(page.locator(".dock-diff-card")).toContainText("AGENT_GUI_FIXTURE.md");
+    await expect(patchReview).toBeVisible({ timeout: 10000 });
+    await expect(patchReview).toContainText("AGENT_GUI_FIXTURE.md");
     await expect(page.locator(".agent-collaboration-timeline")).not.toContainText("<补丁>");
     await expect(page.locator(".agent-collaboration-timeline")).not.toContainText('"patches"');
-    await expect(page.locator(".dock-diff-card")).toContainText(/沙盒 已预演|Sandbox Previewed|预演失败|Preview failed/);
+    await expect(patchReview).toContainText(/沙盒 已预演|Sandbox Previewed|预演失败|Preview failed/);
   });
 
   test("pending command approval survives reload and approve executes local resume action", async ({ page }) => {
@@ -536,14 +809,14 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.getByRole("button", { name: "应用" }).click();
     await startFixtureBuild(page);
 
-    const approval = page.locator(".approval-request-card", { hasText: "run_command" });
+    const approval = page.locator(".approval-dialog");
     await expect(approval).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(2300);
     await page.reload();
     await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
     await page.getByRole("tab", { name: /变更|Changes/ }).click();
 
-    const recoveredApproval = page.locator(".approval-request-card", { hasText: "run_command" });
+    const recoveredApproval = page.locator(".approval-dialog");
     await expect(recoveredApproval).toBeVisible({ timeout: 10000 });
     await expect(page.locator(".agent-collaboration-timeline")).toContainText(/已恢复等待态|已恢复等待操作|Recovered Waiting State/, { timeout: 10000 });
     await recoveredApproval.getByRole("button", { name: /批准|Approve/ }).click();
@@ -556,19 +829,20 @@ test.describe("Orbit Code — Run Controls", () => {
   test("pending question survives reload and records recovered answer", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
-    await startFixtureBuild(page, questionPlan);
+    await startFixtureBuild(page, questionPlan, { openChanges: false });
 
-    const questionCard = page.locator(".question-request-card");
-    await expect(questionCard).toBeVisible({ timeout: 10000 });
+    const questionDialog = page.locator(".structured-question-dialog");
+    await expect(questionDialog).toBeVisible({ timeout: 10000 });
+    await expect(questionDialog).toContainText("Safe fixture path");
     await page.waitForTimeout(2300);
     await page.reload();
     await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
-    await page.getByRole("tab", { name: /变更|Changes/ }).click();
 
-    const recoveredQuestion = page.locator(".question-request-card");
+    const recoveredQuestion = page.locator(".structured-question-dialog");
     await expect(recoveredQuestion).toBeVisible({ timeout: 10000 });
+    await recoveredQuestion.getByText(/否，请告诉 Orbit 如何调整|No, tell Orbit/).click();
     await recoveredQuestion.locator("textarea").fill("Use the recovered fixture answer.");
-    await recoveredQuestion.getByRole("button", { name: /回答|Answer/ }).click();
+    await recoveredQuestion.getByRole("button", { name: /继续|Continue/ }).click();
     await expect(page.locator(".agent-collaboration-timeline")).toContainText(/恢复的问题|Recovered Question Answered|recovered fixture answer/i, { timeout: 10000 });
   });
 
@@ -582,18 +856,19 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.getByRole("button", { name: "应用" }).click();
     await startFixtureBuild(page);
 
-    await page.locator(".approval-request-card", { hasText: "run_command" }).getByRole("button", { name: /批准|Approve/ }).click();
+    await approveCurrentOverlay(page);
     await page.getByRole("button", { name: /继续执行|Continue/ }).click();
-    await expect(page.locator(".dock-diff-card")).toContainText("AGENT_GUI_FIXTURE.md", { timeout: 10000 });
+    let patchReview = await currentPatchReview(page);
+    await expect(patchReview).toContainText("AGENT_GUI_FIXTURE.md", { timeout: 10000 });
     await page.waitForTimeout(2300);
     await page.reload();
     await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
-    await page.getByRole("tab", { name: /变更|Changes/ }).click();
+    patchReview = await currentPatchReview(page);
 
-    await expect(page.locator(".dock-diff-card")).toContainText("AGENT_GUI_FIXTURE.md", { timeout: 10000 });
-    await page.locator(".dock-diff-card .apply-patch-action-btn").click();
+    await expect(patchReview).toContainText("AGENT_GUI_FIXTURE.md", { timeout: 10000 });
+    await patchReview.locator(".apply-patch-action-btn").first().click();
     await expect.poll(() => page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_LOG__ || [])).toContain("apply_workspace_patches_transactional");
-    await expect(page.locator(".approval-request-card", { hasText: "npm test" })).toBeVisible({ timeout: 10000 });
+    await expect(page.locator(".approval-dialog")).toContainText("npm test", { timeout: 10000 });
     await expect(page.getByRole("button", { name: /继续执行|Continue/ })).toBeVisible({ timeout: 10000 });
   });
 
@@ -617,7 +892,7 @@ test.describe("Orbit Code — Run Controls", () => {
     await expect(page.locator(".dock-diff-card")).toHaveCount(0);
   });
 
-  test("fixture provider ask_user flow waits for an answer in Review Dock", async ({ page }) => {
+  test("fixture provider ask_user flow opens structured question overlay", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
 
@@ -635,13 +910,16 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.locator(".run-control-bar").getByRole("button", { name: /Build/ }).click();
     await page.getByRole("button", { name: /开始执行/ }).click();
 
-    await page.getByRole("tab", { name: /变更|Changes/ }).click();
-    const questionCard = page.locator(".question-request-card");
-    await expect(questionCard).toBeVisible({ timeout: 10000 });
-    await expect(questionCard).toContainText(/Which implementation path|Agent/);
-    await questionCard.locator("textarea").fill("Use the safe fixture path.");
-    await questionCard.getByRole("button", { name: /回答|Answer/ }).click();
-    await expect(page.locator(".agent-collaboration-timeline")).toContainText(/回答|answered/i, { timeout: 10000 });
+    const questionDialog = page.locator(".structured-question-dialog");
+    await expect(questionDialog).toBeVisible({ timeout: 10000 });
+    await expect(questionDialog).toContainText(/Which implementation path|Safe fixture path/);
+    await questionDialog.locator(".structured-question-info").first().hover();
+    await expect(page.getByRole("tooltip")).toContainText(/Read the package manifest/);
+    await page.keyboard.press("2");
+    await expect(questionDialog.locator(".structured-question-option").nth(1)).toHaveClass(/selected/);
+    await page.keyboard.press("1");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".agent-collaboration-timeline")).toContainText(/Safe fixture path|回答|answered/i, { timeout: 10000 });
   });
 
   test("patch apply stops on local conflict and writes only after resolution", async ({ page }) => {
@@ -662,28 +940,84 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.getByRole("button", { name: /开始执行/ }).click();
 
     await page.getByRole("tab", { name: /变更|Changes/ }).click();
-    await page.locator(".approval-request-card", { hasText: "run_command" }).getByRole("button", { name: /批准|Approve/ }).click();
+    await approveCurrentOverlay(page);
     await page.getByRole("button", { name: /继续执行|Continue/ }).click();
-    await expect(page.locator(".dock-diff-card")).toContainText("AGENT_GUI_FIXTURE.md", { timeout: 10000 });
+    const patchReview = await currentPatchReview(page);
+    await expect(patchReview).toContainText("AGENT_GUI_FIXTURE.md", { timeout: 10000 });
 
     await page.evaluate(() => {
       (window as any).__AGENT_GUI_DESKTOP_FIXTURE_MUTATE__("AGENT_GUI_FIXTURE.md", "# Local Change\n\nUser edited this before approving.\n");
     });
 
-    await page.locator(".dock-diff-card .apply-patch-action-btn").click();
-    await expect(page.locator(".dock-diff-card")).toContainText(/3-Way Merge|3-way merge|冲突/, { timeout: 10000 });
+    await patchReview.locator(".apply-patch-action-btn").first().click();
+    await expect(patchReview).toContainText(/3-Way Merge|3-way merge|冲突/, { timeout: 10000 });
     await expect.poll(() => page.evaluate(() => {
       const log = (window as any).__AGENT_GUI_DESKTOP_FIXTURE_LOG__ || [];
       return log.filter((entry: string) => entry === "apply_workspace_patches_transactional").length;
     })).toBe(0);
 
-    await page.getByRole("button", { name: /解决冲突|Resolve/ }).click();
-    await page.locator(".dock-diff-card .apply-patch-action-btn").click();
+    const patchDialog = page.getByRole("dialog", { name: /补丁提案|Patch Proposal/ });
+    await patchDialog.getByRole("button", { name: /解决冲突|Resolve/ }).click();
+    await patchDialog.locator(".apply-patch-action-btn").first().click();
     await expect.poll(() => page.evaluate(() => {
       const log = (window as any).__AGENT_GUI_DESKTOP_FIXTURE_LOG__ || [];
       return log.filter((entry: string) => entry === "apply_workspace_patches_transactional").length;
     })).toBe(1);
+    await expect(page.locator(".approval-dialog")).toContainText("npm test", { timeout: 10000 });
+    await page.locator(".approval-dialog").getByRole("button", { name: /拒绝|Deny/ }).click();
+    await openChangesInspector(page);
     await expect(page.locator(".dock-applied-history")).toContainText(/所有修改已安全应用到本地|All changes have been applied locally/, { timeout: 10000 });
+  });
+
+  test("multi-file patch rollback restores edited files and removes created files", async ({ page }) => {
+    await installDesktopFixture(page);
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+    await page.evaluate(() => {
+      (window as any).__AGENT_GUI_DESKTOP_FIXTURE_MUTATE__("AGENT_GUI_FIXTURE.md", "# AGENT_GUI_FIXTURE.md\nfixture preview");
+    });
+
+    await startFixtureBuild(page, multiFileRollbackPlan);
+    await approveCurrentOverlay(page);
+    await page.getByRole("button", { name: /继续执行|Continue/ }).click();
+    const patchReview = await currentPatchReview(page);
+    await expect(patchReview).toContainText("AGENT_GUI_FIXTURE.md", { timeout: 10000 });
+    await expect(patchReview).toContainText("AGENT_GUI_CREATED.md", { timeout: 10000 });
+
+    await patchReview.locator(".apply-patch-action-btn").first().click();
+    await expect.poll(() => page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_READ__("AGENT_GUI_CREATED.md"))).toContain("Created File");
+    await page.locator(".approval-dialog").getByRole("button", { name: /拒绝|Deny/ }).click();
+    await openChangesInspector(page);
+
+    await page.locator(".dock-applied-history").getByRole("button", { name: /回滚|Rollback/ }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_LOG__ || [])).toContain("restore_workspace_file_snapshot");
+    await expect.poll(() => page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_READ__("AGENT_GUI_FIXTURE.md"))).toContain("fixture preview");
+    await expect.poll(() => page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_READ__("AGENT_GUI_CREATED.md"))).toBeUndefined();
+    await expect(page.locator(".dock-applied-history")).toContainText(/已回滚文件|Rollback|回滚/, { timeout: 10000 });
+  });
+
+  test("sandbox preview failure can be retried before patch apply", async ({ page }) => {
+    await installDesktopFixture(page);
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+    await page.evaluate(() => {
+      (window as any).__AGENT_GUI_DESKTOP_FIXTURE_SANDBOX_FAIL_ONCE__ = true;
+    });
+
+    await startFixtureBuild(page);
+    await approveCurrentOverlay(page);
+    await page.getByRole("button", { name: /继续执行|Continue/ }).click();
+    const patchReview = await currentPatchReview(page);
+    await expect(patchReview).toContainText(/沙盒预演失败|sandbox preview failed|failed/i, { timeout: 10000 });
+
+    await patchReview.locator(".apply-patch-action-btn").first().click();
+    await expect(patchReview).toContainText(/重试通过|retry|预演/, { timeout: 10000 });
+    await patchReview.locator(".apply-patch-action-btn").first().click();
+
+    await expect.poll(() => page.evaluate(() => {
+      const log = (window as any).__AGENT_GUI_DESKTOP_FIXTURE_LOG__ || [];
+      return log.filter((entry: string) => entry === "apply_workspace_patches_transactional").length;
+    })).toBe(1);
   });
 
   test("fixture provider command denial does not create terminal output", async ({ page }) => {
@@ -705,12 +1039,34 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.getByRole("button", { name: /开始执行/ }).click();
 
     await page.getByRole("tab", { name: /变更|Changes/ }).click();
-    const approval = page.locator(".approval-request-card", { hasText: "run_command" });
+    const approval = page.locator(".approval-dialog");
     await expect(approval).toBeVisible({ timeout: 10000 });
     await approval.getByRole("button", { name: /拒绝|Deny/ }).click();
 
     await expect(page.locator(".agent-collaboration-timeline")).toContainText(/拒绝|denied/i, { timeout: 10000 });
     await page.getByRole("tab", { name: /终端|Terminal/ }).click();
     await expect(page.locator(".dock-terminal")).toHaveCount(0);
+  });
+
+  test("fixture provider install approval denial does not create terminal output", async ({ page }) => {
+    await installDesktopFixture(page);
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+    await page.getByRole("button", { name: "手动路径" }).click();
+    await page.getByPlaceholder(/输入本地项目目录/).fill(fixtureWorkspace);
+    await page.getByRole("button", { name: "应用" }).click();
+
+    await startFixtureBuild(page, installApprovalPlan, { openChanges: false });
+
+    const approval = page.locator(".approval-dialog");
+    await expect(approval).toBeVisible({ timeout: 10000 });
+    await expect(approval).toContainText("npm install");
+    await expect(approval).toContainText(/安装|Install/);
+    await approval.getByRole("button", { name: /拒绝|Deny/ }).click();
+
+    await expect(page.locator(".agent-collaboration-timeline")).toContainText(/拒绝|denied/i, { timeout: 10000 });
+    await page.getByRole("tab", { name: /终端|Terminal/ }).click();
+    await expect(page.locator(".dock-terminal")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_LOG__ || [])).not.toContain("run_command_async");
   });
 });

@@ -68,7 +68,7 @@ references: []`);
     await expect(page.locator(".plan-card")).not.toBeVisible();
   });
 
-  test("task queue appears in review dock after plan import", async ({ page }) => {
+  test("imported tasks stay on the center plan surface while review dock remains inspector", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
 
@@ -92,22 +92,10 @@ references: []`);
     await textarea.press("Enter");
     await page.waitForTimeout(2000);
 
-    await page.getByRole("tab", { name: /任务|Tasks/ }).click();
+    await expect(page.locator(".plan-card")).toContainText("Step 1", { timeout: 5000 });
     await expect(page.locator(".review-dock")).toBeVisible();
-    await expect(page.locator(".review-dock").getByText("Step 1")).toBeVisible({ timeout: 5000 });
-
-    await page.locator(".dock-task .ui-select-trigger").first().click();
-    const popover = page.locator(".ui-select-popover").first();
-    await expect(popover).toBeVisible();
-    const box = await popover.boundingBox();
-    const viewport = page.viewportSize();
-    expect(box).not.toBeNull();
-    expect(viewport).not.toBeNull();
-    if (box && viewport) {
-      expect(box.x).toBeGreaterThanOrEqual(0);
-      expect(box.y).toBeGreaterThanOrEqual(0);
-      expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
-      expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
-    }
+    await expect(page.getByRole("tab", { name: /任务|Tasks/ })).toHaveCount(0);
+    await page.getByRole("tab", { name: /变更|Changes/ }).click();
+    await expect(page.locator(".review-dock")).not.toContainText("Step 1");
   });
 });

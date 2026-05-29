@@ -58,6 +58,32 @@ export interface GeneralSettings {
   openLastWorkspace: boolean;
 }
 
+export type ContextRuleMode = "plan" | "build" | "both";
+export type ContextRuleSource = "user" | "workspace" | "project";
+
+export interface ContextRule {
+  id: string;
+  title: string;
+  content: string;
+  enabled: boolean;
+  mode: ContextRuleMode;
+  source: ContextRuleSource;
+}
+
+export interface ContextSkill {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  modeSlugs?: ContextRuleMode[];
+  source: "project";
+  path: string;
+}
+
+export interface ContextSettings {
+  userRules: ContextRule[];
+}
+
 export interface AdvancedSettings {
   diagnosticsEnabled: boolean;
 }

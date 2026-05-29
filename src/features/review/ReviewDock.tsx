@@ -1,23 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, FileCode2, GitPullRequestArrow, ListChecks, ShieldCheck, X } from "lucide-react";
-import type { PlanTask, TaskStatus } from "../../domain/types";
+import { AlertTriangle, BookOpenText, FileCode2, GitPullRequestArrow } from "lucide-react";
 import type { Theme } from "../../domain/types";
 import type { TerminalRun } from "../../domain/terminalRun";
 import type { AppCopy } from "../../i18n/copy";
 import type { useWorkspace } from "../../state/useWorkspace";
 import { useFilePreview } from "../../state/useFilePreview";
-import { Button, EmptyState, SelectMenu, StatusBadge, Tabs } from "../../ui/primitives";
+import { EmptyState, StatusBadge, Tabs } from "../../ui/primitives";
 import { CodePreview } from "./CodePreview";
-import { CommandApprovalQueue } from "./CommandApprovalQueue";
 import { PatchReviewQueue } from "./PatchReviewQueue";
-import { QuestionQueue } from "./QuestionQueue";
 import { TerminalRunList } from "./TerminalRunList";
-import { VerificationQueue } from "./VerificationQueue";
-import { statusTone } from "./reviewCardUtils";
 import { localizedAgentEventName, localizedRuntimeText } from "../../components/thread/agentDisplayText";
 
 type WorkspaceState = ReturnType<typeof useWorkspace>;
-type DockTab = "files" | "tasks" | "changes" | "terminal";
+type DockTab = "files" | "changes" | "terminal" | "context";
 
 interface ReviewDockProps {
   copy: AppCopy;
@@ -27,21 +22,16 @@ interface ReviewDockProps {
 
 export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
   const [activeTab, setActiveTab] = useState<DockTab>("files");
+  const [editingContextPath, setEditingContextPath] = useState("ORBIT.md");
+  const [contextDraft, setContextDraft] = useState("");
+  const [contextSaveState, setContextSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [smokeRecord, setSmokeRecord] = useState<ReturnType<WorkspaceState["evaluateDeepSeekSmokeRun"]> | null>(null);
   const didAutoSelectTab = useRef(false);
   const model = workspace.reviewDockModel;
   const filePreview = useFilePreview(workspace.activeFilePath, workspace.activeFileContent);
-  const tasks = workspace.importedPlan?.plan.tasks ?? [];
   const terminalRuns = model.terminalRuns.length > 0
     ? model.terminalRuns
     : model.historyTerminalRuns;
-  const taskStatusOptions: Array<{ value: TaskStatus; label: string }> = [
-    { value: "queued", label: copy.workbench.taskStatus.queued },
-    { value: "running", label: copy.workbench.taskStatus.running },
-    { value: "blocked", label: copy.workbench.taskStatus.blocked },
-    { value: "review", label: copy.workbench.taskStatus.review },
-    { value: "verified", label: copy.workbench.taskStatus.verified },
-    { value: "done", label: copy.workbench.taskStatus.done },
-  ];
   const terminalEntries: TerminalRun[] = terminalRuns.length > 0 ? terminalRuns : Object.entries(workspace.terminalLogs).map(([taskId, output]) => ({
     id: taskId,
     taskId,
@@ -55,13 +45,16 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
     completedAt: undefined,
   }));
   const failedTerminalCount = terminalEntries.filter((run) => run.status === "failed" || (run.exitCode !== null && run.exitCode !== 0)).length;
+  const contextInspector = workspace.currentContextInspector;
+  const editableContext = contextInspector.editableSources.find((source) => source.path === editingContextPath)
+    || contextInspector.editableSources[0];
   const activeChangeSteps = useMemo(
     () => workspace.runSteps
       .filter((step) => (step.kind === "command" || step.kind === "patch") && step.status !== "done")
       .slice(-4),
     [workspace.runSteps],
   );
-  const headerStatus = reviewHeaderStatus(copy, model.counts.changes, failedTerminalCount, workspace.pendingApprovals.length);
+  const headerStatus = reviewHeaderStatus(copy, model.counts.changes, failedTerminalCount, workspace.pendingActions.length);
 
   useEffect(() => {
     if (didAutoSelectTab.current) return;
@@ -91,6 +84,23 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
     return () => window.removeEventListener("orbit:focus-review-dock", focusReviewDock);
   }, []);
 
+  useEffect(() => {
+    if (!editableContext) return;
+    setContextDraft(editableContext.content);
+    setContextSaveState("idle");
+  }, [editableContext?.path, editableContext?.content]);
+
+  const saveContextFile = async () => {
+    if (!editableContext) return;
+    setContextSaveState("saving");
+    try {
+      await workspace.writeProjectContextFile(editableContext.path, contextDraft);
+      setContextSaveState("saved");
+    } catch {
+      setContextSaveState("error");
+    }
+  };
+
   return (
     <aside className="review-dock" aria-label={copy.workbench.reviewDock}>
       <header className="review-dock-header">
@@ -105,46 +115,18 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
         onChange={setActiveTab}
         tabs={[
           { id: "files", label: copy.workbench.filesTab },
-          { id: "tasks", label: copy.workbench.tasksTab, count: tasks.length },
           { id: "changes", label: copy.workbench.changesTab, count: model.counts.changes },
           { id: "terminal", label: copy.workbench.terminalTab, count: terminalEntries.length },
+          { id: "context", label: copy.workbench.contextTab, count: contextInspector.blocks.length },
         ]}
       />
 
       <div className="review-dock-body">
         {activeTab === "files" ? (
           workspace.activeFilePath && workspace.activeFileContent !== null ? (
-            <CodePreview copy={copy} preview={filePreview} theme={theme} onClose={() => workspace.viewFile("")} />
+            <CodePreview copy={copy} preview={filePreview} workspacePath={workspace.workspaceRoot} theme={theme} onClose={() => workspace.viewFile("")} />
           ) : (
             <EmptyState icon={<FileCode2 size={22} />} title={copy.workbench.noFileSelected} />
-          )
-        ) : null}
-
-        {activeTab === "tasks" ? (
-          tasks.length > 0 ? (
-            <div className="dock-task-list">
-              {tasks.map((task: PlanTask) => (
-                <article key={task.id} className="dock-task">
-                  <header>
-                    <div className="dock-task-title-block">
-                      <strong>{task.title}</strong>
-                      <small>{task.id}</small>
-                    </div>
-                    <SelectMenu
-                      value={task.status}
-                      ariaLabel={`${task.title} ${copy.workbench.status}`}
-                      size="compact"
-                      onChange={(value) => workspace.updateTask(task.id, { status: value as TaskStatus })}
-                      options={taskStatusOptions}
-                    />
-                  </header>
-                  <p>{task.description}</p>
-                  <StatusBadge tone={statusTone(task.status)}>{copy.workbench.taskStatus[task.status]}</StatusBadge>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <EmptyState icon={<ListChecks size={22} />} title={copy.noPlan} />
           )
         ) : null}
 
@@ -164,26 +146,12 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
               </article>
             ))}
 
-            <CommandApprovalQueue
-              copy={copy}
-              approvals={model.commandApprovals}
-              workspaceRoot={workspace.workspaceRoot}
-              onResolve={workspace.resolveApproval}
-              onGrantScopeChange={workspace.updateApprovalGrantScope}
-            />
-
-            <QuestionQueue
-              copy={copy}
-              questions={model.questions}
-              onAnswer={workspace.answerQuestion}
-              onCancel={workspace.cancelQuestion}
-            />
-
             <PatchReviewQueue
               copy={copy}
               events={model.patchReviews}
               onApply={workspace.applyEventPatch}
               onUpdatePatch={workspace.updateEventPatch}
+              workspacePath={workspace.workspaceRoot}
             />
 
             {(model.appliedPatchReviews.length > 0 || model.failedPatchReviews.length > 0 || model.historyPatchReviews.length > 0) ? (
@@ -198,63 +166,25 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
                     <article key={event.id} className="dock-run-step dock-run-step-done">
                     <header>
                       <div>
-                        <strong>{localizedAgentEventName(copy, event.name)}</strong>
+                        <strong>{localizedAgentEventName(copy, event.title)}</strong>
                         <small>{event.patches?.map((patch) => patch.path).join(", ")}</small>
                       </div>
-                      <StatusBadge tone={failed ? "danger" : "success"}>
-                        {failed ? copy.workbench.patchFailed : copy.diff.allApplied}
-                      </StatusBadge>
+                      <div className="dock-run-step-actions">
+                        <StatusBadge tone={failed ? "danger" : "success"}>
+                          {failed ? copy.workbench.patchFailed : copy.diff.allApplied}
+                        </StatusBadge>
+                        {event.checkpoint?.checkpointId ? (
+                          <button type="button" onClick={() => void workspace.rollbackEventPatch(event.id)}>
+                            {copy.language === "中" ? "回滚" : "Rollback"}
+                          </button>
+                        ) : null}
+                      </div>
                     </header>
                   </article>
                   );
                 })}
               </div>
             ) : null}
-
-            <VerificationQueue
-              copy={copy}
-              approvals={model.verificationApprovals}
-              workspaceRoot={workspace.workspaceRoot}
-              onResolve={workspace.resolveApproval}
-              onGrantScopeChange={workspace.updateApprovalGrantScope}
-            />
-
-            {model.otherApprovals.length > 0 ? (
-              <div className="dock-queue-heading">
-                <ShieldCheck size={14} />
-                <strong>{copy.workbench.questionsAndGates}</strong>
-              </div>
-            ) : null}
-
-            {model.otherApprovals.map((request) => (
-                <article key={request.id} className="approval-request-card" data-review-focus="pending">
-                <header>
-                  <div>
-                    <strong>{localizedAgentEventName(copy, request.tool)}</strong>
-                    <small>{request.reason || copy.workbench.pendingApproval}</small>
-                  </div>
-                  <StatusBadge tone="warning">{copy.workbench.pendingApproval}</StatusBadge>
-                </header>
-                <div className="approval-param-list">
-                  {approvalParamEntries(request.params as Record<string, unknown>).map(([key, value]) => (
-                    <span key={key}>
-                      <strong>{localizedApprovalParamKey(copy, key)}</strong>
-                      <code>{formatApprovalParamValue(value)}</code>
-                    </span>
-                  ))}
-                </div>
-                <footer>
-                  <Button variant="ghost" onClick={() => workspace.resolveApproval(request.id, false)}>
-                    <X size={14} />
-                    {copy.workbench.deny}
-                  </Button>
-                  <Button variant="primary" onClick={() => workspace.resolveApproval(request.id, true)}>
-                    <Check size={14} />
-                    {copy.workbench.approve}
-                  </Button>
-                </footer>
-              </article>
-            ))}
 
             {model.counts.changes === 0 ? (
               <EmptyState icon={<GitPullRequestArrow size={22} />} title={copy.workbench.noChanges} />
@@ -263,33 +193,185 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
         ) : null}
 
         {activeTab === "terminal" ? <TerminalRunList copy={copy} runs={terminalEntries} /> : null}
+
+        {activeTab === "context" ? (
+          <div className="dock-context" data-testid="current-context-inspector">
+            <div className="dock-context-summary">
+              <BookOpenText size={18} />
+              <div>
+                <strong>{copy.workbench.currentContext}</strong>
+                <small>
+                  {copy.workbench.contextMode}: {contextInspector.mode}
+                  {" · "}
+                  {copy.workbench.contextTokens}: {contextInspector.tokenEstimate}
+                  {" · "}
+                  {copy.workbench.permissionImpact}: {copy.workbench.permissionNone}
+                </small>
+              </div>
+            </div>
+
+            <section className="dock-context-editor">
+              <header>
+                <div>
+                  <strong>{copy.language === "中" ? "DeepSeek 闭环验收" : "DeepSeek smoke gate"}</strong>
+                  <small>
+                    {copy.language === "中"
+                      ? "根据当前线程事件和阻塞动作生成可记录的 smoke 结果。"
+                      : "Evaluate the current thread events and blocking actions into a smoke record."}
+                  </small>
+                </div>
+                <button type="button" className="btn" onClick={() => setSmokeRecord(workspace.evaluateDeepSeekSmokeRun())}>
+                  {copy.language === "中" ? "评估当前线程" : "Evaluate thread"}
+                </button>
+              </header>
+              {smokeRecord ? (
+                <article className={`dock-context-block ${smokeRecord.result === "passed" ? "" : "disabled"}`}>
+                  <header>
+                    <strong>{smokeRecord.result === "passed" ? "passed" : "failed"}</strong>
+                    <StatusBadge tone={smokeRecord.result === "passed" ? "success" : "danger"}>{smokeRecord.model}</StatusBadge>
+                  </header>
+                  <small>{smokeRecord.workspacePath}</small>
+                  {smokeRecord.failure ? <p>{smokeRecord.failure.summary} {smokeRecord.failure.nextFix}</p> : null}
+                  {smokeRecord.missingStages.length > 0 ? <small>missing: {smokeRecord.missingStages.join(", ")}</small> : null}
+                  {smokeRecord.terminalSummary ? <small>{smokeRecord.terminalSummary}</small> : null}
+                </article>
+              ) : null}
+            </section>
+
+            {workspace.workspaceRoot ? (
+              <section className="dock-context-editor">
+                <header>
+                  <div>
+                    <strong>{copy.settingsModal.projectContextRules}</strong>
+                    <small>{copy.settingsModal.projectContextRulesHelp}</small>
+                  </div>
+                  <button type="button" className="btn" onClick={() => void workspace.refreshCurrentContext()}>
+                    {copy.settingsModal.refreshContext}
+                  </button>
+                </header>
+                <div className="dock-context-editor-tabs">
+                  {contextInspector.editableSources.map((source) => (
+                    <button
+                      key={source.path}
+                      type="button"
+                      className={editingContextPath === source.path ? "active" : ""}
+                      onClick={() => setEditingContextPath(source.path)}
+                    >
+                      {source.path}
+                      {!source.exists ? <small>{copy.settingsModal.newFile}</small> : null}
+                    </button>
+                  ))}
+                </div>
+                {editableContext ? (
+                  <>
+                    <textarea
+                      value={contextDraft}
+                      onChange={(event) => setContextDraft(event.target.value)}
+                      placeholder={copy.settingsModal.contextRuleContent}
+                    />
+                    <div className="dock-context-editor-actions">
+                      <button type="button" className="btn btn-save" onClick={() => void saveContextFile()} disabled={contextSaveState === "saving"}>
+                        {contextSaveState === "saving" ? copy.diff.writing : copy.settingsModal.saveContextFile}
+                      </button>
+                      <small>
+                        {contextSaveState === "saved" ? copy.settingsModal.saved : contextSaveState === "error" ? copy.settingsModal.saveFailed : copy.settingsModal.projectContextSafety}
+                      </small>
+                    </div>
+                  </>
+                ) : null}
+              </section>
+            ) : null}
+
+            {contextInspector.errors.length > 0 ? (
+              <div className="dock-context-errors">
+                {contextInspector.errors.map((error) => (
+                  <article key={`${error.providerId}-${error.message}`} className="dock-context-error">
+                    <AlertTriangle size={14} />
+                    <span>{error.providerId}: {error.message}</span>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+
+            {contextInspector.blocks.length > 0 ? (
+              <div className="dock-context-blocks">
+                {contextInspector.blocks.map((block) => (
+                  <article key={block.id} className="dock-context-block">
+                    <header>
+                      <strong>{block.title}</strong>
+                      <StatusBadge tone="neutral">{block.source}</StatusBadge>
+                    </header>
+                    <small>
+                      {copy.workbench.contextTokens}: {block.tokenEstimate || 0}
+                      {block.matchedRules?.length ? ` · ${copy.workbench.matchedRules}: ${block.matchedRules.join(", ")}` : ""}
+                    </small>
+                    <pre>{block.content}</pre>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <EmptyState icon={<BookOpenText size={22} />} title={copy.workbench.noContextBlocks} />
+            )}
+
+            {contextInspector.disabledBlocks.length > 0 ? (
+              <div className="dock-context-blocks">
+                <div className="dock-queue-heading">
+                  <BookOpenText size={14} />
+                  <strong>{copy.settingsModal.disabledContextBlocks}</strong>
+                </div>
+                {contextInspector.disabledBlocks.map((block) => (
+                  <article key={`disabled-${block.id}`} className="dock-context-block disabled">
+                    <header>
+                      <strong>{block.title}</strong>
+                      <StatusBadge tone="neutral">{block.source}</StatusBadge>
+                    </header>
+                    <small>{copy.workbench.contextMode}: {block.mode}</small>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+
+            {contextInspector.externalRuleCandidates.length > 0 ? (
+              <div className="dock-context-blocks">
+                <div className="dock-queue-heading">
+                  <BookOpenText size={14} />
+                  <strong>{copy.language === "中" ? "外部规则导入候选" : "External Rule Candidates"}</strong>
+                </div>
+                {contextInspector.externalRuleCandidates.map((candidate) => (
+                  <article key={candidate.path} className="dock-context-block disabled">
+                    <header>
+                      <strong>{candidate.title}</strong>
+                      <StatusBadge tone="neutral">{copy.language === "中" ? "未启用" : "Disabled"}</StatusBadge>
+                    </header>
+                    <small>{candidate.path}</small>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+
+            {contextInspector.skills.length > 0 ? (
+              <div className="dock-context-blocks">
+                <div className="dock-queue-heading">
+                  <BookOpenText size={14} />
+                  <strong>{copy.settingsModal.contextSkills}</strong>
+                </div>
+                {contextInspector.skills.map((skill) => (
+                  <article key={skill.path} className="dock-context-block">
+                    <header>
+                      <strong>{skill.name}</strong>
+                      <StatusBadge tone="neutral">{skill.modeSlugs?.join(", ") || copy.settingsModal.contextModeBoth}</StatusBadge>
+                    </header>
+                    <small>{skill.path}</small>
+                    <p>{skill.description}</p>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </aside>
   );
-}
-
-function approvalParamEntries(params: Record<string, unknown>): Array<[string, unknown]> {
-  return Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== "");
-}
-
-function localizedApprovalParamKey(copy: AppCopy, key: string): string {
-  const zh: Record<string, string> = {
-    path: "路径",
-    paths: "路径",
-    query: "查询",
-    pattern: "模式",
-    question: "问题",
-    reason: "原因",
-    workspacePath: copy.workbench.workspacePath,
-  };
-  if (copy.language === "中" && zh[key]) return zh[key];
-  return key;
-}
-
-function formatApprovalParamValue(value: unknown): string {
-  if (Array.isArray(value)) return value.map((item) => String(item)).join(", ");
-  if (typeof value === "object" && value) return "结构化参数";
-  return String(value);
 }
 
 function reviewHeaderStatus(

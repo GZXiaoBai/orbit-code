@@ -2,6 +2,7 @@ import { Bot, MoreHorizontal } from "lucide-react";
 import { useMemo, useState, type KeyboardEvent } from "react";
 import type { AppCopy } from "../../i18n/copy";
 import type { useWorkspace } from "../../state/useWorkspace";
+import { selectCenterTimeline } from "../../domain/threadEventSelectors";
 import { Composer } from "../../components/Composer";
 import { AgentTimeline } from "../../components/thread/AgentTimeline";
 import { PlanSummary } from "../../components/thread/PlanSummary";
@@ -22,15 +23,16 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
   const plan = workspace.importedPlan?.plan;
   const isBuildMode = workspace.runControls.mode === "build";
   const title = workspace.threadUiState.title || plan?.title || copy.workbench.startEmptyTitle;
+  const centerThreadEvents = useMemo(() => selectCenterTimeline(workspace.threadEvents), [workspace.threadEvents]);
   const threadSummary = useMemo(() => {
     const taskCount = plan?.tasks.length || 0;
     return [
       `${copy.workbench.activeThread}: ${title}`,
       `${copy.workbench.headerProject}: ${workspace.workspaceRoot || copy.workbench.noWorkspace}`,
       `${copy.planTasks}: ${taskCount}`,
-      `${copy.workbench.changesTab}: ${workspace.agentEvents.length}`,
+      `${copy.workbench.changesTab}: ${workspace.threadEvents.length}`,
     ].join("\n");
-  }, [copy, plan?.tasks.length, title, workspace.agentEvents.length, workspace.workspaceRoot]);
+  }, [copy, plan?.tasks.length, title, workspace.threadEvents.length, workspace.workspaceRoot]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (!shouldToggleModeFromKey(event.nativeEvent)) return;
@@ -95,7 +97,7 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
       </header>
 
       <div className="thread-scroll">
-        {!plan && workspace.agentEvents.length === 0 ? (
+        {!plan && workspace.threadEvents.length === 0 ? (
           <EmptyState
             icon={<Bot size={24} />}
             title={copy.workbench.startEmptyTitle}
@@ -107,10 +109,13 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
 
         <AgentTimeline
           copy={copy}
-          agentEvents={workspace.agentEvents}
+          threadEvents={centerThreadEvents}
           agentLoopPhase={workspace.agentLoopPhase}
           agentLoopRunning={workspace.agentLoopRunning}
           agentLoopToolCalls={workspace.agentLoopToolCalls}
+          pendingApprovals={workspace.pendingApprovals}
+          pendingQuestions={workspace.pendingQuestions}
+          pendingPatchEvents={workspace.reviewDockModel.patchReviews}
           onStartAgentLoop={isBuildMode ? workspace.startAgentLoop : undefined}
           onContinueAgentRun={workspace.continueAgentRun}
           canContinueAgentRun={Boolean(workspace.agentRunSession.canContinue)}
@@ -119,6 +124,7 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
           onApplyEventPatch={workspace.applyEventPatch}
           onRefinePatch={workspace.refinePatch}
           onUpdatePatch={workspace.updateEventPatch}
+          onAcceptPlanDraft={workspace.acceptPlanDraft}
           streamingContent={workspace.streamingContent}
           streamingActive={workspace.streamingActive}
         />
@@ -127,6 +133,7 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
       <Composer
         copy={copy}
         onPlanImport={workspace.importPlan}
+        onPlanMessage={workspace.submitPlanMessage}
         onBuildMessage={workspace.submitBuildMessage}
         runControls={workspace.runControls}
         onOpenSettings={onOpenSettings}

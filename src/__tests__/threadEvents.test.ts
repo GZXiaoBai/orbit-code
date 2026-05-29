@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import protocolSource from "../domain/threadEventProtocol.ts?raw";
 import type { AgentEvent } from "../domain/agentEvents";
 import {
   buildAgentEventsFromThreadEvents,
@@ -22,6 +23,10 @@ function event(overrides: Partial<AgentEvent>): AgentEvent {
 }
 
 describe("thread events", () => {
+  it("keeps the public protocol free of legacy AgentEvent imports", () => {
+    expect(protocolSource).not.toContain("AgentEvent");
+  });
+
   it("classifies patch, command, question, verification, plan, and compaction events", () => {
     expect(classifyThreadEvent(event({ name: "Plan Ready" }))).toBe("plan");
     expect(classifyThreadEvent(event({ name: "Approval Gate", message: "run_command" }))).toBe("approvalRequest");
@@ -87,6 +92,30 @@ describe("thread events", () => {
       name: "Patch Proposal",
       patches: [{ path: "src/App.tsx", oldContent: "old", newContent: "new", applied: false }],
     });
+  });
+
+  it("uses explicit question payloads instead of message classification for structured questions", () => {
+    const [threadEvent] = buildThreadEvents([
+      event({
+        id: "question-1",
+        name: "Agent",
+        message: "Waiting for user input",
+        question: {
+          requestId: "request-1",
+          question: "Pick a path",
+          status: "pending",
+          options: [{ id: "safe", label: "Safe path", description: "Run tests first.", recommended: true }],
+        },
+      }),
+    ]);
+
+    expect(threadEvent.kind).toBe("question");
+    expect(threadEvent.question).toMatchObject({
+      requestId: "request-1",
+      question: "Pick a path",
+      options: [{ id: "safe", label: "Safe path" }],
+    });
+    expect(threadEventToAgentEvent(threadEvent).question?.requestId).toBe("request-1");
   });
 
   it("prefers stored thread events and migrates legacy agent events", () => {

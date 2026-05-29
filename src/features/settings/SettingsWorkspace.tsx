@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   Archive,
+  BookOpenText,
   Check,
   ChevronRight,
   Cpu,
@@ -35,6 +36,7 @@ import type {
   SandboxMode,
   Theme,
   UsageSnapshot,
+  ContextRule,
 } from "../../domain/types";
 import { SelectMenu } from "../../ui/primitives";
 
@@ -132,8 +134,8 @@ export function SettingsWorkspace({
   }, [credentialVaultAutoUnlock]);
 
   useEffect(() => {
-    setDraftSettings(providerSettings);
-    setLocalApiKeys({});
+    setDraftSettings((current) => current === providerSettings ? current : providerSettings);
+    setLocalApiKeys((current) => Object.keys(current).length === 0 ? current : {});
     setActiveProviderId((current) => providerRegistry.some((provider) => provider.id === current)
       ? current
       : providerSettings.activeProviderId || providerRegistry[0].id);
@@ -145,6 +147,7 @@ export function SettingsWorkspace({
     { id: "models", label: copy.settingsModal.modelsTab, icon: Sparkles },
     { id: "security", label: copy.settingsModal.securityTab, icon: ShieldCheck },
     { id: "agent", label: copy.settingsModal.agentTab, icon: Wrench },
+    { id: "context", label: copy.settingsModal.contextTab, icon: BookOpenText },
     { id: "projects", label: copy.settingsModal.projectsTab, icon: Archive },
     { id: "shortcuts", label: copy.settingsModal.shortcutsTab, icon: Keyboard },
     { id: "usage", label: copy.settingsModal.usageTab, icon: Cpu },
@@ -193,6 +196,7 @@ export function SettingsWorkspace({
     verificationApproval: true,
     fixtureProviderEnabled: true,
   };
+  const contextSettings = draftSettings.context || { userRules: [] };
   const general = draftSettings.general || { startMode: "plan" as const, openLastWorkspace: true };
   const commitSettings = (next: ProviderSettings) => {
     setDraftSettings(next);
@@ -209,6 +213,35 @@ export function SettingsWorkspace({
         advancedRules: patch.advancedRules || draftSettings.security?.advancedRules || {},
       },
     });
+  };
+
+  const updateUserRules = (userRules: ContextRule[]) => {
+    commitSettings({
+      ...draftSettings,
+      context: { ...contextSettings, userRules },
+    });
+  };
+
+  const addUserRule = () => {
+    updateUserRules([
+      ...contextSettings.userRules,
+      {
+        id: `user-rule-${Date.now()}`,
+        title: copy.settingsModal.newContextRule,
+        content: "",
+        enabled: true,
+        mode: "both",
+        source: "user",
+      },
+    ]);
+  };
+
+  const updateUserRule = (id: string, patch: Partial<ContextRule>) => {
+    updateUserRules(contextSettings.userRules.map((rule) => rule.id === id ? { ...rule, ...patch, source: "user" } : rule));
+  };
+
+  const removeUserRule = (id: string) => {
+    updateUserRules(contextSettings.userRules.filter((rule) => rule.id !== id));
   };
 
   const ensureProviderCredential = async (providerId: string) => {
@@ -587,6 +620,61 @@ export function SettingsWorkspace({
             <ToggleRow title={copy.settingsModal.autoCompact} description={copy.settingsModal.autoCompactHelp} checked={agent.autoCompact} onChange={(checked) => commitSettings({ ...draftSettings, agent: { ...agent, autoCompact: checked } })} />
             <ToggleRow title={copy.settingsModal.selfHeal} description={copy.settingsModal.selfHealHelp} checked={agent.autoSelfHeal} onChange={(checked) => commitSettings({ ...draftSettings, agent: { ...agent, autoSelfHeal: checked } })} />
             <ToggleRow title={copy.settingsModal.fixtureProvider} description={copy.settingsModal.fixtureProviderHelp} checked={agent.fixtureProviderEnabled} onChange={(checked) => commitSettings({ ...draftSettings, agent: { ...agent, fixtureProviderEnabled: checked } })} />
+          </SettingsPage>
+        ) : null}
+
+        {currentSection === "context" ? (
+          <SettingsPage title={copy.settingsModal.contextTab} description={copy.settingsModal.contextDescription}>
+            <div className="context-settings-header">
+              <div>
+                <strong>{copy.settingsModal.userRules}</strong>
+                <small>{copy.settingsModal.userRulesHelp}</small>
+              </div>
+              <button type="button" className="btn btn-save" onClick={addUserRule}>
+                <BookOpenText size={14} />
+                {copy.settingsModal.addContextRule}
+              </button>
+            </div>
+            {contextSettings.userRules.length === 0 ? (
+              <InfoCard title={copy.settingsModal.noContextRules} body={copy.settingsModal.noContextRulesHelp} />
+            ) : (
+              <div className="context-rule-list">
+                {contextSettings.userRules.map((rule, index) => (
+                  <article key={rule.id} className={`context-rule-editor ${rule.enabled ? "" : "disabled"}`}>
+                    <header>
+                      <input
+                        value={rule.title}
+                        aria-label={`${copy.settingsModal.contextRuleTitle} ${index + 1}`}
+                        onChange={(event) => updateUserRule(rule.id, { title: event.target.value })}
+                        placeholder={copy.settingsModal.contextRuleTitle}
+                      />
+                      <SelectMenu
+                        value={rule.mode}
+                        ariaLabel={copy.settingsModal.contextRuleMode}
+                        onChange={(value) => updateUserRule(rule.id, { mode: value as ContextRule["mode"] })}
+                        options={[
+                          { value: "both", label: copy.settingsModal.contextModeBoth },
+                          { value: "plan", label: copy.runControls.plan },
+                          { value: "build", label: copy.runControls.build },
+                        ]}
+                      />
+                      <button type="button" className={rule.enabled ? "btn" : "btn danger-lite"} onClick={() => updateUserRule(rule.id, { enabled: !rule.enabled })}>
+                        {rule.enabled ? copy.settingsModal.enabled : copy.settingsModal.disabled}
+                      </button>
+                      <button type="button" className="btn danger-lite" onClick={() => removeUserRule(rule.id)}>
+                        <Trash2 size={14} />
+                        {copy.settingsModal.remove}
+                      </button>
+                    </header>
+                    <textarea
+                      value={rule.content}
+                      onChange={(event) => updateUserRule(rule.id, { content: event.target.value })}
+                      placeholder={copy.settingsModal.contextRuleContent}
+                    />
+                  </article>
+                ))}
+              </div>
+            )}
           </SettingsPage>
         ) : null}
 

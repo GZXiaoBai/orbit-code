@@ -1,11 +1,25 @@
 import { describe, expect, it } from "vitest";
-import type { AgentEvent } from "../domain/agentEvents";
+import type { AgentEventPatch } from "../domain/agentEvents";
 import { createQuestionRequest } from "../domain/questionRequest";
+import type { ThreadEvent } from "../domain/threadEvents";
 import { createTerminalRun } from "../domain/terminalRun";
 import { createApprovalRequest } from "../state/useApprovalQueue";
 import { buildReviewDockModel } from "../features/review/reviewDockModel";
 
 describe("review dock queue model", () => {
+  function patchEvent(overrides: Partial<ThreadEvent> & { patches: AgentEventPatch[] }): ThreadEvent {
+    return {
+      id: "patch-1",
+      kind: "patchProposal",
+      role: "coder",
+      title: "Patch Proposal",
+      status: "done",
+      message: "patch",
+      timestamp: "12:00",
+      ...overrides,
+    };
+  }
+
   it("groups command, question, patch, verification, and terminal queues", () => {
     const command = createApprovalRequest("run_command", { command: "npm", args: ["test"] });
     const verification = createApprovalRequest("run_command", {
@@ -14,26 +28,19 @@ describe("review dock queue model", () => {
       sourceEventId: "patch-1",
     });
     const question = createQuestionRequest({ taskId: "task-1", question: "Which target?" });
-    const patchEvent: AgentEvent = {
-      id: "patch-1",
-      role: "coder",
-      name: "Patch Proposal",
-      status: "done",
-      message: "patch",
-      timestamp: "12:00",
+    const pendingPatchEvent = patchEvent({
       patches: [{ path: "a.ts", oldContent: "a", newContent: "b", applied: false }],
-    };
-    const appliedPatchEvent: AgentEvent = {
-      ...patchEvent,
+    });
+    const appliedPatchEvent = patchEvent({
       id: "patch-2",
       patches: [{ path: "done.ts", oldContent: "a", newContent: "b", applied: true }],
-    };
+    });
     const terminal = createTerminalRun({ taskId: "task-1", command: "npm", args: ["test"], status: "done", exitCode: 0 });
 
     const model = buildReviewDockModel({
       approvals: [command, verification],
       questions: [question],
-      events: [patchEvent, appliedPatchEvent],
+      events: [pendingPatchEvent, appliedPatchEvent],
       terminalRuns: [terminal],
     });
 
@@ -43,26 +50,22 @@ describe("review dock queue model", () => {
     expect(model.patchReviews).toHaveLength(1);
     expect(model.appliedPatchReviews).toHaveLength(1);
     expect(model.terminalRuns).toHaveLength(1);
-    expect(model.counts.changes).toBe(4);
+    expect(model.counts.changes).toBe(1);
   });
 
   it("orders pending patch reviews newest first", () => {
-    const oldPatch: AgentEvent = {
+    const oldPatch = patchEvent({
       id: "patch-old",
-      role: "coder",
-      name: "Patch Proposal",
-      status: "done",
       message: "old",
       timestamp: "12:00",
       patches: [{ path: "old.ts", oldContent: "a", newContent: "b", applied: false }],
-    };
-    const newPatch: AgentEvent = {
-      ...oldPatch,
+    });
+    const newPatch = patchEvent({
       id: "patch-new",
       message: "new",
       timestamp: "12:05",
       patches: [{ path: "new.ts", oldContent: "a", newContent: "b", applied: false }],
-    };
+    });
 
     const model = buildReviewDockModel({
       approvals: [],
@@ -74,12 +77,9 @@ describe("review dock queue model", () => {
     expect(model.patchReviews.map((event) => event.id)).toEqual(["patch-new", "patch-old"]);
   });
 
-  it("moves terminal failed patch previews into history instead of pending changes", () => {
-    const failedPatch: AgentEvent = {
+  it("keeps failed sandbox previews pending so users can retry", () => {
+    const failedPatch = patchEvent({
       id: "patch-failed",
-      role: "coder",
-      name: "Patch Proposal",
-      status: "done",
       message: "failed",
       timestamp: "12:10",
       patches: [{
@@ -90,7 +90,7 @@ describe("review dock queue model", () => {
         sandboxStatus: "failed",
         applyStatus: "failed",
       }],
-    };
+    });
 
     const model = buildReviewDockModel({
       approvals: [],
@@ -99,17 +99,14 @@ describe("review dock queue model", () => {
       terminalRuns: [],
     });
 
-    expect(model.patchReviews).toHaveLength(0);
+    expect(model.patchReviews.map((event) => event.id)).toEqual(["patch-failed"]);
     expect(model.failedPatchReviews.map((event) => event.id)).toEqual(["patch-failed"]);
-    expect(model.counts.changes).toBe(0);
+    expect(model.counts.changes).toBe(1);
   });
 
   it("keeps merge-conflict patches pending until the user resolves them", () => {
-    const conflictPatch: AgentEvent = {
+    const conflictPatch = patchEvent({
       id: "patch-conflict",
-      role: "coder",
-      name: "Patch Proposal",
-      status: "done",
       message: "conflict",
       timestamp: "12:10",
       patches: [{
@@ -122,7 +119,7 @@ describe("review dock queue model", () => {
         hasConflict: true,
         conflictContent: "<<<<<<< AI\nnew\n=======\nlocal\n>>>>>>> LOCAL\n",
       }],
-    };
+    });
 
     const model = buildReviewDockModel({
       approvals: [],
@@ -151,19 +148,16 @@ describe("review dock queue model", () => {
       threadId: "thread-b",
       taskId: "task-b",
     });
-    const currentPatch: AgentEvent = {
+    const currentPatch = patchEvent({
       id: "patch-current",
       workspacePath: "/tmp/project",
       threadId: "thread-a",
       taskId: "task-a",
-      role: "coder",
-      name: "Patch Proposal",
-      status: "done",
       message: "current",
       timestamp: "12:00",
       patches: [{ path: "a.ts", oldContent: "a", newContent: "b", applied: false }],
-    };
-    const otherPatch: AgentEvent = {
+    });
+    const otherPatch: ThreadEvent = {
       ...currentPatch,
       id: "patch-other",
       threadId: "thread-b",

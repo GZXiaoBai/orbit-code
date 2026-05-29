@@ -53,7 +53,7 @@ test.describe("Orbit Code — App Loads", () => {
     await page.locator(".workbench-header-actions").getByRole("button", { name: "切换语言" }).click();
 
     await expect(page.locator(".thread-canvas-header h1")).toHaveText("Open a project or import a plan");
-    await expect(page.getByText("Review dock")).toBeVisible();
+    await expect(page.getByText("Inspector")).toBeVisible();
     await expect(page.locator(".workbench-project-chip").getByText("Current project")).toBeVisible();
   });
 
@@ -62,7 +62,7 @@ test.describe("Orbit Code — App Loads", () => {
     await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
 
     await expect(page.locator(".review-dock")).toBeVisible();
-    await page.getByRole("button", { name: "隐藏审查台" }).click();
+    await page.getByRole("button", { name: "隐藏详情检查器" }).click();
     await expect(page.locator(".review-dock")).toHaveCount(0);
 
     await page.keyboard.press(process.platform === "darwin" ? "Meta+K" : "Control+K");

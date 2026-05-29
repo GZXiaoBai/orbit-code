@@ -1,8 +1,13 @@
 import { ChevronDown, ChevronRight, FileCode2, Folder, FolderOpen } from "lucide-react";
 import type { CSSProperties } from "react";
+import { createFileActionTarget } from "../../domain/fileActions";
 import type { FileTreeNode } from "../../domain/fileTree";
+import type { AppCopy } from "../../i18n/copy";
+import { FileActionMenu } from "../files/FileActionMenu";
 
 interface FileTreeProps {
+  copy: AppCopy;
+  workspacePath?: string;
   nodes: FileTreeNode[];
   expandedDirs: Set<string>;
   activeFilePath?: string;
@@ -32,6 +37,8 @@ interface FileTreeRowProps extends Omit<FileTreeProps, "nodes"> {
 }
 
 function FileTreeRow({
+  copy,
+  workspacePath,
   node,
   expandedDirs,
   activeFilePath,
@@ -42,6 +49,7 @@ function FileTreeRow({
   const isDirectory = node.type === "directory";
   const isExpanded = expandedDirs.has(node.path) || Boolean(filter.trim());
   const isActive = activeFilePath === node.path;
+  const target = createFileActionTarget({ workspacePath, path: node.path, sourceSurface: "fileTree" });
 
   if (isDirectory) {
     return (
@@ -62,6 +70,8 @@ function FileTreeRow({
             {node.children.map((child) => (
               <FileTreeRow
                 key={child.path}
+                copy={copy}
+                workspacePath={workspacePath}
                 node={child}
                 expandedDirs={expandedDirs}
                 activeFilePath={activeFilePath}
@@ -77,17 +87,19 @@ function FileTreeRow({
   }
 
   return (
-    <button
-      type="button"
-      className={`file-tree-node file ${isActive ? "active" : ""}`}
-      style={{ "--tree-depth": node.depth } as CSSProperties}
-      onClick={() => onSelectFile(node.path)}
-      title={node.path}
-    >
-      <span className="file-tree-disclosure file-tree-disclosure-placeholder" />
-      <span className="file-tree-icon"><FileCode2 size={14} /></span>
-      <span className="file-tree-name"><HighlightedName name={node.name} filter={filter} /></span>
-    </button>
+    <FileActionMenu copy={copy} target={target} openOnClick={false} className="file-action-tree-trigger">
+      <button
+        type="button"
+        className={`file-tree-node file ${isActive ? "active" : ""}`}
+        style={{ "--tree-depth": node.depth } as CSSProperties}
+        onClick={() => onSelectFile(node.path)}
+        title={node.path}
+      >
+        <span className="file-tree-disclosure file-tree-disclosure-placeholder" />
+        <span className="file-tree-icon"><FileCode2 size={14} /></span>
+        <span className="file-tree-name"><HighlightedName name={node.name} filter={filter} /></span>
+      </button>
+    </FileActionMenu>
   );
 }
 

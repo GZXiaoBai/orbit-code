@@ -60,6 +60,35 @@ describe("agent tool envelope", () => {
     expect(parsed.errors.length).toBeGreaterThan(0);
   });
 
+  it("accepts structured ask_user options while preserving legacy defaults", () => {
+    const legacy = parseToolEnvelopes('{"tool":"ask_user","params":{"question":"Continue?"}}');
+    expect(legacy.errors).toHaveLength(0);
+    expect(legacy.envelopes[0]).toEqual({
+      tool: "ask_user",
+      params: { question: "Continue?", options: [], allowFreeform: false },
+    });
+
+    const structured = parseToolEnvelopes(JSON.stringify({
+      tool: "ask_user",
+      params: {
+        question: "Pick a path",
+        options: [
+          { label: "Safe path", description: "Run tests first.", recommended: true },
+        ],
+        allowFreeform: true,
+      },
+    }));
+    expect(structured.errors).toHaveLength(0);
+    expect(structured.envelopes[0]).toMatchObject({
+      tool: "ask_user",
+      params: {
+        question: "Pick a path",
+        options: [{ label: "Safe path", description: "Run tests first.", recommended: true }],
+        allowFreeform: true,
+      },
+    });
+  });
+
   it("accepts nested patch proposals with old and new content", () => {
     const parsed = parseToolEnvelopes('{"tool":"apply_patch","params":{"patches":[{"path":"src/App.tsx","oldContent":"old","newContent":"new"}]}}');
 
@@ -150,7 +179,7 @@ describe("agent tool envelope", () => {
     });
   });
 
-  it("rejects patch-like prose that never calls apply_patch", () => {
+  it("rejects patch-like prose that never calls propose_patch", () => {
     const parsed = parseToolEnvelopes([
       "太好了，我现在可以提出所有补丁文件了。",
       '<补丁> { "patches": [{ "path": "src/App.tsx", "oldContent": "", "newContent": "export {}" }] }',
@@ -158,6 +187,6 @@ describe("agent tool envelope", () => {
     ].join("\n"));
 
     expect(parsed.envelopes).toHaveLength(0);
-    expect(parsed.errors.join("\n")).toContain("Patch proposals must use a strict apply_patch tool envelope");
+    expect(parsed.errors.join("\n")).toContain("Patch proposals must use a strict propose_patch tool envelope");
   });
 });

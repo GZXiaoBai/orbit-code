@@ -27,7 +27,10 @@ export function localizedAgentEventName(copy: AppCopy, name: string): string {
     "Final Summary": copy.workbench.agentEventNames.finalSummary,
     run_command: copy.security.command,
     apply_patch: copy.security.write,
+    propose_patch: copy.security.write,
     ask_user: copy.workbench.agentEventNames.question,
+    done_plan: copy.workbench.agentEventNames.planReady,
+    done_build: copy.workbench.agentEventNames.finalSummary,
   };
   if (eventNames[name]) return eventNames[name];
 
@@ -45,48 +48,49 @@ export function localizedRuntimeText(copy: AppCopy, text: string): string {
   if (toolSummary) return toolSummary;
 
   const readableToolText = text
-    .replace(/run_command:\s*\{[\s\S]*?\}/g, copy.language === "中" ? "等待审查台处理：命令" : "Waiting for command review")
+    .replace(/run_command:\s*\{[\s\S]*?\}/g, copy.language === "中" ? "等待中心授权：命令" : "Waiting for command approval")
     .replace(
       /Requesting approval:\s*run_command\s*—\s*\{[\s\S]*?\}/g,
-      copy.language === "中" ? "等待你在审查台批准命令" : "Waiting for command approval in Review Dock",
+      copy.language === "中" ? "等待你在中心授权命令" : "Waiting for command approval",
     )
     .replace(
       /Requesting approval:[^\n]*(run_command|command)[^\n]*/g,
-      copy.language === "中" ? "等待你在审查台批准命令" : "Waiting for command approval in Review Dock",
+      copy.language === "中" ? "等待你在中心授权命令" : "Waiting for command approval",
     )
     .replace(
       /请求审批:\s*run_command\s*—\s*\{[\s\S]*?\}/g,
-      copy.language === "中" ? "等待你在审查台批准命令" : "Waiting for command approval in Review Dock",
+      copy.language === "中" ? "等待你在中心授权命令" : "Waiting for command approval",
     )
     .replace(
       /请求审批:\s*命令\s*—\s*\{[\s\S]*?\}/g,
-      copy.language === "中" ? "等待你在审查台批准命令" : "Waiting for command approval in Review Dock",
+      copy.language === "中" ? "等待你在中心授权命令" : "Waiting for command approval",
     )
     .replace(
       /请求审批:[\s\S]*?(run_command|命令)\s*[—-]\s*\{[\s\S]*?\}/g,
-      copy.language === "中" ? "等待你在审查台批准命令" : "Waiting for command approval in Review Dock",
+      copy.language === "中" ? "等待你在中心授权命令" : "Waiting for command approval",
     )
     .replace(
       /请求审批:[^\n]*(run_command|命令)[^\n]*/g,
-      copy.language === "中" ? "等待你在审查台批准命令" : "Waiting for command approval in Review Dock",
+      copy.language === "中" ? "等待你在中心授权命令" : "Waiting for command approval",
     )
     .replace(
       /Requesting approval:\s*apply_patch\s*—\s*\{[\s\S]*?\}/g,
-      copy.language === "中" ? "等待你在审查台审查补丁" : "Waiting for patch review in Review Dock",
+      copy.language === "中" ? "等待你在中心审查补丁" : "Waiting for patch review",
     )
     .replace(
       /请求审批:\s*apply_patch\s*—\s*\{[\s\S]*?\}/g,
-      copy.language === "中" ? "等待你在审查台审查补丁" : "Waiting for patch review in Review Dock",
+      copy.language === "中" ? "等待你在中心审查补丁" : "Waiting for patch review",
     )
     .replace(/Executing:\s*apply_patch/g, copy.language === "中" ? "正在处理：补丁" : "Processing patch")
+    .replace(/Executing:\s*propose_patch/g, copy.language === "中" ? "正在处理：补丁" : "Processing patch")
     .replace(/Executing:\s*run_command/g, copy.language === "中" ? "正在处理：命令" : "Processing command")
     .replace(/\brun_command\b/g, copy.language === "中" ? "命令" : "command")
     .replace(/\bapply_patch\b/g, copy.language === "中" ? "补丁" : "patch");
 
   if (copy.language !== "中") return readableToolText;
   return [
-    ["Review Dock", copy.workbench.reviewDock],
-    ["Review dock", copy.workbench.reviewDock],
+    ["Review Dock", copy.language === "中" ? "详情检查器" : "Inspector"],
+    ["Review dock", copy.language === "中" ? "详情检查器" : "Inspector"],
     ["Requesting approval", "请求审批"],
     ["Executing:", "正在执行："],
     ["Command:", "命令："],
@@ -104,20 +108,23 @@ export function compactRuntimeTextForTimeline(copy: AppCopy, text: string, maxLe
   const withoutFabricatedToolResult = localized
     .replace(/\[Tool\s+[^\]]+\s+result\]:[\s\S]*?(?=\n\s*\{"tool"|$)/gi, copy.language === "中" ? "已忽略模型伪造的工具结果。" : "Ignored model-fabricated tool result.")
     .trim();
-  const normalized = withoutFabricatedToolResult.replace(/\n{3,}/g, "\n\n");
+  const sanitized = removeRawToolPayloads(copy, withoutFabricatedToolResult);
+  const normalized = sanitized.replace(/\n{3,}/g, "\n\n");
   const lineCount = normalized.split("\n").length;
 
   if (normalized.length <= maxLength && lineCount <= 18) return normalized;
 
   const suffix = copy.language === "中"
-    ? "…\n已折叠较长输出；完整命令输出、Diff 或文件内容请在审查台查看。"
-    : "…\nLong output collapsed; inspect full command output, diff, or file content in Review Dock.";
+    ? "…\n已折叠较长输出；完整命令输出、Diff 或文件内容请在详情检查器查看。"
+    : "…\nLong output collapsed; inspect full command output, diff, or file content in the Inspector.";
   return `${normalized.slice(0, maxLength).trimEnd()}${suffix}`;
 }
 
 function summarizeToolEnvelopeText(copy: AppCopy, text: string): string | null {
   const parsed = parseToolEnvelopes(text);
-  if (parsed.envelopes.length === 0) return null;
+  if (parsed.envelopes.length === 0) {
+    return summarizeEmbeddedToolEnvelopeText(copy, text);
+  }
 
   const envelope = parsed.envelopes[0];
   const isZh = copy.language === "中";
@@ -132,7 +139,7 @@ function summarizeToolEnvelopeText(copy: AppCopy, text: string): string | null {
       : `Agent requested a command: ${display}${reason ? `. Reason: ${reason}` : ""}`;
   }
 
-  if (envelope.tool === "apply_patch") {
+  if (envelope.tool === "apply_patch" || envelope.tool === "propose_patch") {
     const patches = Array.isArray(envelope.params.patches) ? envelope.params.patches : [];
     const files = patches
       .map((patch) => typeof patch === "object" && patch && "path" in patch ? String((patch as { path?: unknown }).path || "") : "")
@@ -162,10 +169,114 @@ function summarizeToolEnvelopeText(copy: AppCopy, text: string): string | null {
     return isZh ? "Agent 准备读取项目文件列表" : "Agent is preparing to list project files";
   }
 
-  if (envelope.tool === "done") {
+  if (envelope.tool === "done" || envelope.tool === "done_plan" || envelope.tool === "done_build") {
     const summary = typeof envelope.params.summary === "string" ? envelope.params.summary : "";
     return summary || (isZh ? "Agent 已完成当前任务。" : "Agent finished the current task.");
   }
 
   return null;
+}
+
+function summarizeEmbeddedToolEnvelopeText(copy: AppCopy, text: string): string | null {
+  if (!/"\s*tool\s*":/.test(text) || !/"\s*params\s*":/.test(text)) return null;
+
+  for (const candidate of extractBalancedJsonObjects(text)) {
+    if (!candidate.json.includes('"tool"')) continue;
+    const parsed = parseToolEnvelopes(candidate.json);
+    if (parsed.envelopes.length === 0) continue;
+    return summarizeToolEnvelopeText(copy, candidate.json);
+  }
+
+  if (looksLikeRawPatchPayload(text)) {
+    return copy.language === "中"
+      ? "Agent 提出补丁审查，请在中心浮层处理；完整 Diff 可在详情检查器查看。"
+      : "Agent proposed a patch review. Use the center overlay; inspect the full diff in the Inspector.";
+  }
+
+  return copy.language === "中"
+    ? "Agent 正在准备工具调用，详情会进入事件流。"
+    : "Agent is preparing a tool call. Details will appear in the event stream.";
+}
+
+function removeRawToolPayloads(copy: AppCopy, text: string): string {
+  if (!looksLikeRawToolPayload(text)) return text;
+
+  let sanitized = text;
+  for (const candidate of extractBalancedJsonObjects(text)) {
+    if (!candidate.json.includes('"tool"')) continue;
+    const summary = summarizeToolEnvelopeText(copy, candidate.json);
+    sanitized = sanitized.replace(candidate.json, summary || fallbackToolPayloadText(copy, candidate.json));
+  }
+
+  if (looksLikeRawToolPayload(sanitized)) {
+    return fallbackToolPayloadText(copy, sanitized);
+  }
+  return sanitized;
+}
+
+function fallbackToolPayloadText(copy: AppCopy, text: string): string {
+  if (looksLikeRawPatchPayload(text)) {
+    return copy.language === "中"
+      ? "Agent 提出补丁审查，请在中心浮层处理；完整 Diff 可在详情检查器查看。"
+      : "Agent proposed a patch review. Use the center overlay; inspect the full diff in the Inspector.";
+  }
+  return copy.language === "中"
+    ? "Agent 正在准备工具调用，详情会进入事件流。"
+    : "Agent is preparing a tool call. Details will appear in the event stream.";
+}
+
+function looksLikeRawToolPayload(text: string): boolean {
+  return /"\s*tool\s*":/.test(text)
+    || /"\s*params\s*":/.test(text)
+    || looksLikeRawPatchPayload(text);
+}
+
+function looksLikeRawPatchPayload(text: string): boolean {
+  return /"\s*patches\s*":/.test(text)
+    || /\b(?:oldContent|newContent)\b/.test(text);
+}
+
+function extractBalancedJsonObjects(text: string): Array<{ json: string; start: number; end: number }> {
+  const objects: Array<{ json: string; start: number; end: number }> = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      if (depth === 0) start = index;
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}") {
+      if (depth === 0) continue;
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        objects.push({ json: text.slice(start, index + 1), start, end: index + 1 });
+        start = -1;
+      }
+    }
+  }
+
+  return objects;
 }

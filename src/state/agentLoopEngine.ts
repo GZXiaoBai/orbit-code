@@ -2,6 +2,7 @@ import type { PlanTask, ProjectSecurityOverride, SecuritySettings } from "../dom
 import type { AgentSettings, ContextCompactionState } from "../domain/types";
 import { isTauri } from "../utils/tauri";
 import type {
+  AgentRuntimeMode,
   AgentLoopPhase,
   ToolCall,
   ToolName,
@@ -10,6 +11,7 @@ import type {
   ToolParams,
 } from "../domain/agentLoop";
 import { executeToolCall, buildToolsPrompt, buildToolResultPrompt } from "../runtime/toolRegistry";
+import { isToolAllowedInMode, normalizeRuntimeToolName } from "../domain/agentModeContract";
 import { classifyCommand } from "../runtime/approvalPolicy";
 import { formatCommandForDisplay } from "../runtime/commandParser";
 import { gatherTaskContext } from "../runtime/semanticSearch";
@@ -31,21 +33,22 @@ Follow these rules strictly:
 
 1. FIRST, understand the task and research by reading relevant files and searching code.
 2. THEN, plan your changes. Think about what files need modification.
-3. PROPOSE changes using apply_patch. It creates reviewable patch sets; it does not write files.
-4. STOP after apply_patch and wait for the user to review and apply the patch in the Review Dock.
+3. PROPOSE changes using propose_patch. It creates reviewable patch sets; it does not write files.
+4. STOP after propose_patch and wait for the user to review and apply the patch in Orbit's central patch overlay.
 5. AFTER the user applies patches and explicitly starts verification, verify by running tests.
-6. Use ask_user ONLY when you truly need input.
+6. Use ask_user ONLY when you truly need input. Prefer structured choices when the user must pick a path:
+   {"tool":"ask_user","params":{"question":"What should Orbit do next?","options":[{"label":"Recommended path","description":"Concrete effect of this choice.","recommended":true}],"allowFreeform":true}}
 7. NEVER invent tool results. Do not write "[Tool ... result]" sections yourself; Orbit will provide real tool results after executing approved tools.
 8. For commands inside a generated app or subdirectory, use run_command.cwd. Never use "cd ... && ...".
-9. Do not ask whether patches were reviewed unless Orbit has returned a real apply_patch result first.
-10. Keep apply_patch small and reviewable: include at most 3 files per apply_patch call. For generated projects, send config files first, then wait; after the user applies and continues, send source files in later apply_patch calls.
-11. Never try to create an entire app in one apply_patch. Large JSON tool calls can be truncated and will be rejected.
+9. Do not ask whether patches were reviewed unless Orbit has returned a real propose_patch result first.
+10. Keep propose_patch small and reviewable: include at most 3 files per propose_patch call. For generated projects, send config files first, then wait; after the user applies and continues, send source files in later propose_patch calls.
+11. Never try to create an entire app in one propose_patch. Large JSON tool calls can be truncated and will be rejected.
 
 You MUST output exactly one complete JSON tool call at a time:
 {"tool": "tool_name", "params": {"param1": "value1"}}
 
 Do not wrap the JSON in Markdown. Do not output prose before or after a tool call.
-When COMPLETELY done, output: {"tool": "done", "params": {"summary": "what you accomplished"}}
+When COMPLETELY done, output: {"tool": "done_build", "params": {"summary": "what you accomplished"}}
 
 IMPORTANT: Always read a file before modifying it. Always search for related code before making changes.`;
 
@@ -112,10 +115,13 @@ export interface AgentLoopCallbacks {
   onRequestApproval: (tool: string, params: ToolParams) => Promise<boolean>;
   onAskUser?: (question: string, params: ToolParams) => Promise<string | null>;
   onPatchProposed?: (params: ToolParams) => Promise<string>;
+  onToolDeniedByMode?: (tool: ToolName, mode: AgentRuntimeMode, params: ToolParams) => void;
   onContextCompaction?: (state: ContextCompactionState) => void;
+  getRuntimeMode?: () => AgentRuntimeMode;
   getWorkspacePath?: () => string;
   getSecuritySettings?: () => { global?: SecuritySettings; project?: ProjectSecurityOverride };
   getCommandSandboxMode?: () => string | undefined;
+  getExtensionContext?: () => Promise<string> | string;
   getMaxIterations?: () => number;
   getAgentSettings?: () => AgentSettings | undefined;
   onError: (error: string) => void;
@@ -140,6 +146,7 @@ export class AgentLoopEngine {
   private consecutiveInvalidToolResponses: number = 0;
   private patchProposalCreated: boolean = false;
   private finalSummaryOnly: boolean = false;
+  private runtimeMode: AgentRuntimeMode = "build";
 
   constructor(callbacks: AgentLoopCallbacks) {
     this.callbacks = callbacks;
@@ -257,21 +264,29 @@ export class AgentLoopEngine {
         );
       } catch { /* optional */ }
 
+      let extensionContext = "";
+      try {
+        extensionContext = await Promise.resolve(this.callbacks.getExtensionContext?.() || "");
+      } catch {
+        extensionContext = "";
+      }
+
       const taskDescription = `Task: ${task.title}\nDescription: ${task.description}\nFiles hint: ${(task.filesHint || []).join(", ")}`;
-      const fullSystemPrompt = AGENT_LOOP_SYSTEM_PROMPT + "\n" + buildToolsPrompt();
+      this.runtimeMode = this.callbacks.getRuntimeMode?.() || "build";
+      const fullSystemPrompt = AGENT_LOOP_SYSTEM_PROMPT + "\n" + buildToolsPrompt(this.runtimeMode);
       const resumePrompt = resumeContext
-        ? `\n\nRecovered continuation context:\n${resumeContext}\n\nContinue from this recovered user action. Do not assume unapproved commands or patches already ran. Do not repeat already completed tool calls unless the context says they failed. If the context says an approval or verification is already pending in Review Dock, do not create a duplicate; summarize the waiting state or proceed only after a new user result is available.`
+        ? `\n\nRecovered continuation context:\n${resumeContext}\n\nContinue from this recovered user action. Do not assume unapproved commands or patches already ran. Do not repeat already completed tool calls unless the context says they failed. If the context says an approval or verification is already pending in Orbit, do not create a duplicate; summarize the waiting state or proceed only after a new user result is available.`
         : "";
       const initialUserPrompt = this.finalSummaryOnly
-        ? `${taskDescription}\n${resumePrompt}\n\nThis is a final-summary-only continuation. Do not read files, search code, list files, run commands, or propose patches. Return the required strict done tool call now.`
-        : `${taskDescription}\n${projectContext}\n\n${codeContext}${resumePrompt}\n\nBegin by reading relevant files and searching for related code. Then implement the changes.`;
+        ? `${taskDescription}\n${resumePrompt}\n\nThis is a final-summary-only continuation. Do not read files, search code, list files, run commands, or propose patches. Return the required strict done_build tool call now.`
+        : `${taskDescription}\n${projectContext}\n\n${codeContext}\n\n${extensionContext}${resumePrompt}\n\nBegin by reading relevant files and searching for related code. Then implement the changes.`;
       const patchChunkingPrompt = [
         "Patch chunking rule:",
-        "- If you need to create or update multiple files, do NOT emit one huge apply_patch.",
-        "- Emit at most 3 files in this apply_patch call.",
+        "- If you need to create or update multiple files, do NOT emit one huge propose_patch.",
+        "- Emit at most 3 files in this propose_patch call.",
         "- Prefer the next coherent chunk only: package/config files first; then app source files; then tests/README.",
-        "- After apply_patch, stop. Orbit will ask the user to review/apply it and then continue the run.",
-        "- Your JSON must be complete. If content is long, split it across later apply_patch calls rather than risking truncation.",
+        "- After propose_patch, stop. Orbit will ask the user to review/apply it and then continue the run.",
+        "- Your JSON must be complete. If content is long, split it across later propose_patch calls rather than risking truncation.",
       ].join("\n");
 
       const conversation: Array<{ role: "user" | "assistant"; content: string }> = [
@@ -370,11 +385,11 @@ export class AgentLoopEngine {
               ? [
                 "Your tool call JSON was invalid and nothing was executed.",
                 "Return exactly one complete JSON object and no prose.",
-                "If you are proposing patches, include at most 3 small files in this apply_patch call.",
-                "Do not include the whole project in one JSON response; split remaining files into later apply_patch calls after Review Dock.",
+                "If you are proposing patches, include at most 3 small files in this propose_patch call.",
+                "Do not include the whole project in one JSON response; split remaining files into later propose_patch calls after the user applies the current patch proposal.",
                 `Errors:\n${this.lastToolParseErrors.join("\n")}`,
               ].join("\n")
-              : "Please use a strict JSON tool call on one line to proceed. Available tools: read_file, search_code, list_files, apply_patch, run_command, ask_user.",
+              : "Please use a strict JSON tool call on one line to proceed. Available Build tools: read_file, search_code, list_files, propose_patch, run_command, ask_user.",
           });
           continue;
         }
@@ -385,8 +400,15 @@ export class AgentLoopEngine {
         const toolResults: Array<{ id: string; name: ToolName; result: string }> = [];
 
         for (const tc of toolCalls) {
-          const toolName = tc.name as ToolName;
-          if (toolName === "done") {
+          const rawToolName = tc.name as ToolName;
+          if (!isToolAllowedInMode(this.runtimeMode, rawToolName)) {
+            const result = `Tool denied by ${this.runtimeMode} mode: ${rawToolName}. Use only tools exposed by the current mode contract.`;
+            this.callbacks.onToolDeniedByMode?.(rawToolName, this.runtimeMode, tc.params);
+            toolResults.push({ id: tc.id, name: rawToolName, result });
+            continue;
+          }
+          const toolName = normalizeRuntimeToolName(rawToolName);
+          if (toolName === "done_build" || toolName === "done_plan") {
             const summary = typeof tc.params.summary === "string" ? tc.params.summary : "Task completed";
             const invalidDone = this.invalidDoneSummary(summary);
             if (invalidDone) {
@@ -432,6 +454,7 @@ export class AgentLoopEngine {
           // Check approval for dangerous tools
           const approvalDefs: Record<string, boolean> = {
             run_command: true,
+            propose_patch: false,
             apply_patch: false,
           };
           if (approvalDefs[toolName]) {
@@ -471,7 +494,7 @@ export class AgentLoopEngine {
 
           // Execute tool
           this.setPhase(
-            toolName === "apply_patch" ? "implementing" : toolName === "run_command" ? "verifying" : "researching",
+            toolName === "propose_patch" ? "implementing" : toolName === "run_command" ? "verifying" : "researching",
             `Executing: ${toolName}`
           );
 
@@ -479,12 +502,12 @@ export class AgentLoopEngine {
 
           let result: string;
           try {
-            if (toolName === "apply_patch" && this.callbacks.onPatchProposed) {
+            if (toolName === "propose_patch" && this.callbacks.onPatchProposed) {
               result = await this.callbacks.onPatchProposed(tc.params);
               this.patchProposalCreated = true;
             } else {
               result = await executeToolCall(toolName, tc.params, {
-                workspacePath: this.callbacks.getWorkspacePath?.() || "",
+                workspacePath: this.callbacks.getWorkspacePath?.(),
                 sandboxMode: this.callbacks.getCommandSandboxMode?.(),
               });
             }
@@ -495,8 +518,8 @@ export class AgentLoopEngine {
 
           toolResults.push({ id: tc.id, name: toolName, result });
 
-          if (toolName === "apply_patch") {
-            this.setPhase("reviewing", "补丁提案正在等待你在审查台审查。");
+          if (toolName === "propose_patch") {
+            this.setPhase("reviewing", "补丁提案正在等待你在中心浮层审查。");
             this.isRunning = false;
             return result;
           }
@@ -507,7 +530,7 @@ export class AgentLoopEngine {
 
         // Feed tool results back into conversation
         if (toolResults.length > 0) {
-          const feedback = buildToolResultPrompt(toolResults);
+          const feedback = buildToolResultPrompt(toolResults, this.runtimeMode);
           conversation.push({ role: "user", content: feedback });
         }
 
@@ -607,12 +630,12 @@ export class AgentLoopEngine {
     if (this.finalSummaryOnly) return null;
     if (!doneSummaryClaimsUncreatedPatch(summary, this.patchProposalCreated)) return null;
     return [
-      "Invalid done tool call: you claimed patches, file changes, or Review Dock review, but Orbit has not received a real apply_patch tool call in this run.",
-      "Nothing was written and no Review Dock patch exists.",
+      "Invalid done_build tool call: you claimed patches, file changes, or patch review, but Orbit has not received a real propose_patch tool call in this run.",
+      "Nothing was written and no patch proposal exists.",
       "Return exactly one complete JSON tool call.",
-      'If you need to propose files, use: {"tool":"apply_patch","params":{"patches":[{"path":"relative/file","oldContent":"...","newContent":"..."}]}}',
-      "Keep apply_patch small: at most 3 files per call, then wait for Review Dock.",
-      "Do not call done until Orbit returns a real apply_patch result and, after user verification, a real verification result.",
+      'If you need to propose files, use: {"tool":"propose_patch","params":{"patches":[{"path":"relative/file","oldContent":"...","newContent":"..."}]}}',
+      "Keep propose_patch small: at most 3 files per call, then wait for the user to apply it.",
+      "Do not call done_build until Orbit returns a real propose_patch result and, after user verification, a real verification result.",
     ].join("\n");
   }
 }

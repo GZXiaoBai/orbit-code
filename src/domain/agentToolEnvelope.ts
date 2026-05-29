@@ -9,8 +9,15 @@ const patchSchema = z.object({
   oldContent: z.string().optional().default(""),
   newContent: z.string().max(
     MAX_PATCH_CONTENT_CHARS,
-    `newContent is too large for one patch. Split the work into smaller apply_patch calls.`,
+    `newContent is too large for one patch. Split the work into smaller propose_patch calls.`,
   ),
+});
+
+const questionOptionSchema = z.object({
+  id: z.string().min(1).optional(),
+  label: z.string().min(1),
+  description: z.string().optional().default(""),
+  recommended: z.boolean().optional().default(false),
 });
 
 const schemas = {
@@ -29,11 +36,23 @@ const schemas = {
   apply_patch: z.object({
     patches: z.array(patchSchema).min(1).max(
       MAX_PATCHES_PER_TOOL_CALL,
-      `Too many files in one apply_patch. Send at most ${MAX_PATCHES_PER_TOOL_CALL} files, then wait for Review Dock and continue later.`,
+      `Too many files in one propose_patch. Send at most ${MAX_PATCHES_PER_TOOL_CALL} files, then wait for the user to apply the current patch and continue later.`,
     ),
   }),
-  ask_user: z.object({ question: z.string().min(1) }),
+  propose_patch: z.object({
+    patches: z.array(patchSchema).min(1).max(
+      MAX_PATCHES_PER_TOOL_CALL,
+      `Too many files in one propose_patch. Send at most ${MAX_PATCHES_PER_TOOL_CALL} files, then wait for the user to apply the current patch and continue later.`,
+    ),
+  }),
+  ask_user: z.object({
+    question: z.string().min(1),
+    options: z.array(questionOptionSchema).optional().default([]),
+    allowFreeform: z.boolean().optional().default(false),
+  }),
   done: z.object({ summary: z.string().optional().default("Done") }),
+  done_plan: z.object({ summary: z.string().optional().default("Done") }),
+  done_build: z.object({ summary: z.string().optional().default("Done") }),
 } satisfies Record<ToolName, z.ZodTypeAny>;
 
 const toolAliases: Record<string, ToolName> = {
@@ -49,11 +68,14 @@ const toolAliases: Record<string, ToolName> = {
   补丁: "apply_patch",
   修改: "apply_patch",
   提交补丁: "apply_patch",
+  提出补丁: "propose_patch",
   问题: "ask_user",
   提问: "ask_user",
   询问: "ask_user",
   完成: "done",
   总结: "done",
+  完成计划: "done_plan",
+  完成执行: "done_build",
 };
 
 function canonicalizeToolName(tool: unknown): ToolName | unknown {
@@ -64,7 +86,7 @@ function canonicalizeToolName(tool: unknown): ToolName | unknown {
 const envelopeBaseSchema = z.object({
   tool: z.preprocess(
     canonicalizeToolName,
-    z.enum(["read_file", "search_code", "list_files", "run_command", "apply_patch", "ask_user", "done"]),
+    z.enum(["read_file", "search_code", "list_files", "run_command", "apply_patch", "propose_patch", "ask_user", "done", "done_plan", "done_build"]),
   ),
   params: z.record(z.string(), z.unknown()).default({}),
 });
@@ -104,7 +126,7 @@ function humanizeParseError(error: unknown, candidate: string): string {
     return [
       message,
       "The tool call JSON appears incomplete or truncated.",
-      `For apply_patch, send at most ${MAX_PATCHES_PER_TOOL_CALL} small files per call and stop after the Review Dock receives the patch.`,
+      `For propose_patch, send at most ${MAX_PATCHES_PER_TOOL_CALL} small files per call and stop after Orbit receives the patch proposal.`,
       "Do not include every project file in a single tool call.",
     ].join("\n");
   }
@@ -203,7 +225,7 @@ function isIgnorableToolEnvelopeWrapper(text: string): boolean {
 }
 
 function textLooksLikeApplyPatchEnvelope(text: string): boolean {
-  return /"\s*tool\s*"\s*:\s*"\s*(?:apply_patch|补丁|修改|提交补丁)\s*"/.test(text)
+  return /"\s*tool\s*"\s*:\s*"\s*(?:apply_patch|propose_patch|补丁|修改|提交补丁|提出补丁)\s*"/.test(text)
     && /"\s*patches\s*"\s*:/.test(text);
 }
 
@@ -298,7 +320,7 @@ export function parseToolEnvelopes(text: string): ToolEnvelopeParseResult {
   }
 
   if (envelopes.length === 0 && looksLikeNonStrictPatchProposal(text)) {
-    errors.push(`Patch proposals must use a strict apply_patch tool envelope with at most ${MAX_PATCHES_PER_TOOL_CALL} files: {"tool":"apply_patch","params":{"patches":[{"path":"relative/file","oldContent":"...","newContent":"..."}]}}`);
+    errors.push(`Patch proposals must use a strict propose_patch tool envelope with at most ${MAX_PATCHES_PER_TOOL_CALL} files: {"tool":"propose_patch","params":{"patches":[{"path":"relative/file","oldContent":"...","newContent":"..."}]}}`);
   }
 
   return { envelopes, errors };

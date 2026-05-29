@@ -15,6 +15,9 @@
 //! |---------|--------|---------|-------------|
 //! | `list_workspace_files` | workspace_path?:String | `Vec<String>` | List all workspace files (excludes hidden/node_modules/target/dist/build) |
 //! | `read_workspace_file` | path:String, workspace_path?:String | `String` | Read file with path traversal protection |
+//! | `write_workspace_context_file` | workspace_path:String, path:String, content:String | `()` | Write an allowed Orbit context file with path traversal protection |
+//! | `search_workspace_files` | query:String, workspace_path:String, max_results?:usize | `Vec<String>` | Search workspace files with ripgrep-style output |
+//! | `open_workspace_path` | path:String, workspace_path?:String, action:String | `()` | Open/reveal a workspace file with a whitelisted local app action |
 //!
 //! ## Shell Execution
 //! | Command | Params | Returns | Description |
@@ -27,6 +30,9 @@
 //! |---------|--------|---------|-------------|
 //! | `apply_workspace_patch` | path:String, new_content:String | `()` | Write single file with path traversal protection |
 //! | `apply_workspace_patches_transactional` | workspace_path:String, patches:Vec\<FilePatch\> | `()` | Multi-file atomic write with rollback |
+//! | `restore_workspace_file_snapshot` | workspace_path:String, files:Vec\<FileSnapshot\> | `()` | Transactionally restore or delete files from a patch checkpoint |
+//! | `create_workspace_git_shadow_checkpoint` | workspace_path:String, checkpoint_id:String, files:Vec\<FileSnapshot\> | `GitShadowCheckpointResult` | Create an isolated git checkpoint without touching the user repo |
+//! | `restore_workspace_git_shadow_checkpoint` | workspace_path:String, shadow_path:String, files:Vec\<FileSnapshot\> | `()` | Restore files from an isolated git checkpoint |
 //!
 //! ## Code Graph & Analysis
 //! | Command | Params | Returns | Description |
@@ -67,6 +73,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
+use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -480,6 +487,63 @@ fn assert_workspace_child(root: &Path, target: &Path, message: &str) -> Result<(
     Ok(())
 }
 
+fn reject_unsafe_relative_path(path: &str, label: &str) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{} path is required", label));
+    }
+    let relative = Path::new(trimmed);
+    if relative.is_absolute() {
+        return Err(format!("{} path must be relative to the workspace", label));
+    }
+    for component in relative.components() {
+        match component {
+            Component::Normal(_) => {}
+            Component::CurDir => {}
+            _ => return Err(format!("{} path contains unsafe components", label)),
+        }
+    }
+    Ok(())
+}
+
+fn resolve_workspace_file_target(workspace_path: Option<String>, path: String) -> Result<(PathBuf, PathBuf), String> {
+    reject_unsafe_relative_path(&path, "File action")?;
+    let workspace_root = resolve_workspace_root(workspace_path)?;
+    let target = workspace_root.join(path.trim());
+    assert_workspace_child(
+        &workspace_root,
+        &target,
+        "Access Denied: File action path escapes workspace",
+    )?;
+    let canonical_target = target
+        .canonicalize()
+        .map_err(|e| format!("File action target not found: {}", e))?;
+    if !canonical_target.is_file() {
+        return Err("File action target must be a file".to_string());
+    }
+    assert_workspace_child(
+        &workspace_root,
+        &canonical_target,
+        "Access Denied: File action path escapes workspace",
+    )?;
+    Ok((workspace_root, canonical_target))
+}
+
+fn run_open_command(mut command: Command, failure_label: &str) -> Result<(), String> {
+    let output = command
+        .output()
+        .map_err(|e| format!("{} failed to start: {}", failure_label, e))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(if stderr.is_empty() {
+        format!("{} failed", failure_label)
+    } else {
+        format!("{} failed: {}", failure_label, stderr)
+    })
+}
+
 #[tauri::command]
 pub fn get_workspace_root() -> Result<String, String> {
     Ok(get_active_workspace_root()?.to_string_lossy().to_string())
@@ -545,6 +609,205 @@ pub fn read_workspace_file(path: String, workspace_path: Option<String>) -> Resu
 
     let content = fs::read_to_string(target_path).map_err(|e| e.to_string())?;
     Ok(content)
+}
+
+fn is_allowed_context_path(path: &str) -> bool {
+    if path == "ORBIT.md" || path == ".orbit/rules" || path == ".orbit/rules.md" {
+        return true;
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    parts.len() == 4
+        && parts[0] == ".orbit"
+        && parts[1] == "skills"
+        && !parts[2].is_empty()
+        && parts[3] == "SKILL.md"
+}
+
+#[tauri::command]
+pub fn write_workspace_context_file(
+    workspace_path: String,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    if workspace_path.trim().is_empty() {
+        return Err("workspace_path is required".to_string());
+    }
+    reject_unsafe_relative_path(&path, "Context file")?;
+    let normalized = path.trim().replace('\\', "/");
+    if !is_allowed_context_path(&normalized) {
+        return Err("Context file path is not allowed".to_string());
+    }
+
+    let workspace_root = resolve_workspace_root(Some(workspace_path))?;
+    let target = workspace_root.join(&normalized);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        assert_workspace_child(
+            &workspace_root,
+            parent,
+            "Access Denied: Context file path escapes workspace",
+        )?;
+    }
+    if target.exists() {
+        assert_workspace_child(
+            &workspace_root,
+            &target,
+            "Access Denied: Context file path escapes workspace",
+        )?;
+    }
+    fs::write(target, content).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn search_workspace_files(
+    query: String,
+    workspace_path: String,
+    max_results: Option<usize>,
+) -> Result<Vec<String>, String> {
+    if query.trim().is_empty() {
+        return Err("query is required".to_string());
+    }
+    if workspace_path.trim().is_empty() {
+        return Err("workspace_path is required".to_string());
+    }
+    let workspace_root = resolve_workspace_root(Some(workspace_path))?;
+    let limit = max_results.unwrap_or(30).min(200);
+
+    let output = Command::new("rg")
+        .args([
+            "--line-number",
+            "--no-heading",
+            "--color",
+            "never",
+            "--max-count",
+            "20",
+            "--",
+            &query,
+        ])
+        .current_dir(&workspace_root)
+        .output();
+
+    match output {
+        Ok(output) => {
+            if !output.status.success() && output.status.code() != Some(1) {
+                return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Ok(stdout
+                .lines()
+                .take(limit)
+                .map(|line| line.chars().take(240).collect::<String>())
+                .collect())
+        }
+        Err(_) => {
+            let mut results = Vec::new();
+            let files = list_workspace_files(Some(workspace_root.to_string_lossy().to_string()))?;
+            let query_lower = query.to_lowercase();
+            for file in files {
+                if results.len() >= limit {
+                    break;
+                }
+                let content = match read_workspace_file(file.clone(), Some(workspace_root.to_string_lossy().to_string())) {
+                    Ok(content) => content,
+                    Err(_) => continue,
+                };
+                for (index, line) in content.lines().enumerate() {
+                    if line.to_lowercase().contains(&query_lower) {
+                        let preview: String = line.trim().chars().take(160).collect();
+                        results.push(format!("{}:{}:{}", file, index + 1, preview));
+                        if results.len() >= limit {
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok(results)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn open_workspace_path(
+    path: String,
+    workspace_path: Option<String>,
+    action: String,
+) -> Result<(), String> {
+    let (_workspace_root, target) = resolve_workspace_file_target(workspace_path, path)?;
+    let target_arg = target.to_string_lossy().to_string();
+
+    match action.as_str() {
+        "reveal" => {
+            #[cfg(target_os = "macos")]
+            {
+                let mut cmd = Command::new("open");
+                cmd.args(["-R", &target_arg]);
+                run_open_command(cmd, "Reveal in Finder")
+            }
+            #[cfg(target_os = "windows")]
+            {
+                let mut cmd = Command::new("explorer");
+                cmd.arg(format!("/select,{}", target_arg));
+                run_open_command(cmd, "Reveal in File Explorer")
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                let parent = target.parent().unwrap_or_else(|| Path::new(".")).to_string_lossy().to_string();
+                let mut cmd = Command::new("xdg-open");
+                cmd.arg(parent);
+                run_open_command(cmd, "Reveal in file manager")
+            }
+        }
+        "default" => {
+            #[cfg(target_os = "macos")]
+            {
+                let mut cmd = Command::new("open");
+                cmd.arg(&target_arg);
+                run_open_command(cmd, "Open with default app")
+            }
+            #[cfg(target_os = "windows")]
+            {
+                let mut cmd = Command::new("cmd");
+                cmd.args(["/C", "start", "", &target_arg]);
+                run_open_command(cmd, "Open with default app")
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                let mut cmd = Command::new("xdg-open");
+                cmd.arg(&target_arg);
+                run_open_command(cmd, "Open with default app")
+            }
+        }
+        "vscode" => {
+            #[cfg(target_os = "macos")]
+            {
+                let mut cmd = Command::new("open");
+                cmd.args(["-a", "Visual Studio Code", &target_arg]);
+                run_open_command(cmd, "Open in VS Code")
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let mut cmd = Command::new("code");
+                cmd.arg(&target_arg);
+                run_open_command(cmd, "Open in VS Code")
+            }
+        }
+        "cursor" => {
+            #[cfg(target_os = "macos")]
+            {
+                let mut cmd = Command::new("open");
+                cmd.args(["-a", "Cursor", &target_arg]);
+                run_open_command(cmd, "Open in Cursor")
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let mut cmd = Command::new("cursor");
+                cmd.arg(&target_arg);
+                run_open_command(cmd, "Open in Cursor")
+            }
+        }
+        _ => Err("Unsupported file action".to_string()),
+    }
 }
 
 /* ==========================================================================
@@ -912,6 +1175,19 @@ pub struct FilePatch {
     pub new_content: String,
 }
 
+#[derive(serde::Deserialize, Clone, Debug)]
+pub struct FileSnapshot {
+    pub path: String,
+    pub content: String,
+    pub existed: bool,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct GitShadowCheckpointResult {
+    pub checkpoint_id: String,
+    pub shadow_path: String,
+}
+
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct SandboxPreviewResult {
     pub id: String,
@@ -1162,6 +1438,197 @@ pub fn apply_workspace_patches_transactional(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub fn restore_workspace_file_snapshot(
+    workspace_path: String,
+    files: Vec<FileSnapshot>,
+) -> Result<(), String> {
+    let current_dir = if workspace_path.is_empty() {
+        get_active_workspace_root()?
+    } else {
+        PathBuf::from(workspace_path)
+    };
+    let canonical_dir = current_dir.canonicalize().map_err(|e| e.to_string())?;
+    let mut backups: Vec<(PathBuf, Option<String>)> = Vec::new();
+
+    for file in &files {
+        validate_relative_patch_path(&file.path)?;
+        let target_path = canonical_dir.join(&file.path);
+        if target_path.exists() {
+            let canonical_target = target_path.canonicalize().map_err(|e| e.to_string())?;
+            if !canonical_target.starts_with(&canonical_dir) {
+                return Err(format!(
+                    "Access Denied: Snapshot restore path escapes workspace for {}",
+                    file.path
+                ));
+            }
+            let original = fs::read_to_string(&canonical_target).map_err(|e| e.to_string())?;
+            backups.push((canonical_target, Some(original)));
+        } else {
+            if let Some(parent) = target_path.parent() {
+                let mut first_existing_parent = parent;
+                while !first_existing_parent.exists() {
+                    if let Some(p) = first_existing_parent.parent() {
+                        first_existing_parent = p;
+                    } else {
+                        break;
+                    }
+                }
+                let canonical_parent = first_existing_parent
+                    .canonicalize()
+                    .map_err(|e| e.to_string())?;
+                if !canonical_parent.starts_with(&canonical_dir) {
+                    return Err(format!(
+                        "Access Denied: Snapshot restore directory escapes workspace for {}",
+                        file.path
+                    ));
+                }
+            }
+            backups.push((target_path, None));
+        }
+    }
+
+    for file in &files {
+        let target_path = canonical_dir.join(&file.path);
+        let result = if file.existed {
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent)
+            } else {
+                Ok(())
+            }
+            .and_then(|_| fs::write(&target_path, &file.content))
+        } else if target_path.exists() {
+            fs::remove_file(&target_path)
+        } else {
+            Ok(())
+        };
+
+        if let Err(e) = result {
+            for (path, backup_opt) in backups {
+                match backup_opt {
+                    Some(original) => {
+                        let _ = fs::write(&path, original);
+                    }
+                    None => {
+                        if path.exists() {
+                            let _ = fs::remove_file(&path);
+                        }
+                    }
+                }
+            }
+            return Err(format!("Snapshot restore failed for {}: {}. Rolled back.", file.path, e));
+        }
+    }
+
+    Ok(())
+}
+
+fn orbit_git_shadow_root() -> PathBuf {
+    std::env::temp_dir().join("orbit-code-git-shadows")
+}
+
+fn run_git_command(dir: &Path, args: &[&str]) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("Failed to run git: {}", e))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+}
+
+#[tauri::command]
+pub fn create_workspace_git_shadow_checkpoint(
+    workspace_path: String,
+    checkpoint_id: String,
+    files: Vec<FileSnapshot>,
+) -> Result<GitShadowCheckpointResult, String> {
+    if workspace_path.trim().is_empty() {
+        return Err("workspace_path is required".to_string());
+    }
+    let workspace_root = resolve_workspace_root(Some(workspace_path))?;
+    if !workspace_root.join(".git").exists() {
+        return Err("Git workspace required for git-shadow checkpoint".to_string());
+    }
+
+    let shadow_root = orbit_git_shadow_root();
+    fs::create_dir_all(&shadow_root).map_err(|e| e.to_string())?;
+    let shadow_path = shadow_root.join(&checkpoint_id);
+    if shadow_path.exists() {
+        fs::remove_dir_all(&shadow_path).map_err(|e| e.to_string())?;
+    }
+    fs::create_dir_all(&shadow_path).map_err(|e| e.to_string())?;
+    let canonical_shadow = shadow_path.canonicalize().map_err(|e| e.to_string())?;
+    if !canonical_shadow.starts_with(shadow_root.canonicalize().map_err(|e| e.to_string())?) {
+        return Err("Access Denied: git shadow path escapes shadow root".to_string());
+    }
+
+    for file in &files {
+        validate_relative_patch_path(&file.path)?;
+        if !file.existed {
+            continue;
+        }
+        let target = canonical_shadow.join(&file.path);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::write(&target, &file.content)
+            .map_err(|e| format!("Git shadow write failed for {}: {}", file.path, e))?;
+    }
+
+    run_git_command(&canonical_shadow, &["init"])?;
+    run_git_command(&canonical_shadow, &["config", "user.email", "orbit-code@example.local"])?;
+    run_git_command(&canonical_shadow, &["config", "user.name", "Orbit Code"])?;
+    run_git_command(&canonical_shadow, &["add", "-A"])?;
+    run_git_command(&canonical_shadow, &["commit", "--allow-empty", "-m", "orbit shadow checkpoint"])?;
+
+    Ok(GitShadowCheckpointResult {
+        checkpoint_id,
+        shadow_path: canonical_shadow.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn restore_workspace_git_shadow_checkpoint(
+    workspace_path: String,
+    shadow_path: String,
+    files: Vec<FileSnapshot>,
+) -> Result<(), String> {
+    let shadow_root = orbit_git_shadow_root().canonicalize().map_err(|e| e.to_string())?;
+    let canonical_shadow = PathBuf::from(shadow_path).canonicalize().map_err(|e| e.to_string())?;
+    if !canonical_shadow.starts_with(&shadow_root) {
+        return Err("Access Denied: git shadow path escapes shadow root".to_string());
+    }
+
+    let mut restored = Vec::new();
+    for file in files {
+        validate_relative_patch_path(&file.path)?;
+        if file.existed {
+            let shadow_file = canonical_shadow.join(&file.path);
+            let canonical_shadow_file = shadow_file.canonicalize().map_err(|e| e.to_string())?;
+            if !canonical_shadow_file.starts_with(&canonical_shadow) {
+                return Err(format!("Access Denied: git shadow file escapes checkpoint for {}", file.path));
+            }
+            let content = fs::read_to_string(&canonical_shadow_file).map_err(|e| e.to_string())?;
+            restored.push(FileSnapshot {
+                path: file.path,
+                content,
+                existed: true,
+            });
+        } else {
+            restored.push(FileSnapshot {
+                path: file.path,
+                content: String::new(),
+                existed: false,
+            });
+        }
+    }
+
+    restore_workspace_file_snapshot(workspace_path, restored)
 }
 
 /* ==========================================================================

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { ToolParams } from "../domain/agentLoop";
 
 export type ApprovalStatus = "pending" | "approved" | "denied" | "cancelled";
@@ -150,6 +150,8 @@ export function useApprovalQueue(initialRequests: ApprovalRequest[] = [], initia
   const [requests, setRequests] = useState<ApprovalRequest[]>(initialRequests.map(normalizeApprovalRequest));
   const [grants, setGrants] = useState<ApprovalGrant[]>(recoverApprovalGrants(initialGrants));
   const resolversRef = useRef(new Map<string, PendingResolver>());
+  const pendingApprovals = useMemo(() => requests.filter((request) => request.status === "pending"), [requests]);
+  const approvalGrants = useMemo(() => persistableApprovalGrants(grants), [grants]);
 
   const requestApproval = useCallback((
     tool: string,
@@ -221,13 +223,13 @@ export function useApprovalQueue(initialRequests: ApprovalRequest[] = [], initia
 
   return {
     approvalRequests: requests,
-    pendingApprovals: requests.filter((request) => request.status === "pending"),
+    pendingApprovals,
     requestApproval,
     resolveApproval,
     updateGrantScope,
     cancelPendingApprovals,
     recoverApprovals,
     recoverGrants,
-    approvalGrants: persistableApprovalGrants(grants),
+    approvalGrants,
   };
 }

@@ -1096,6 +1096,26 @@
   justify-self: end;
 }
 
+.dock-run-step-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.dock-run-step-actions button {
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+}
+
+.dock-run-step-actions button:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
 .dock-file-preview > small {
   display: block;
   padding: 0 var(--space-3) var(--space-2);
@@ -1126,7 +1146,10 @@
 
 .dock-task-list,
 .dock-changes,
-.dock-terminal-list {
+.dock-terminal-list,
+.dock-context,
+.dock-context-blocks,
+.dock-context-errors {
   display: grid;
   gap: var(--space-3);
   min-width: 0;
@@ -1134,8 +1157,159 @@
 
 .dock-task-list > *,
 .dock-changes > *,
-.dock-terminal-list > * {
+.dock-terminal-list > *,
+.dock-context > *,
+.dock-context-blocks > *,
+.dock-context-errors > * {
   min-width: 0;
+}
+
+.dock-context-summary,
+.dock-context-error,
+.dock-context-block,
+.dock-context-editor {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 74%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg-primary));
+  box-shadow: 0 1px 0 color-mix(in srgb, #fff 4%, transparent) inset;
+}
+
+.dock-context-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.dock-context-summary div,
+.dock-context-block header {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.dock-context-summary small,
+.dock-context-block small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.dock-context-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.dock-context-block {
+  overflow: hidden;
+}
+
+.dock-context-block.disabled {
+  opacity: 0.62;
+}
+
+.dock-context-block header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+}
+
+.dock-context-block > small {
+  display: block;
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.dock-context-block pre {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  padding: var(--space-3);
+  border-top: 1px solid var(--line);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.dock-context-block p {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.dock-context-editor {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.dock-context-editor > header,
+.dock-context-editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.dock-context-editor > header strong,
+.dock-context-editor > header small,
+.dock-context-editor-actions small {
+  display: block;
+}
+
+.dock-context-editor > header small,
+.dock-context-editor-actions small {
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.dock-context-editor-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.dock-context-editor-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 650;
+}
+
+.dock-context-editor-tabs button.active {
+  border-color: var(--text-primary);
+  background: var(--text-primary);
+  color: var(--bg-primary);
+}
+
+.dock-context-editor-tabs small {
+  opacity: 0.72;
+}
+
+.dock-context-editor textarea {
+  min-height: 170px;
+  width: 100%;
+  resize: vertical;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: 12px/1.55 var(--font-mono);
 }
 
 .dock-queue-heading {
@@ -1641,7 +1815,7 @@
 
 .ui-select-popover {
   position: fixed;
-  z-index: 70;
+  z-index: 260;
   width: min(320px, calc(100vw - 28px));
   min-width: 0;
   max-width: min(420px, calc(100vw - 28px));

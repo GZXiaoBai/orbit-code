@@ -155,7 +155,7 @@ describe("AgentLoopEngine — review gates", () => {
     expect(phases).toContain("error");
   });
 
-  it("allows final-summary-only continuation to mention existing Review Dock work without a new patch", async () => {
+  it("allows final-summary-only continuation to mention existing patch work without a new patch", async () => {
     const phases: string[] = [];
     const doneSummaries: string[] = [];
 
@@ -196,7 +196,7 @@ describe("AgentLoopEngine — review gates", () => {
     );
 
     expect(result).toContain("Fixture final summary");
-    expect(doneSummaries[0]).toContain("Review Dock patches");
+    expect(doneSummaries[0]).toContain("patches were applied");
     expect(phases).toContain("done");
     expect(phases).not.toContain("error");
   });

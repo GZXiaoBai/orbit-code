@@ -1,6 +1,6 @@
 import { Check, HelpCircle, X } from "lucide-react";
 import { useState } from "react";
-import type { QuestionRequest } from "../../domain/questionRequest";
+import type { QuestionAnswerInput, QuestionRequest } from "../../domain/questionRequest";
 import type { AppCopy } from "../../i18n/copy";
 import { Button, StatusBadge } from "../../ui/primitives";
 
@@ -12,10 +12,11 @@ export function QuestionQueue({
 }: {
   copy: AppCopy;
   questions: QuestionRequest[];
-  onAnswer: (id: string, answer: string) => void;
+  onAnswer: (id: string, answer: string | QuestionAnswerInput) => void;
   onCancel: (id: string) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({});
   if (questions.length === 0) return null;
 
   return (
@@ -38,6 +39,21 @@ export function QuestionQueue({
             onChange={(event) => setDrafts((prev) => ({ ...prev, [question.id]: event.target.value }))}
             placeholder={copy.workbench.answerPlaceholder}
           />
+          {question.options?.length ? (
+            <div className="question-request-options">
+              {question.options.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={selectedOptions[question.id] === option.id ? "selected" : ""}
+                  onClick={() => setSelectedOptions((prev) => ({ ...prev, [question.id]: option.id }))}
+                >
+                  <span>{option.label}{option.recommended ? ` (${copy.workbench.recommended})` : ""}</span>
+                  <small>{option.description}</small>
+                </button>
+              ))}
+            </div>
+          ) : null}
           <footer>
             <Button variant="ghost" onClick={() => onCancel(question.id)}>
               <X size={14} />
@@ -46,10 +62,16 @@ export function QuestionQueue({
             <Button
               variant="primary"
               onClick={() => {
-                onAnswer(question.id, drafts[question.id] || "");
+                const selectedOptionId = selectedOptions[question.id];
+                onAnswer(
+                  question.id,
+                  selectedOptionId
+                    ? { selectedOptionId, answerType: "option" }
+                    : { answer: drafts[question.id] || "", answerType: "freeform" },
+                );
                 setDrafts((prev) => ({ ...prev, [question.id]: "" }));
               }}
-              disabled={!(drafts[question.id] || "").trim()}
+              disabled={!selectedOptions[question.id] && !(drafts[question.id] || "").trim()}
             >
               <Check size={14} />
               {copy.workbench.answerQuestion}

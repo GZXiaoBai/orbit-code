@@ -23,6 +23,24 @@ describe("agent display text", () => {
     expect(text).not.toContain("apply_patch");
   });
 
+  it("does not leak localized patch JSON embedded in streaming prose", () => {
+    const text = compactRuntimeTextForTimeline(
+      copy.zh,
+      [
+        'Agent 正在思考...',
+        '{"tool":"补丁","params":{"patches":[{"path":"orbit-mini-lab/PROJECT_STRUCTURE.md","oldContent":"","newContent":"# 项目结构梳理\\n"}]}}',
+        "已折叠较长输出；完整命令输出、Diff 或文件内容请在审查台查看。",
+      ].join("\n"),
+    );
+
+    expect(text).toContain("Agent 提出补丁审查：1 个文件");
+    expect(text).not.toContain('"patches"');
+    expect(text).not.toContain('"params"');
+    expect(text).not.toContain("oldContent");
+    expect(text).not.toContain("newContent");
+    expect(text).not.toContain("# 项目结构梳理");
+  });
+
   it("collapses long tool output in the central timeline", () => {
     const text = compactRuntimeTextForTimeline(
       copy.zh,

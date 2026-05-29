@@ -47,7 +47,10 @@ export function useLayoutPreferences() {
   const updateLayoutPreferences = useCallback((patch: Partial<LayoutPreferences>) => {
     setLayoutPreferences((prev) => {
       const settingsSection = typeof patch.settingsSection === "string" ? patch.settingsSection : prev.settingsSection;
-      return { ...prev, ...patch, settingsSection };
+      const next = { ...prev, ...patch, settingsSection };
+      return Object.entries(next).every(([key, value]) => prev[key as keyof LayoutPreferences] === value)
+        ? prev
+        : next;
     });
   }, []);
 

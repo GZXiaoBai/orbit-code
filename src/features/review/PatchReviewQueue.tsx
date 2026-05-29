@@ -1,5 +1,6 @@
 import { GitPullRequestArrow } from "lucide-react";
-import type { AgentEvent, AgentEventPatch } from "../../domain/agentEvents";
+import type { AgentEventPatch } from "../../domain/agentEvents";
+import type { ThreadEvent } from "../../domain/threadEvents";
 import type { AppCopy } from "../../i18n/copy";
 import { DiffViewer } from "../../components/DiffViewer";
 import { localizedAgentEventName, localizedRuntimeText } from "../../components/thread/agentDisplayText";
@@ -10,11 +11,13 @@ export function PatchReviewQueue({
   events,
   onApply,
   onUpdatePatch,
+  workspacePath,
 }: {
   copy: AppCopy;
-  events: AgentEvent[];
+  events: ThreadEvent[];
   onApply: (eventId: string) => Promise<void> | void;
   onUpdatePatch: (eventId: string, path: string, updates: Partial<AgentEventPatch>) => void;
+  workspacePath?: string;
 }) {
   if (events.length === 0) return null;
 
@@ -35,7 +38,7 @@ export function PatchReviewQueue({
             <header>
               <div>
                 <GitPullRequestArrow size={15} />
-                <strong>{localizedAgentEventName(copy, event.name)}</strong>
+                <strong>{localizedAgentEventName(copy, event.title)}</strong>
               </div>
               <small>{event.timestamp}</small>
             </header>
@@ -57,6 +60,7 @@ export function PatchReviewQueue({
               copy={copy}
               patches={event.patches || []}
               onApply={() => Promise.resolve(onApply(event.id))}
+              workspacePath={workspacePath}
               eventId={event.id}
               onUpdatePatch={onUpdatePatch}
             />

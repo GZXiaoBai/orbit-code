@@ -89,10 +89,17 @@ export function useRunControls(
   const [selection, setSelection] = useState<RunModelSelection>(initial.selection);
 
   const modelOptions = useMemo(() => buildRunModelOptions(settings, apiKeys, savedCredentialProviders), [settings, apiKeys, savedCredentialProviders]);
-  const selectedOption = useMemo(
-    () => resolveModelSelection(settings, apiKeys, selection, savedCredentialProviders),
-    [settings, apiKeys, selection, savedCredentialProviders],
-  );
+  const activeProviderMatch = modelOptions.find((option) => option.providerId === settings.activeProviderId);
+  const selectedOption = useMemo(() => {
+    if (modelOptions.length === 0) return null;
+    if (selection.providerId === "fixture" && settings.activeProviderId && settings.activeProviderId !== "fixture" && activeProviderMatch) {
+      return activeProviderMatch;
+    }
+    return modelOptions.find((option) => option.providerId === selection.providerId && option.model === selection.model)
+      || modelOptions.find((option) => option.providerId === selection.providerId)
+      || activeProviderMatch
+      || modelOptions[0];
+  }, [activeProviderMatch, modelOptions, selection.model, selection.providerId, settings.activeProviderId]);
   const provider = selectedOption ? findProvider(selectedOption.providerId) : null;
   const selectedModelId = selectedOption?.id || "";
   const availableReasoningEfforts = useMemo(
@@ -110,7 +117,10 @@ export function useRunControls(
 
   useEffect(() => {
     setSelection((prev) => {
-      const selected = resolveModelSelection(settings, apiKeys, prev, savedCredentialProviders);
+      const selected = modelOptions.find((option) => option.providerId === prev.providerId && option.model === prev.model)
+        || modelOptions.find((option) => option.providerId === prev.providerId)
+        || modelOptions.find((option) => option.providerId === settings.activeProviderId)
+        || modelOptions[0];
       if (selected && selected.providerId === prev.providerId && selected.model === prev.model) return prev;
       return {
         providerId: selected?.providerId || settings.activeProviderId,
@@ -118,7 +128,7 @@ export function useRunControls(
         reasoningEffort: prev.reasoningEffort,
       };
     });
-  }, [settings, apiKeys, savedCredentialProviders]);
+  }, [modelOptions, settings.activeProviderId]);
 
   useEffect(() => {
     setSelection((prev) => {

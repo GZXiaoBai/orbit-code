@@ -2,6 +2,7 @@ import {
   ArrowUp,
   FileText,
   Image as ImageIcon,
+  Loader2,
   Paperclip,
   Plus,
   GitPullRequestArrow,
@@ -18,6 +19,7 @@ import { attachmentFromFile, classifyPastedText, formatAttachmentContext } from 
 interface ComposerProps {
   copy: AppCopy;
   onPlanImport: (source: string, fileName?: string) => Promise<boolean> | boolean;
+  onPlanMessage?: (source: string) => Promise<boolean> | boolean;
   onBuildMessage?: (source: string) => Promise<boolean> | boolean;
   runControls?: RunControlsState;
   onOpenSettings?: (section?: string) => void;
@@ -31,6 +33,7 @@ interface ComposerProps {
 export function Composer({
   copy,
   onPlanImport,
+  onPlanMessage,
   onBuildMessage,
   runControls,
   onOpenSettings,
@@ -44,6 +47,7 @@ export function Composer({
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const isBuildMode = runControls?.mode === "build";
   const placeholder = isBuildMode
     ? copy.composer.buildPlaceholder
@@ -59,14 +63,22 @@ export function Composer({
   }
 
   async function submitDraft() {
+    if (isSubmitting) return;
     if (!draft.trim() && attachments.length === 0) return;
     const source = `${draft.trim()}${formatAttachmentContext(attachments)}`;
-    const handled = runControls?.mode === "build" && onBuildMessage
-      ? await onBuildMessage(source)
-      : await onPlanImport(source, "composer-input.md");
-    if (handled) {
-      setDraft("");
-      setAttachments([]);
+    setIsSubmitting(true);
+    try {
+      const handled = runControls?.mode === "build" && onBuildMessage
+        ? await onBuildMessage(source)
+        : onPlanMessage
+          ? await onPlanMessage(source)
+          : await onPlanImport(source, "composer-input.md");
+      if (handled) {
+        setDraft("");
+        setAttachments([]);
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -158,11 +170,17 @@ export function Composer({
           onKeyDown={handleKeyDown}
           onPaste={(event) => void handlePaste(event)}
           placeholder={placeholder}
+          aria-busy={isSubmitting}
         />
-        <button className="send-button" type="submit" aria-label={copy.workbench.send}>
-          <ArrowUp size={18} />
+        <button className="send-button" type="submit" aria-label={copy.workbench.send} disabled={isSubmitting}>
+          {isSubmitting ? <Loader2 size={18} className="spin-icon" /> : <ArrowUp size={18} />}
         </button>
       </div>
+      {isSubmitting ? (
+        <div className="composer-status" role="status">
+          {isBuildMode ? copy.composer.sendingBuild : copy.composer.sendingPlan}
+        </div>
+      ) : null}
       {attachments.length > 0 ? (
         <div className="composer-attachments" aria-label={copy.composer.attachments}>
           {attachments.map((attachment) => (

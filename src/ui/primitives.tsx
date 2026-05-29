@@ -205,8 +205,9 @@ export function SelectMenu({
   }, [open, options.length]);
 
   useEffect(() => {
-    setActiveIndex(Math.max(0, options.findIndex((option) => option.value === value)));
-  }, [options, value]);
+    const nextIndex = Math.max(0, options.findIndex((option) => option.value === value));
+    if (activeIndex !== nextIndex) setActiveIndex(nextIndex);
+  }, [activeIndex, options, value]);
 
   const openMenu = () => {
     updatePlacement();

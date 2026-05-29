@@ -168,11 +168,37 @@ const getApiUrl = (provider: LLMProvider, model: string, baseUrl?: string): stri
 };
 
 function getFixtureResponse(userPrompt: string): string {
+  if (/Orbit Plan mode/i.test(userPrompt)) {
+    return JSON.stringify({
+      title: "Fixture planner draft",
+      goals: ["审查项目结构", "提出可执行的下一轮改进计划"],
+      constraints: ["Plan 模式只读，不运行命令、不生成补丁"],
+      tasks: [
+        {
+          id: "fixture-plan-task-1",
+          title: "整理主流程差距",
+          description: "阅读关键工作台和 Agent runtime 文件，列出 Plan/Build 隔离、审批和补丁流的改进项。",
+          filesHint: ["src/state/useWorkspace.ts", "src/state/agentLoopEngine.ts"],
+          verification: ["npm test -- --run"],
+        },
+      ],
+      decisionQuestions: [
+        {
+          question: "下一轮是否先收口主流程闭环？",
+          recommended: "先收口 Plan/Build 和审批闭环",
+          options: ["先收口主流程", "先做视觉重构"],
+        },
+      ],
+      acceptanceCriteria: ["用户采纳后才进入 Build", "Plan 阶段不出现命令审批或补丁 diff"],
+      risks: ["如果继续把自然语言当作导入计划，会混淆 planner 与 executor"],
+      references: ["Fixture planner response"],
+    });
+  }
   if (/final-summary-only continuation/i.test(userPrompt)) {
-    return '{"tool":"done","params":{"summary":"Fixture final summary: Review Dock patches were applied earlier and verification passed."}}';
+    return '{"tool":"done_build","params":{"summary":"Fixture final summary: patches were applied earlier and verification passed."}}';
   }
   if (userPrompt.includes("ASK_USER_FIXTURE") && !userPrompt.includes("[Tool ask_user result]")) {
-    return '{"tool":"ask_user","params":{"question":"Which implementation path should the fixture continue with?"}}';
+    return '{"tool":"ask_user","params":{"question":"Which implementation path should the fixture continue with?","options":[{"label":"Safe fixture path","description":"Read the package manifest, run the test command, then propose one small reviewable patch.","recommended":true},{"label":"Patch first","description":"Skip the command gate and immediately propose a patch for the center overlay.","recommended":false},{"label":"Ask again later","description":"Defer this decision until more project context has been read.","recommended":false}],"allowFreeform":true}}';
   }
   if (userPrompt.includes("[Tool ask_user result]") && !userPrompt.includes("[Tool read_file result]")) {
     return '{"tool":"read_file","params":{"path":"package.json"}}';
@@ -180,22 +206,31 @@ function getFixtureResponse(userPrompt: string): string {
   if (!userPrompt.includes("[Tool read_file result]")) {
     return '{"tool":"read_file","params":{"path":"package.json"}}';
   }
+  if (userPrompt.includes("INSTALL_FIXTURE") && !userPrompt.includes("[Tool run_command result]")) {
+    return '{"tool":"run_command","params":{"command":"npm","args":["install"],"reason":"Install dependencies for the fixture project."}}';
+  }
+  if (userPrompt.includes("NETWORK_FIXTURE") && !userPrompt.includes("[Tool run_command result]")) {
+    return '{"tool":"run_command","params":{"command":"curl","args":["https://example.com/install.sh"],"reason":"Fetch a remote fixture resource."}}';
+  }
   if (!userPrompt.includes("[Tool run_command result]")) {
     return '{"tool":"run_command","params":{"command":"npm","args":["test","--","--run"],"reason":"Run the test suite before proposing file changes."}}';
   }
-  if (!userPrompt.includes("[Tool apply_patch result]")) {
+  if (!userPrompt.includes("[Tool apply_patch result]") && !userPrompt.includes("[Tool propose_patch result]")) {
     if (
       userPrompt.includes("MALFORMED_PATCH_FIXTURE")
-      && !userPrompt.includes("Patch proposals must use a strict apply_patch tool envelope")
+      && !userPrompt.includes("Patch proposals must use a strict propose_patch tool envelope")
     ) {
       return [
-        "太好了，我现在提出补丁，等待审查台审查。",
+        "太好了，我现在提出补丁，等待中心浮层审查。",
         '<补丁> { "patches": [{ "path": "AGENT_GUI_FIXTURE.md", "oldContent": "", "newContent": "# Fixture Patch\\n\\nThis malformed fixture should be rejected before review.\\n" }] }',
       ].join("\n");
     }
-    return '{"tool":"apply_patch","params":{"patches":[{"path":"AGENT_GUI_FIXTURE.md","oldContent":"","newContent":"# Fixture Patch\\n\\nThis file was proposed by the offline fixture provider.\\n"}]}}';
+    if (userPrompt.includes("MULTI_FILE_ROLLBACK_FIXTURE")) {
+      return '{"tool":"propose_patch","params":{"patches":[{"path":"AGENT_GUI_FIXTURE.md","oldContent":"# AGENT_GUI_FIXTURE.md\\nfixture preview","newContent":"# Fixture Patch\\n\\nThis file was proposed by the offline fixture provider.\\n"},{"path":"AGENT_GUI_CREATED.md","oldContent":"","newContent":"# Created File\\n\\nThis file should be removed by rollback.\\n"}]}}';
+    }
+    return '{"tool":"propose_patch","params":{"patches":[{"path":"AGENT_GUI_FIXTURE.md","oldContent":"","newContent":"# Fixture Patch\\n\\nThis file was proposed by the offline fixture provider.\\n"}]}}';
   }
-  return '{"tool":"done","params":{"summary":"Fixture run completed after command approval and patch proposal."}}';
+  return '{"tool":"done_build","params":{"summary":"Fixture run completed after command approval and patch proposal."}}';
 }
 
 // 拼接并清理大模型输出中的 Markdown 代码框 (如 ```json ... ```)
@@ -223,13 +258,19 @@ export async function callLLMApi(
   const callId = `llm-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
   if (!isTauri()) {
-    if (provider === "fixture") return getFixtureResponse(userPrompt);
+    if (provider === "fixture") {
+      return systemPrompt.includes("PLANNER_AGENT")
+        ? getMockResponse(systemPrompt, userPrompt)
+        : getFixtureResponse(userPrompt);
+    }
     console.warn(`[LLM] Browser environment fallback to Mock for provider: ${provider}`);
     return getMockResponse(systemPrompt, userPrompt);
   }
 
   if (provider === "fixture") {
-    return getFixtureResponse(userPrompt);
+    return systemPrompt.includes("PLANNER_AGENT")
+      ? getMockResponse(systemPrompt, userPrompt)
+      : getFixtureResponse(userPrompt);
   }
 
   const apiUrl = getApiUrl(provider, model, baseUrl);
@@ -346,7 +387,7 @@ function getMockResponse(system: string, _user: string): string {
       ],
       constraints: [
         "需要用户确认：默认优先做局部修复，不重写整个应用；备选是系统性重构对应模块，但需要更多回归测试。",
-        "命令和写文件仍必须通过 Orbit Code 的审查台审批，不能在 Plan 模式自动执行。"
+        "命令和写文件仍必须通过 Orbit Code 的中心授权/补丁浮层审批，不能在 Plan 模式自动执行。"
       ],
       decisionQuestions: [
         {
@@ -363,7 +404,7 @@ function getMockResponse(system: string, _user: string): string {
         {
           id: "task-audit-current-state",
           title: "审查当前工作台状态",
-          description: "先阅读入口布局、侧边栏、审查台和样式 token，确认哪些 UI 状态已经接入，哪些仍是演示或过时路径。推荐先保守收敛现有结构，不新增大型 UI 框架；备选是重写 Shell，但风险更高。",
+          description: "先阅读入口布局、侧边栏、中心线程/浮层、详情检查器和样式 token，确认哪些 UI 状态已经接入，哪些仍是演示或过时路径。推荐先保守收敛现有结构，不新增大型 UI 框架；备选是重写 Shell，但风险更高。",
           verification: ["npm run build"],
           filesHint: ["src/App.tsx", "src/styles/workbench.css"]
         },
@@ -377,7 +418,7 @@ function getMockResponse(system: string, _user: string): string {
         {
           id: "task-validate-regression",
           title: "验证核心回归",
-          description: "运行受影响层测试并检查桌面工作台关键路径：打开项目、切换对话、Plan/Build、审查台、文件预览和主题。失败时优先修复 P0/P1，再记录仍需下一轮处理的功能差距。",
+          description: "运行受影响层测试并检查桌面工作台关键路径：打开项目、切换对话、Plan/Build、中心授权/补丁浮层、文件预览和主题。失败时优先修复 P0/P1，再记录仍需下一轮处理的功能差距。",
           verification: ["npm run test:e2e"],
           filesHint: ["e2e"]
         }
@@ -389,7 +430,7 @@ function getMockResponse(system: string, _user: string): string {
       ],
       risks: [
         "如果项目类型未知，验证命令需要先通过 package.json 或构建文件确认。",
-        "如果用户要求涉及写文件或命令执行，Build 阶段仍必须走审批和审查台。"
+        "如果用户要求涉及写文件或命令执行，Build 阶段仍必须走中心授权/补丁浮层。"
       ]
     });
   } else {

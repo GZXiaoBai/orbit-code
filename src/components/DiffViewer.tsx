@@ -1,5 +1,7 @@
 import { useState, useMemo } from "react";
-import { Check, Columns, FileCode, Play, AlertCircle } from "lucide-react";
+import { Check, Columns, FileCode, AlertCircle } from "lucide-react";
+import { createFileActionTarget } from "../domain/fileActions";
+import { FileActionMenu } from "../features/files/FileActionMenu";
 import type { AppCopy } from "../i18n/copy";
 import { computeLineDiff, type DiffChange } from "../utils/diff";
 
@@ -19,6 +21,7 @@ interface DiffViewerProps {
   copy: AppCopy;
   patches: DiffPatch[];
   onApply: () => Promise<void>;
+  workspacePath?: string;
   eventId?: string;
   onUpdatePatch?: (eventId: string, path: string, updates: Partial<DiffPatch>) => void;
 }
@@ -248,7 +251,7 @@ function renderCodeLine(value: string) {
   ));
 }
 
-export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: DiffViewerProps) {
+export function DiffViewer({ copy, patches, onApply, workspacePath, eventId, onUpdatePatch }: DiffViewerProps) {
   const [selectedFileIdx, setSelectedFileIdx] = useState(0);
   const [isSplit, setIsSplit] = useState(true);
   const [applying, setApplying] = useState(false);
@@ -280,6 +283,10 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
   const allApplied = patches.every((p) => p.applied);
   const hasUnpreviewedPatch = patches.some((p) => !p.applied && p.sandboxStatus !== "sandboxed");
   const hasFailedPreview = patches.some((p) => !p.applied && (p.sandboxStatus === "failed" || p.applyStatus === "failed"));
+  const canRunPatchAction = !allApplied && !currentPatch.hasConflict;
+  const patchActionLabel = hasFailedPreview || hasUnpreviewedPatch
+    ? (copy.language === "中" ? "重试沙盒预演" : "Retry sandbox preview")
+    : copy.diff.applyAll;
 
   const handleApply = async () => {
     setApplying(true);
@@ -292,6 +299,26 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
       setApplying(false);
     }
   };
+
+  const renderApplyAction = (className = "") => (
+    <button
+      className={`apply-patch-action-btn ${className}`.trim()}
+      onClick={handleApply}
+      disabled={applying}
+    >
+      {applying ? (
+        <>
+          <span className="applying-spinner"></span>
+          <span>{copy.diff.writing}</span>
+        </>
+      ) : (
+        <>
+          <Check size={14} />
+          <span>{patchActionLabel}</span>
+        </>
+      )}
+    </button>
+  );
 
   // 渲染单栏 (Inline) 视图
   const renderInline = () => {
@@ -498,16 +525,18 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
         </div>
         {patches.map((p, idx) => {
           const fileName = p.path.split("/").pop() || p.path;
+          const target = createFileActionTarget({ workspacePath, path: p.path, sourceSurface: "diff" });
           return (
-            <button
-              key={p.path}
-              className={`diff-tab-item ${selectedFileIdx === idx ? "active" : ""}`}
-              onClick={() => setSelectedFileIdx(idx)}
-            >
-              <FileCode size={13} style={{ marginRight: 6 }} />
-              <span>{fileName}</span>
-              {p.applied && <Check size={12} className="diff-tab-check" />}
-            </button>
+            <FileActionMenu key={p.path} copy={copy} target={target} openOnClick={false} className="file-action-diff-trigger">
+              <button
+                className={`diff-tab-item ${selectedFileIdx === idx ? "active" : ""}`}
+                onClick={() => setSelectedFileIdx(idx)}
+              >
+                <FileCode size={13} style={{ marginRight: 6 }} />
+                <span>{fileName}</span>
+                {p.applied && <Check size={12} className="diff-tab-check" />}
+              </button>
+            </FileActionMenu>
           );
         })}
       </div>
@@ -515,22 +544,30 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
       <header className="diff-header">
         <div className="diff-file-info">
           <FileCode size={16} className="text-muted-foreground" />
-          <span className="diff-filename">{currentPatch.path}</span>
+          <FileActionMenu
+            copy={copy}
+            target={createFileActionTarget({ workspacePath, path: currentPatch.path, sourceSurface: "diff" })}
+          >
+            <span className="diff-filename file-action-path-label">{currentPatch.path}</span>
+          </FileActionMenu>
           <span className="diff-file-stats">
             <strong className="diff-additions">+{currentStats.additions}</strong>
             <strong className="diff-deletions">-{currentStats.deletions}</strong>
           </span>
         </div>
-        {!currentPatch.hasConflict && (
-          <button
-            className={`diff-layout-toggle-btn ${isSplit ? "active" : ""}`}
-            onClick={() => setIsSplit(!isSplit)}
-            title={copy.diff.splitTitle}
-          >
-            <Columns size={14} />
-            <span>{isSplit ? copy.diff.inline : copy.diff.split}</span>
-          </button>
-        )}
+        <div className="diff-header-actions">
+          {canRunPatchAction && renderApplyAction("apply-patch-action-btn-header")}
+          {!currentPatch.hasConflict && (
+            <button
+              className={`diff-layout-toggle-btn ${isSplit ? "active" : ""}`}
+              onClick={() => setIsSplit(!isSplit)}
+              title={copy.diff.splitTitle}
+            >
+              <Columns size={14} />
+              <span>{isSplit ? copy.diff.inline : copy.diff.split}</span>
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="diff-viewport">
@@ -566,23 +603,9 @@ export function DiffViewer({ copy, patches, onApply, eventId, onUpdatePatch }: D
             <span className="diff-conflict-warning-text">{copy.diff.previewBeforeApply}</span>
           </div>
         ) : (
-          <button
-            className="apply-patch-action-btn"
-            onClick={handleApply}
-            disabled={applying}
-          >
-            {applying ? (
-              <>
-                <span className="applying-spinner"></span>
-                <span>{copy.diff.writing}</span>
-              </>
-            ) : (
-              <>
-                <Play size={13} style={{ fill: "currentColor" }} />
-                <span>{copy.diff.applyAll}</span>
-              </>
-            )}
-          </button>
+          <div className="applied-badge-container muted">
+            <span>{copy.diff.readyToApply}</span>
+          </div>
         )}
       </footer>
     </section>

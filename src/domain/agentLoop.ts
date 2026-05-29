@@ -37,7 +37,22 @@ export interface ToolCall {
   completedAt?: string;
 }
 
-export type ToolName = "read_file" | "search_code" | "list_files" | "run_command" | "apply_patch" | "ask_user" | "done";
+export type AgentRuntimeMode = "plan" | "build";
+
+export type ToolName =
+  | "read_file"
+  | "search_code"
+  | "list_files"
+  | "run_command"
+  | "apply_patch"
+  | "propose_patch"
+  | "ask_user"
+  | "done"
+  | "done_plan"
+  | "done_build";
+
+export type PlannerResultKind = "message" | "question" | "planDraft" | "done_plan";
+export type BuildResultKind = "approval" | "question" | "patchProposal" | "verification" | "done_build";
 
 export interface ToolDefinition {
   name: ToolName;

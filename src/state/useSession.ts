@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AdvancedSettings,
   AgentSettings,
   CodingPlan,
+  ContextSettings,
   GeneralSettings,
   ModelCapability,
   ProviderSmokeRecord,
@@ -15,6 +16,7 @@ import type {
 import type { LLMProvider } from "../services/llmService";
 import type { AgentRunSession } from "../domain/agentRunSession";
 import type { QuestionRequest } from "../domain/questionRequest";
+import type { ActionRequiredEvent } from "../domain/actionRequired";
 import type { TerminalRun } from "../domain/terminalRun";
 import type { ThreadEvent } from "../domain/threadEvents";
 import type { ApprovalGrant, ApprovalRequest } from "./useApprovalQueue";
@@ -25,6 +27,7 @@ import { sessionStore } from "../storage/sessionStore";
 import { callLLMApi, PLANNER_SYSTEM_PROMPT, cleanJsonOutput } from "../services/llmService";
 import { isTauri } from "../utils/tauri";
 import { resolveModelSelection } from "./modelSettings";
+import { findProvider } from "../providers/providerRegistry";
 
 type NormalizedDecisionQuestion = NonNullable<CodingPlan["decisionQuestions"]>[number];
 
@@ -57,6 +60,7 @@ export interface ProviderSettings {
   agent?: AgentSettings;
   general?: GeneralSettings;
   advanced?: AdvancedSettings;
+  context?: ContextSettings;
   smokeStatus?: Record<string, ProviderSmokeRecord>;
 }
 
@@ -78,6 +82,7 @@ export interface SessionState {
   loadedApprovalRequests: ApprovalRequest[] | null;
   loadedApprovalGrants: ApprovalGrant[] | null;
   loadedQuestionRequests: QuestionRequest[] | null;
+  loadedActionRequired: ActionRequiredEvent[] | null;
   loadedTerminalRuns: TerminalRun[] | null;
 
   importPlan: (source: string, fileName?: string) => Promise<boolean>;
@@ -118,6 +123,9 @@ const defaultProviderSettings: ProviderSettings = {
   advanced: {
     diagnosticsEnabled: false,
   },
+  context: {
+    userRules: [],
+  },
   smokeStatus: {},
 };
 
@@ -156,6 +164,18 @@ export function normalizeProviderSettings(settings: ProviderSettings | null | un
       ...defaultProviderSettings.advanced!,
       ...(settings?.advanced || {}),
     },
+    context: {
+      ...defaultProviderSettings.context!,
+      ...(settings?.context || {}),
+      userRules: (settings?.context?.userRules || []).map((rule, index) => ({
+        id: rule.id || `user-rule-${index}`,
+        title: rule.title || `User rule ${index + 1}`,
+        content: rule.content || "",
+        enabled: rule.enabled !== false,
+        mode: rule.mode === "plan" || rule.mode === "build" || rule.mode === "both" ? rule.mode : "both",
+        source: "user" as const,
+      })),
+    },
     smokeStatus: settings?.smokeStatus || {},
   };
 }
@@ -176,22 +196,25 @@ export function useSession(): SessionState {
   const [loadedApprovalRequests, setLoadedApprovalRequests] = useState<ApprovalRequest[] | null>(null);
   const [loadedApprovalGrants, setLoadedApprovalGrants] = useState<ApprovalGrant[] | null>(null);
   const [loadedQuestionRequests, setLoadedQuestionRequests] = useState<QuestionRequest[] | null>(null);
+  const [loadedActionRequired, setLoadedActionRequired] = useState<ActionRequiredEvent[] | null>(null);
   const [loadedTerminalRuns, setLoadedTerminalRuns] = useState<TerminalRun[] | null>(null);
+  const importRequestSeqRef = useRef(0);
 
   useEffect(() => {
     const activeSelection = resolveModelSelection(providerSettings, {
       ...apiKeys,
     }, {
       providerId: providerSettings.activeProviderId,
-    });
+    }, credentialVaultProviders);
     const activeProv = activeSelection?.providerId as LLMProvider | undefined;
+    const provider = activeProv ? findProvider(activeProv) : null;
     if (!activeProv) {
       setIsRealLLMActive(false);
       setActiveLLMConfig(null);
       return;
     }
     const activeKey = apiKeys[activeProv];
-    if (activeKey) {
+    if (activeKey || provider?.capabilities.local) {
       setIsRealLLMActive(true);
       const config = providerSettings.configs[activeProv] || {};
       setActiveLLMConfig({
@@ -203,7 +226,7 @@ export function useSession(): SessionState {
       setIsRealLLMActive(false);
       setActiveLLMConfig(null);
     }
-  }, [providerSettings, apiKeys]);
+  }, [providerSettings, apiKeys, credentialVaultProviders]);
 
   useEffect(() => {
     async function initWorkspace() {
@@ -233,6 +256,9 @@ export function useSession(): SessionState {
           }
           if (session.questionRequests) {
             setLoadedQuestionRequests(session.questionRequests);
+          }
+          if (session.actionRequired) {
+            setLoadedActionRequired(session.actionRequired);
           }
           if (session.terminalRuns) {
             setLoadedTerminalRuns(session.terminalRuns);
@@ -363,6 +389,9 @@ export function useSession(): SessionState {
   }, []);
 
   const importPlan = useCallback(async (source: string, fileName = "pasted-plan") => {
+    const requestSeq = importRequestSeqRef.current + 1;
+    importRequestSeqRef.current = requestSeq;
+    const isCurrentImport = () => importRequestSeqRef.current === requestSeq;
     const result = parseCodingPlan(source);
 
     if (!result.ok) {
@@ -410,6 +439,7 @@ export function useSession(): SessionState {
             references: parsedPlan.references || []
           };
 
+          if (!isCurrentImport()) return false;
           const nextPlan = {
             plan: planData,
             fileName,
@@ -424,17 +454,31 @@ export function useSession(): SessionState {
           setIsLoading(false);
           return true;
         } catch (e: any) {
+          if (!isCurrentImport()) return false;
           setImportError({ fileName, errors: [`智能大模型解析计划失败: ${e?.message || String(e)}`] });
           setIsLoading(false);
           return false;
         }
       } else {
-        setImportError({ fileName, errors: result.errors });
+        if (!isCurrentImport()) return false;
+        const activeSelection = resolveModelSelection(providerSettings, apiKeys, { providerId: providerSettings.activeProviderId }, credentialVaultProviders);
+        const provider = activeSelection ? findProvider(activeSelection.providerId) : null;
+        const lockedProvider = provider && !provider.capabilities.local && credentialVaultProviders.includes(provider.id) && !apiKeys[provider.id];
+        const missingProviderAccess = provider && !provider.capabilities.local && !apiKeys[provider.id];
+        const accessError = lockedProvider
+          ? `已保存 ${provider.label} API Key，但当前凭据库未解锁。请在“设置 > 模型”解锁后再发送需求生成计划。`
+          : missingProviderAccess
+            ? `${provider.label} API Key 未配置或未解锁。请先在“设置 > 模型”配置后再发送需求生成计划。`
+            : !activeSelection
+              ? "请先导入或配置一个模型，再发送自然语言需求生成计划。"
+              : "";
+        setImportError({ fileName, errors: accessError ? [accessError] : result.errors });
         setIsLoading(false);
         return false;
       }
     }
 
+    if (!isCurrentImport()) return false;
     const nextPlan = {
       plan: result.plan,
       fileName,
@@ -447,7 +491,7 @@ export function useSession(): SessionState {
     setImportError(null);
     setIsLoading(false);
     return true;
-  }, [isRealLLMActive, activeLLMConfig]);
+  }, [isRealLLMActive, activeLLMConfig, apiKeys, credentialVaultProviders, providerSettings]);
 
   const clearImportedPlan = useCallback(() => {
     setImportedPlan(null);
@@ -523,6 +567,7 @@ export function useSession(): SessionState {
     loadedApprovalRequests,
     loadedApprovalGrants,
     loadedQuestionRequests,
+    loadedActionRequired,
     loadedTerminalRuns,
     importPlan,
     restoreImportedPlan,

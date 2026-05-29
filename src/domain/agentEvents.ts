@@ -1,4 +1,5 @@
 import type { PatchApplyStatus, PatchSandboxStatus } from "./types";
+import type { CodingPlan } from "./types";
 
 export interface AgentEventPatch {
   path: string;
@@ -15,6 +16,22 @@ export interface AgentEventPatch {
   conflictResolved?: boolean;
 }
 
+export interface AgentEventQuestionOption {
+  id: string;
+  label: string;
+  description: string;
+  recommended?: boolean;
+}
+
+export interface AgentEventQuestion {
+  requestId?: string;
+  question: string;
+  status: "pending" | "answered" | "cancelled";
+  answer?: string;
+  selectedOptionId?: string;
+  options?: AgentEventQuestionOption[];
+}
+
 export interface AgentEvent {
   id: string;
   workspacePath?: string;
@@ -28,4 +45,6 @@ export interface AgentEvent {
   timestamp: string;
   createdAt?: string;
   patches?: AgentEventPatch[];
+  question?: AgentEventQuestion;
+  planDraft?: CodingPlan;
 }

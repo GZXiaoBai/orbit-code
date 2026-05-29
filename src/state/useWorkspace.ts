@@ -2,14 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentEvent } from "../domain/agentEvents";
 import type { AgentRunSession } from "../domain/agentRunSession";
-import type { QuestionRequest } from "../domain/questionRequest";
+import { formatQuestionAnswer, type QuestionAnswerInput, type QuestionRequest } from "../domain/questionRequest";
 import type { TerminalRun } from "../domain/terminalRun";
-import type { ThreadEvent } from "../domain/threadEvents";
-import { buildAgentEventsFromThreadEvents, buildThreadEvents, normalizeStoredThreadEvents, serializeThreadEvents } from "../domain/threadEvents";
+import { createThreadEvent, type CreateThreadEventInput, type ThreadEvent } from "../domain/threadEvents";
+import { serializeThreadEvents } from "../domain/threadEvents";
+import type { ActionRequiredEvent } from "../domain/actionRequired";
+import type { ToolParams } from "../domain/agentLoop";
 import type { PermissionAction, PermissionDecision, PermissionPreset, ProjectSecurityOverride } from "../domain/types";
-import { mergeRunSteps } from "../domain/runSteps";
+import { selectRunSteps } from "../domain/runSteps";
+import { selectPendingActions } from "../domain/threadEventSelectors";
 import { sessionStore } from "../storage/sessionStore";
-import { callLLMApi, CODER_SYSTEM_PROMPT } from "../services/llmService";
+import { callLLMApi, CODER_SYSTEM_PROMPT, type LLMProvider } from "../services/llmService";
+import { parseCodingPlan } from "../domain/planSchema";
 import { useSession } from "./useSession";
 import { useFileSystem } from "./useFileSystem";
 import { useEmbeddingIndex } from "./useEmbeddingIndex";
@@ -27,24 +31,56 @@ import type { ImportedPlanState } from "./useSession";
 import { formatCommandForDisplay } from "../runtime/commandParser";
 import { selectVerificationCommand } from "../runtime/verificationCommand";
 import { buildEffectiveSecurityPolicy } from "../runtime/securityPolicy";
+import { ContextProviderRegistry, type ContextInspectorModel } from "../runtime/contextProviders";
+import { PermissionScheduler } from "../runtime/permissionScheduler";
+import { invokeDesktop } from "../runtime/desktopGateway";
 import { buildUsageSnapshot } from "./usageSnapshot";
 import { buildReviewDockModel } from "../features/review/reviewDockModel";
 import type { ApprovalGrant, ApprovalRequest } from "./useApprovalQueue";
 import { isTauri } from "../utils/tauri";
+import { findProvider } from "../providers/providerRegistry";
+import { runPlannerTurn, summarizePlanDraft } from "./plannerEngine";
+import {
+  restoreThreadEventStore,
+} from "./threadEventStore";
+import { RuntimeLedger } from "./threadRuntimeStore";
+import { createDeepSeekSmokeRunRecord, type SmokeRunRecord } from "../runtime/deepSeekSmokeHarness";
 
 export type { AgentEvent } from "../domain/agentEvents";
 export type { ImportedPlanState, ImportErrorState, ProviderSettings } from "./useSession";
 
 const THREAD_SNAPSHOTS_KEY = "orbit-code.thread-snapshots.v1";
 
+function emptyContextInspector(mode: "plan" | "build" = "plan"): ContextInspectorModel {
+  return {
+    blocks: [],
+    disabledBlocks: [],
+    skills: [],
+    editableSources: [
+      { path: "ORBIT.md", title: "ORBIT.md", source: "workspace", exists: false, content: "" },
+      { path: ".orbit/rules", title: ".orbit/rules", source: "project", exists: false, content: "" },
+      { path: ".orbit/rules.md", title: ".orbit/rules.md", source: "project", exists: false, content: "" },
+    ],
+    externalRuleCandidates: [],
+    source: "context-provider-registry",
+    mode,
+    tokenEstimate: 0,
+    errors: [],
+    matchedRules: [],
+    permissionImpact: "none",
+    lastCollectedAt: "",
+  };
+}
+
 interface ThreadSnapshot {
   importedPlan: ImportedPlanState | null;
-  agentEvents: AgentEvent[];
+  agentEvents?: AgentEvent[];
   threadEvents?: ThreadEvent[];
   agentRunSession?: AgentRunSession | null;
   approvalRequests?: ApprovalRequest[];
   approvalGrants?: ApprovalGrant[];
   questionRequests?: QuestionRequest[];
+  actionRequired?: ActionRequiredEvent[];
   terminalRuns?: TerminalRun[];
   updatedAt: string;
 }
@@ -74,10 +110,12 @@ async function readPackageScripts(workspacePath: string, cwd?: string): Promise<
 export function useWorkspace() {
   const session = useSession();
 
-  const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
+  const [threadEvents, setThreadEvents] = useState<ThreadEvent[]>([]);
+  const [actionRequired, setActionRequired] = useState<ActionRequiredEvent[]>([]);
+  const [currentContextInspector, setCurrentContextInspector] = useState<ContextInspectorModel>(() => emptyContextInspector());
   const [healingAttempts, setHealingAttempts] = useState<Record<string, number>>({});
 
-  const agentEventsRef = useRef(agentEvents);
+  const threadEventsRef = useRef(threadEvents);
   const isRealLLMActiveRef = useRef(session.isRealLLMActive);
   const activeLLMConfigRef = useRef(session.activeLLMConfig);
   const healingAttemptsRef = useRef(healingAttempts);
@@ -91,9 +129,11 @@ export function useWorkspace() {
   const agentRunSessionRef = useRef<AgentRunSession | null>(null);
   const approvalRequestsRef = useRef<ApprovalRequest[]>([]);
   const questionRequestsRef = useRef<QuestionRequest[]>([]);
+  const actionRequiredRef = useRef<ActionRequiredEvent[]>([]);
   const terminalRunsRef = useRef<TerminalRun[]>([]);
 
-  useEffect(() => { agentEventsRef.current = agentEvents; }, [agentEvents]);
+  useEffect(() => { threadEventsRef.current = threadEvents; }, [threadEvents]);
+  useEffect(() => { actionRequiredRef.current = actionRequired; }, [actionRequired]);
   useEffect(() => { isRealLLMActiveRef.current = session.isRealLLMActive; }, [session.isRealLLMActive]);
   useEffect(() => { activeLLMConfigRef.current = session.activeLLMConfig; }, [session.activeLLMConfig]);
   useEffect(() => { healingAttemptsRef.current = healingAttempts; }, [healingAttempts]);
@@ -107,25 +147,61 @@ export function useWorkspace() {
 
   useEffect(() => {
     if (restoredInitialSessionEventsRef.current) return;
-    if (session.loadedThreadEvents && session.loadedThreadEvents.length > 0 && agentEvents.length === 0) {
+    if (session.loadedThreadEvents && session.loadedThreadEvents.length > 0 && threadEvents.length === 0) {
       restoredInitialSessionEventsRef.current = true;
-      setAgentEvents(buildAgentEventsFromThreadEvents(session.loadedThreadEvents));
+      setThreadEvents(restoreThreadEventStore({ threadEvents: session.loadedThreadEvents }));
       return;
     }
-    if (session.loadedAgentEvents && session.loadedAgentEvents.length > 0 && agentEvents.length === 0) {
+    if (session.loadedAgentEvents && session.loadedAgentEvents.length > 0 && threadEvents.length === 0) {
       restoredInitialSessionEventsRef.current = true;
-      setAgentEvents(session.loadedAgentEvents as AgentEvent[]);
+      setThreadEvents(restoreThreadEventStore({ agentEvents: session.loadedAgentEvents as AgentEvent[] }));
     }
-  }, [agentEvents.length, session.loadedAgentEvents, session.loadedThreadEvents]);
+  }, [session.loadedAgentEvents, session.loadedThreadEvents, threadEvents.length]);
 
-  const addAgentEvent = useCallback((event: AgentEvent) => {
-    setAgentEvents((prev) => [...prev, event]);
+  const emitThreadEvent = useCallback((event: ThreadEvent) => {
+    setThreadEvents((prev) => new RuntimeLedger({
+      threadEvents: prev,
+      actionRequired: actionRequiredRef.current,
+    }).appendThreadEvent(event).events);
   }, []);
 
-  const embeddingIndex = useEmbeddingIndex({ onEvent: addAgentEvent });
+  const emitWorkspaceEvent = useCallback((event: CreateThreadEventInput) => {
+    setThreadEvents((prev) => new RuntimeLedger({
+      threadEvents: prev,
+      actionRequired: actionRequiredRef.current,
+    }).appendThreadEvent(createThreadEvent(event)).events);
+  }, []);
+
+  const updateThreadEvent = useCallback((id: string, update: Partial<ThreadEvent> | ((event: ThreadEvent) => ThreadEvent)) => {
+    setThreadEvents((prev) => new RuntimeLedger({
+      threadEvents: prev,
+      actionRequired: actionRequiredRef.current,
+    }).updateThreadEvent(id, update).events);
+  }, []);
+
+  const embeddingIndex = useEmbeddingIndex({ onEvent: (event) => emitWorkspaceEvent({
+    kind: "agentMessage",
+    workspacePath: event.workspacePath,
+    threadId: event.threadId,
+    taskId: event.taskId,
+    runSessionId: event.runSessionId,
+    role: event.role,
+    status: event.status,
+    title: event.name,
+    message: event.message,
+    createdAt: event.createdAt,
+    patches: event.patches,
+    question: event.question,
+    planDraft: event.planDraft,
+  }) });
   const windowActions = useWindowActions();
   const approvalQueue = useApprovalQueue();
   const questionQueue = useQuestionQueue();
+  const contextProviderRegistry = useMemo(() => new ContextProviderRegistry(), []);
+  const permissionScheduler = useMemo(
+    () => new PermissionScheduler({ enqueueApproval: approvalQueue.requestApproval }),
+    [approvalQueue.requestApproval],
+  );
   const projectStore = useProjectStore();
   const layout = useLayoutPreferences();
   const projectActions = useProjectActions(projectStore.recentProjects);
@@ -149,23 +225,29 @@ export function useWorkspace() {
     }
   }, [approvalQueue.recoverGrants, session.loadedApprovalGrants]);
 
+  useEffect(() => {
+    if (session.loadedActionRequired && session.loadedActionRequired.length > 0 && actionRequired.length === 0) {
+      setActionRequired(session.loadedActionRequired);
+    }
+  }, [actionRequired.length, session.loadedActionRequired]);
+
   const startCollaborationFlow = useCallback(async (plan: ImportedPlanState) => {
     const task = plan?.plan.tasks.find(t => t.status !== "done" && t.status !== "verified");
-    setAgentEvents(task ? [{
+    setThreadEvents(task ? [createThreadEvent({
       id: `ready-${Date.now()}`,
+      kind: "plan",
       role: "planner",
-      name: "Plan Ready",
+      title: "Plan Ready",
       status: "idle",
-      message: `计划已导入，当前待处理任务：[${task.title}]。Plan 模式只更新任务；切换 Build 后才会启动 Agent、进入审批、提出补丁并等待变更审查。`,
-      timestamp: new Date().toLocaleTimeString(),
-    }] : []);
+      message: `计划已导入，当前待处理任务：[${task.title}]。Plan 模式只读规划；切换 Build 后才会启动 Agent、进入授权、提出补丁并等待变更确认。`,
+    })] : []);
   }, []);
 
   useEffect(() => {
-    if (session.importedPlan && !session.isLoading && agentEvents.length === 0 && (!session.loadedAgentEvents || session.loadedAgentEvents.length === 0)) {
+    if (session.importedPlan && !session.isLoading && threadEvents.length === 0 && (!session.loadedThreadEvents || session.loadedThreadEvents.length === 0)) {
       startCollaborationFlow(session.importedPlan);
     }
-  }, [agentEvents.length, session.importedPlan?.plan?.title, session.isLoading, session.loadedAgentEvents, startCollaborationFlow]);
+  }, [session.importedPlan?.plan?.title, session.isLoading, session.loadedThreadEvents, startCollaborationFlow, threadEvents.length]);
 
   const terminalLogsRef = useRef<Record<string, string>>({});
 
@@ -174,7 +256,7 @@ export function useWorkspace() {
 
     const attempt = healingAttemptsRef.current[taskId] || 0;
     if (attempt >= 3) {
-      setAgentEvents(prev => prev.map(e => {
+      setThreadEvents(prev => prev.map(e => {
         if (e.role === "verifier") {
           return {
             ...e,
@@ -189,7 +271,7 @@ export function useWorkspace() {
 
     setHealingAttempts(prev => ({ ...prev, [taskId]: attempt + 1 }));
 
-    const currentEvents = agentEventsRef.current;
+    const currentEvents = threadEventsRef.current;
     const coderEvent = [...currentEvents].reverse().find(e => e.role === "coder" && e.patches && e.patches.length > 0);
     if (!coderEvent || !coderEvent.patches || coderEvent.patches.length === 0) return;
     const filePath = coderEvent.patches[0].path;
@@ -205,7 +287,7 @@ export function useWorkspace() {
       guardAlert = "\n\n【资源监控警报】检测到您的测试代码发生了严重的内存泄露 (Memory Leak)，物理内存占用在短时间内暴增超过 50MB。请检查是否存在无限递归、闭包导致的对象未释放、或者大数组无限 Append 的逻辑。";
     }
 
-    setAgentEvents(prev => {
+    setThreadEvents(prev => {
       const next = [...prev];
       const verifierIdx = next.findIndex(e => e.role === "verifier");
       if (verifierIdx !== -1) {
@@ -235,8 +317,9 @@ export function useWorkspace() {
 
       next.push({
         id: `healing-${Date.now()}`,
+        kind: "patchProposal",
         role: "coder",
-        name: "Self-Healing Coder",
+        title: "Self-Healing Coder",
         status: "thinking",
         message: coderMessage,
         timestamp: new Date().toLocaleTimeString()
@@ -255,7 +338,7 @@ export function useWorkspace() {
         activeLLMConfigRef.current.url
       );
 
-      setAgentEvents(prev => {
+      setThreadEvents(prev => {
         const next = [...prev];
         const healIdx = next.findIndex(e => e.id.startsWith("healing-") && e.status === "thinking");
         if (healIdx !== -1) {
@@ -283,7 +366,7 @@ export function useWorkspace() {
         return next;
       });
     } catch (err: any) {
-      setAgentEvents(prev => {
+      setThreadEvents(prev => {
         const next = [...prev];
         const healIdx = next.findIndex(e => e.id.startsWith("healing-") && e.status === "thinking");
         if (healIdx !== -1) {
@@ -300,7 +383,7 @@ export function useWorkspace() {
 
   const handleCommandComplete = useCallback((taskId: string, exitCode: number | null, run?: TerminalRun) => {
     if (exitCode === 0) {
-      setAgentEvents(prev => prev.map(e => {
+      setThreadEvents(prev => prev.map(e => {
         if (e.role === "verifier") {
           return {
             ...e,
@@ -317,7 +400,7 @@ export function useWorkspace() {
         }, 100);
         timerRef.current.push(tid6);
       } else {
-        setAgentEvents(prev => prev.map(e => {
+        setThreadEvents(prev => prev.map(e => {
           if (e.role === "verifier") {
             let failMessage = `校验未通过：验证命令运行失败 (exitCode: ${exitCode})。请修改代码或检查指令。`;
             if (exitCode === 124) {
@@ -346,6 +429,234 @@ export function useWorkspace() {
   const threadUi = useThreadUiState(fs.workspaceRoot, "default-thread");
   const [threadSnapshots, setThreadSnapshots] = useState<Record<string, ThreadSnapshot>>(() => loadThreadSnapshots());
 
+  const collectRuntimeContext = useCallback(async () => {
+    const readWorkspaceFile = async (path: string) => {
+      if (!fs.workspaceRoot) return "";
+      return invokeDesktop<string>("read_workspace_file", { path, workspacePath: fs.workspaceRoot });
+    };
+    const listWorkspaceFiles = async () => {
+      if (!fs.workspaceRoot) return [];
+      return invokeDesktop<string[]>("list_workspace_files", { workspacePath: fs.workspaceRoot });
+    };
+    const inspector = await contextProviderRegistry.collectInspector({
+      mode: runControls.mode,
+      workspacePath: fs.workspaceRoot,
+      threadId: threadUi.threadId,
+      planSnapshot: session.importedPlan?.plan || null,
+      userRules: session.providerSettings.context?.userRules || [],
+      readWorkspaceFile,
+      listWorkspaceFiles,
+    });
+    setCurrentContextInspector(inspector);
+    for (const error of inspector.errors) {
+      emitWorkspaceEvent({
+        id: `context-warning-${Date.now()}-${error.providerId}`,
+        kind: "error",
+        workspacePath: fs.workspaceRoot,
+        threadId: threadUi.threadId,
+        role: "reviewer",
+        title: "Context Provider Warning",
+        status: "done",
+        message: `上下文来源 ${error.providerId} 读取失败：${error.message}`,
+      });
+    }
+    return ContextProviderRegistry.formatBlocks(inspector.blocks);
+  }, [contextProviderRegistry, emitWorkspaceEvent, fs.workspaceRoot, runControls.mode, session.importedPlan?.plan, session.providerSettings.context?.userRules, threadUi.threadId]);
+
+  const refreshCurrentContext = useCallback(async () => {
+    await collectRuntimeContext();
+  }, [collectRuntimeContext]);
+
+  const evaluateDeepSeekSmokeRun = useCallback((): SmokeRunRecord => {
+    return createDeepSeekSmokeRunRecord({
+      events: threadEventsRef.current,
+      actionRequired: actionRequiredRef.current,
+      workspacePath: fs.workspaceRoot || "/Users/zhoujunjie/PersonalProjects/test for orbit/orbit-mini-lab",
+      model: runControls.selection.model || session.activeLLMConfig?.model || "deepseek-v4-flash",
+      threadId: threadUi.threadId,
+      runSessionId: agentRunSessionRef.current?.id || undefined,
+    });
+  }, [fs.workspaceRoot, runControls.selection.model, session.activeLLMConfig?.model, threadUi.threadId]);
+
+  const writeProjectContextFile = useCallback(async (path: string, content: string) => {
+    if (!fs.workspaceRoot) throw new Error("Workspace is required to edit project context.");
+    await invokeDesktop("write_workspace_context_file", {
+      workspacePath: fs.workspaceRoot,
+      path,
+      content,
+    });
+    await fs.refreshFileTree();
+    await collectRuntimeContext();
+  }, [collectRuntimeContext, fs]);
+
+  const acceptPlanDraft = useCallback((eventId: string) => {
+    const event = threadEventsRef.current.find((item) => item.id === eventId);
+    if (!event?.planDraft) return;
+    const importedPlan = {
+      plan: event.planDraft,
+      fileName: "planner-draft.json",
+      importedAt: new Date().toISOString(),
+    };
+    session.restoreImportedPlan(importedPlan);
+    runControls.setMode("build");
+    emitWorkspaceEvent({
+      id: `mode-switch-${Date.now()}`,
+      kind: "modeSwitch",
+      workspacePath: fs.workspaceRoot,
+      threadId: threadUi.threadId,
+      role: "planner",
+      title: "Mode Switch",
+      status: "done",
+      message: "已采纳 Plan 草案并切换到 Build。后续命令、补丁和验证都会走中心授权确认。",
+      modeSwitch: { from: "plan", to: "build", reason: "accepted_plan_draft" },
+    });
+    emitWorkspaceEvent({
+      id: `todo-list-${Date.now()}`,
+      kind: "todoList",
+      workspacePath: fs.workspaceRoot,
+      threadId: threadUi.threadId,
+      role: "planner",
+      title: "Todo List",
+      status: "active",
+      message: `已从 Plan 草案生成 ${event.planDraft.tasks.length} 个 Build 任务。`,
+      todoList: {
+        source: "plan",
+        items: event.planDraft.tasks.map((task) => ({
+          id: task.id,
+          title: task.title,
+          status: task.status === "done" || task.status === "verified"
+            ? "completed"
+            : task.status === "running"
+              ? "inProgress"
+              : task.status === "blocked" || task.status === "review"
+                ? "blocked"
+                : "pending",
+          evidenceEventIds: [eventId],
+        })),
+      },
+    });
+  }, [emitWorkspaceEvent, fs.workspaceRoot, runControls, session, threadUi.threadId]);
+
+  const submitPlanMessage = useCallback(async (source: string) => {
+    const trimmed = source.trim();
+    if (!trimmed) return false;
+
+    const parsedPlan = parseCodingPlan(trimmed);
+    if (parsedPlan.ok) {
+      return session.importPlan(trimmed, "composer-input.md");
+    }
+
+    emitWorkspaceEvent({
+      id: `plan-user-${Date.now()}`,
+      kind: "userMessage",
+      workspacePath: fs.workspaceRoot,
+      threadId: threadUi.threadId,
+      role: "planner",
+      title: "User Instruction",
+      status: "done",
+      message: trimmed,
+    });
+
+    const providerId = runControls.selection.providerId;
+    const provider = findProvider(providerId);
+    const model = runControls.selection.model.trim();
+    if (!model) {
+      emitWorkspaceEvent({
+        id: `plan-guard-${Date.now()}`,
+        kind: "error",
+        workspacePath: fs.workspaceRoot,
+        threadId: threadUi.threadId,
+        role: "planner",
+        title: "Run Guard",
+        status: "done",
+        message: "当前没有可用模型。Plan 自然语言请求需要先导入或配置一个模型；不会回退生成假计划。",
+      });
+      return false;
+    }
+    if (runControls.missingCredential) {
+      emitWorkspaceEvent({
+        id: `plan-guard-${Date.now()}`,
+        kind: "error",
+        workspacePath: fs.workspaceRoot,
+        threadId: threadUi.threadId,
+        role: "planner",
+        title: "Run Guard",
+        status: "done",
+        message: "已检测到导入过的模型，但凭据库当前未解锁。请先解锁 API Key 后再使用只读 Planner。",
+      });
+      return false;
+    }
+    if (!provider || (!provider.capabilities.local && !session.apiKeys[providerId])) {
+      emitWorkspaceEvent({
+        id: `plan-guard-${Date.now()}`,
+        kind: "error",
+        workspacePath: fs.workspaceRoot,
+        threadId: threadUi.threadId,
+        role: "planner",
+        title: "Run Guard",
+        status: "done",
+        message: "当前模型未接入或缺少 API Key。Plan 模式不会导入自然语言为假计划。",
+      });
+      return false;
+    }
+
+    try {
+      const config = session.providerSettings.configs[providerId] || {};
+      const runtimeContext = await collectRuntimeContext();
+      const result = await runPlannerTurn({
+        providerId: providerId as LLMProvider,
+        model,
+        baseUrl: config.baseUrl || provider.baseUrl,
+        reasoningEffort: runControls.selection.reasoningEffort,
+        request: [runtimeContext, trimmed].filter(Boolean).join("\n\n---\n\n"),
+        workspacePath: fs.workspaceRoot,
+        onToolDeniedByMode: (tool) => emitWorkspaceEvent({
+          id: `plan-mode-denied-${Date.now()}`,
+          kind: "toolDeniedByMode",
+          workspacePath: fs.workspaceRoot,
+          threadId: threadUi.threadId,
+          role: "reviewer",
+          title: "Tool Denied By Mode",
+          status: "done",
+          message: `Plan 模式拒绝了工具 ${tool}。Plan 只能读取、搜索、提问和输出计划。`,
+          toolDeniedByMode: {
+            tool,
+            mode: "plan",
+            reason: "Plan mode is read-only.",
+          },
+        }),
+      });
+      if (result.kind !== "planDraft") {
+        throw new Error(result.message || "Planner did not return a plan draft.");
+      }
+      const planDraft = result.plan;
+      emitWorkspaceEvent({
+        id: `plan-draft-${Date.now()}`,
+        kind: "planDraft",
+        workspacePath: fs.workspaceRoot,
+        threadId: threadUi.threadId,
+        role: "planner",
+        title: "Plan Draft",
+        status: "done",
+        message: summarizePlanDraft(planDraft),
+        planDraft,
+      });
+      return true;
+    } catch (error) {
+      emitWorkspaceEvent({
+        id: `plan-error-${Date.now()}`,
+        kind: "error",
+        workspacePath: fs.workspaceRoot,
+        threadId: threadUi.threadId,
+        role: "planner",
+        title: "Agent Error",
+        status: "done",
+        message: `只读 Planner 生成失败：${error instanceof Error ? error.message : String(error)}`,
+      });
+      return false;
+    }
+  }, [collectRuntimeContext, emitWorkspaceEvent, fs.workspaceRoot, runControls, session, threadUi.threadId]);
+
   useEffect(() => {
     const title = session.importedPlan?.plan.title?.trim();
     if (!title || threadUi.threadUiState.title) return;
@@ -362,12 +673,12 @@ export function useWorkspace() {
       ...prev,
       [threadId]: {
         importedPlan: session.importedPlan,
-        agentEvents: agentEventsRef.current,
-        threadEvents: serializeThreadEvents(buildThreadEvents(agentEventsRef.current)),
+        threadEvents: serializeThreadEvents(threadEventsRef.current),
         agentRunSession: agentRunSessionRef.current,
         approvalRequests: approvalRequestsRef.current,
         approvalGrants: approvalQueue.approvalGrants,
         questionRequests: questionRequestsRef.current,
+        actionRequired: actionRequiredRef.current,
         terminalRuns: terminalRunsRef.current,
         updatedAt: new Date().toISOString(),
       },
@@ -379,10 +690,11 @@ export function useWorkspace() {
     approvalQueue.cancelPendingApprovals();
     questionQueue.cancelPendingQuestions();
     session.restoreImportedPlan(snapshot?.importedPlan ?? null);
-    setAgentEvents(buildAgentEventsFromThreadEvents(normalizeStoredThreadEvents({
+    setThreadEvents(restoreThreadEventStore({
       threadEvents: snapshot?.threadEvents,
       agentEvents: snapshot?.agentEvents,
-    })));
+    }));
+    setActionRequired(snapshot?.actionRequired ?? []);
     approvalQueue.recoverApprovals(snapshot?.approvalRequests ?? [], true);
     approvalQueue.recoverGrants([
       ...approvalQueue.approvalGrants.filter((grant) => grant.scope === "project"),
@@ -401,10 +713,11 @@ export function useWorkspace() {
     approvalQueue.recoverApprovals([], true);
     approvalQueue.recoverGrants(approvalQueue.approvalGrants.filter((grant) => grant.scope === "project"), true);
     questionQueue.recoverQuestions([], true);
+    setActionRequired([]);
     recoverTerminalRunsRef.current?.([], true);
     recoverAgentRunSessionRef.current?.(null);
     session.restoreImportedPlan(null);
-    setAgentEvents([]);
+    setThreadEvents([]);
     return nextThreadId;
   }, [approvalQueue, persistCurrentThreadSnapshot, questionQueue, session, threadUi]);
 
@@ -461,24 +774,24 @@ export function useWorkspace() {
   useEffect(() => {
     const resumeKind = session.loadedAgentRunSession?.resumeKind;
     if (!resumeKind || restoredWaitNoticeRef.current) return;
-    const existingEvents = (session.loadedAgentEvents as AgentEvent[] | null | undefined) || agentEventsRef.current;
+    const existingEvents = threadEventsRef.current;
     const alreadyNoted = existingEvents.some((event) =>
-      event.name === "Recovered Waiting State" && event.message.includes(`：${resumeKind}`)
+      event.title === "Recovered Waiting State" && event.message.includes(`：${resumeKind}`)
     );
     if (alreadyNoted) {
       restoredWaitNoticeRef.current = true;
       return;
     }
     restoredWaitNoticeRef.current = true;
-    addAgentEvent({
+    emitWorkspaceEvent({
       id: `resume-${Date.now()}`,
+      kind: "commandExecution",
       role: "reviewer",
-      name: "Recovered Waiting State",
+      title: "Recovered Waiting State",
       status: "idle",
-      message: `已恢复等待操作：${resumeKind}。请在 Review Dock 中继续处理。`,
-      timestamp: new Date().toLocaleTimeString(),
+      message: `已恢复等待操作：${resumeKind}。请从中心待处理操作继续。`,
     });
-  }, [addAgentEvent, session.loadedAgentEvents, session.loadedAgentRunSession?.resumeKind]);
+  }, [emitWorkspaceEvent, session.loadedAgentRunSession?.resumeKind]);
 
   const projectSecurityOverride = useMemo(() => {
     if (!fs.workspaceRoot) return undefined;
@@ -522,6 +835,45 @@ export function useWorkspace() {
     return ok;
   }, [fs, persistCurrentThreadSnapshot, projectStore]);
 
+  const requestRuntimePermission = useCallback((
+    tool: string,
+    params: ToolParams,
+    reason = "",
+    onCreated?: (request: ApprovalRequest) => void,
+  ) => permissionScheduler.request({
+    mode: runControls.mode,
+    tool,
+    params,
+    workspacePath: fs.workspaceRoot,
+    threadId: threadUi.threadId,
+    taskId: typeof params.taskId === "string" ? params.taskId : undefined,
+    runSessionId: agentRunSessionRef.current?.id,
+    toolCallId: typeof params.toolCallId === "string" ? params.toolCallId : undefined,
+    reason,
+    security: session.providerSettings.security,
+    projectOverride: projectSecurityOverride,
+    onActionCreated: (action) => {
+      setActionRequired((prev) => new RuntimeLedger({
+        threadEvents: threadEventsRef.current,
+        actionRequired: prev.filter((item) => item.id !== action.id),
+      }).appendActionRequired(action).actionRequired);
+    },
+    onActionResolved: (action) => {
+      setActionRequired((prev) => new RuntimeLedger({
+        threadEvents: threadEventsRef.current,
+        actionRequired: prev,
+      }).updateActionRequired(action.id, action).actionRequired);
+    },
+    onCreated: (request) => onCreated?.(request),
+  }).then((result) => result.approved), [
+    fs.workspaceRoot,
+    permissionScheduler,
+    projectSecurityOverride,
+    runControls.mode,
+    session.providerSettings.security,
+    threadUi.threadId,
+  ]);
+
   useEffect(() => {
     if (restoredRecentWorkspaceRef.current) return;
     if (fs.workspaceRoot) {
@@ -546,7 +898,7 @@ export function useWorkspace() {
   ]);
 
   const requestPostPatchVerification = useCallback(async (eventId: string) => {
-    const event = agentEventsRef.current.find((item) => item.id === eventId);
+    const event = threadEventsRef.current.find((item) => item.id === eventId);
     const patchPaths = event?.patches?.map((patch) => patch.path).filter(Boolean) || [];
     const patchTopDirs = Array.from(new Set(
       patchPaths
@@ -569,13 +921,17 @@ export function useWorkspace() {
       packageScripts,
     });
     if (!task || !parsed) {
-      addAgentEvent({
+      emitWorkspaceEvent({
         id: `verify-missing-${Date.now()}`,
+        kind: "verification",
         role: "verifier",
-        name: "Verification",
+        title: "Verification",
         status: "idle",
         message: "补丁已写入。当前任务没有配置验证命令，请手动检查结果。",
-        timestamp: new Date().toLocaleTimeString(),
+        verification: {
+          status: "cancelled",
+          reason: "No verification command configured for the current task.",
+        },
       });
       return;
     }
@@ -583,19 +939,26 @@ export function useWorkspace() {
     const displayCommand = formatCommandForDisplay(parsed.command, parsed.args);
     const reason = `补丁 ${eventId} 已写入，运行验证命令确认当前任务：${task.title}`;
 
-    addAgentEvent({
+    emitWorkspaceEvent({
       id: `verify-request-${Date.now()}`,
+      kind: "verification",
       workspacePath: fs.workspaceRoot,
       threadId: threadUi.threadId,
       taskId: task.id,
       role: "verifier",
-      name: "Verification Approval",
+      title: "Verification Approval",
       status: "thinking",
-      message: `补丁已事务写入。等待你批准验证命令：${displayCommand}`,
-      timestamp: new Date().toLocaleTimeString(),
+      message: `补丁已事务写入。等待中心授权确认验证命令：${displayCommand}`,
+      verification: {
+        command: parsed.command,
+        args: parsed.args,
+        cwd: parsed.cwd,
+        status: "pending",
+        reason,
+      },
     });
 
-    approvalQueue.requestApproval("run_command", {
+    requestRuntimePermission("run_command", {
       command: parsed.command,
       args: parsed.args,
       ...(parsed.cwd ? { cwd: parsed.cwd } : {}),
@@ -606,29 +969,43 @@ export function useWorkspace() {
       workspacePath: fs.workspaceRoot,
     }, reason).then((approved) => {
       if (!approved) {
-        addAgentEvent({
+        emitWorkspaceEvent({
           id: `verify-denied-${Date.now()}`,
+          kind: "verification",
           workspacePath: fs.workspaceRoot,
           threadId: threadUi.threadId,
           taskId: task.id,
           role: "verifier",
-          name: "Verification Denied",
+          title: "Verification Denied",
           status: "done",
           message: `你拒绝了验证命令：${displayCommand}。Agent 不会自动运行测试。`,
-          timestamp: new Date().toLocaleTimeString(),
+          verification: {
+            command: parsed.command,
+            args: parsed.args,
+            cwd: parsed.cwd,
+            status: "denied",
+            reason,
+          },
         });
         return;
       }
-      addAgentEvent({
+      emitWorkspaceEvent({
         id: `verify-approved-${Date.now()}`,
+        kind: "verification",
         workspacePath: fs.workspaceRoot,
         threadId: threadUi.threadId,
         taskId: task.id,
         role: "verifier",
-        name: "Verification Approval",
+        title: "Verification Approval",
         status: "done",
         message: `你已批准验证命令：${displayCommand}。Orbit 将在当前工作区运行它。`,
-        timestamp: new Date().toLocaleTimeString(),
+        verification: {
+          command: parsed.command,
+          args: parsed.args,
+          cwd: parsed.cwd,
+          status: "approved",
+          reason,
+        },
       });
       fs.executeStructuredCommand({
         taskId: task.id,
@@ -640,7 +1017,7 @@ export function useWorkspace() {
         cwd: parsed.cwd,
       });
     });
-  }, [addAgentEvent, approvalQueue, fs, session.importedPlan, threadUi.threadId]);
+  }, [emitWorkspaceEvent, fs, requestRuntimePermission, session.importedPlan, threadUi.threadId]);
 
   const agentRun = useAgentRun({
     importedPlan: session.importedPlan,
@@ -652,12 +1029,14 @@ export function useWorkspace() {
     threadId: threadUi.threadId,
     securitySettings: session.providerSettings.security,
     projectSecurityOverride,
-    requestApproval: approvalQueue.requestApproval,
+    requestApproval: requestRuntimePermission,
     cancelPendingApprovals: approvalQueue.cancelPendingApprovals,
     requestQuestion: questionQueue.requestQuestion,
     cancelPendingQuestions: questionQueue.cancelPendingQuestions,
     recordTerminalResult: fs.recordTerminalResult,
-    setAgentEvents,
+    emitThreadEvent,
+    updateThreadEvent,
+    getExtensionContext: collectRuntimeContext,
     initialAgentRunSession: session.loadedAgentRunSession,
   });
 
@@ -683,14 +1062,15 @@ export function useWorkspace() {
   }, [agentRun.markVerificationCompletedForContinue]);
 
   const patchWorkflow = usePatchWorkflow({
-    agentEventsRef,
-    setAgentEvents,
+    threadEventsRef,
+    updateThreadEvent,
+    emitThreadEvent,
     fs,
     isRealLLMActiveRef,
     activeLLMConfigRef,
     onPatchApplied: (eventId) => {
       void requestPostPatchVerification(eventId);
-      const event = agentEventsRef.current.find((item) => item.id === eventId);
+      const event = threadEventsRef.current.find((item) => item.id === eventId);
       const patchPaths = event?.patches?.map((patch) => patch.path).filter(Boolean) || [];
       const activeTaskId = agentRunSessionRef.current?.taskId;
       const task = (
@@ -709,12 +1089,18 @@ export function useWorkspace() {
   const reviewDockModel = useMemo(() => buildReviewDockModel({
     approvals: approvalQueue.approvalRequests,
     questions: questionQueue.questionRequests,
-    events: agentEvents,
+    events: threadEvents,
     terminalRuns: fs.terminalRuns,
     workspacePath: fs.workspaceRoot,
     threadId: threadUi.threadId,
     taskId: agentRun.agentRunSession.taskId,
-  }), [agentEvents, agentRun.agentRunSession.taskId, approvalQueue.approvalRequests, fs.terminalRuns, fs.workspaceRoot, questionQueue.questionRequests, threadUi.threadId]);
+  }), [agentRun.agentRunSession.taskId, approvalQueue.approvalRequests, fs.terminalRuns, fs.workspaceRoot, questionQueue.questionRequests, threadEvents, threadUi.threadId]);
+
+  const runtimeLedgerSnapshot = useMemo(() => new RuntimeLedger({
+    threadEvents,
+    actionRequired,
+    terminalRuns: fs.terminalRuns,
+  }).ledgerSnapshot(), [actionRequired, fs.terminalRuns, threadEvents]);
 
   const resolveRecoveredApprovalAction = useCallback((request: ApprovalRequest, approved: boolean) => {
     const tool = request.tool;
@@ -728,18 +1114,26 @@ export function useWorkspace() {
     const workspacePath = typeof params.workspacePath === "string" ? params.workspacePath : fs.workspaceRoot;
     const cwd = typeof params.cwd === "string" ? params.cwd : undefined;
 
-    addAgentEvent({
+    emitWorkspaceEvent({
       id: `recovered-approval-${Date.now()}`,
+      kind: "approval",
       workspacePath,
       threadId: request.threadId || agentRun.agentRunSession.threadId || threadUi.threadId,
       taskId,
       role: "reviewer",
-      name: approved ? "Recovered Approval Granted" : "Recovered Approval Denied",
+      title: approved ? "Recovered Approval Granted" : "Recovered Approval Denied",
       status: "done",
       message: approved
         ? `你已批准恢复的 ${tool} 操作。`
         : `你已拒绝恢复的 ${tool} 操作。`,
-      timestamp: new Date().toLocaleTimeString(),
+      approval: {
+        requestId: request.id,
+        tool,
+        params: params as ToolParams,
+        status: approved ? "approved" : "denied",
+        grantScope: request.grantScope,
+        reason,
+      },
     });
 
     if (!approved) {
@@ -770,7 +1164,7 @@ export function useWorkspace() {
       workspacePath,
       cwd,
     });
-  }, [addAgentEvent, agentRun, fs, session.importedPlan?.plan.tasks, threadUi.threadId]);
+  }, [agentRun, emitWorkspaceEvent, fs, session.importedPlan?.plan.tasks, threadUi.threadId]);
 
   const resolveApproval = useCallback((id: string, approved: boolean) => {
     const request = approvalQueue.approvalRequests.find((item) => item.id === id);
@@ -779,20 +1173,29 @@ export function useWorkspace() {
     resolveRecoveredApprovalAction(request, approved);
   }, [approvalQueue, resolveRecoveredApprovalAction]);
 
-  const answerQuestion = useCallback((id: string, answer: string) => {
+  const answerQuestion = useCallback((id: string, input: string | QuestionAnswerInput) => {
     const question = questionQueue.questionRequests.find((item) => item.id === id);
-    const hadLiveResolver = questionQueue.answerQuestion(id, answer);
+    const answer = question ? formatQuestionAnswer(question, input).answer : typeof input === "string" ? input : input.answer || "";
+    const hadLiveResolver = questionQueue.answerQuestion(id, input);
     if (!question || hadLiveResolver) return;
-    addAgentEvent({
+    emitWorkspaceEvent({
       id: `recovered-question-${Date.now()}`,
+      kind: "question",
       workspacePath: question.workspacePath || fs.workspaceRoot,
       threadId: question.threadId || threadUi.threadId,
       taskId: question.taskId,
       role: "planner",
-      name: "Recovered Question Answered",
+      title: "Recovered Question Answered",
       status: "done",
       message: `你已回答恢复的问题：${answer}`,
-      timestamp: new Date().toLocaleTimeString(),
+      question: {
+        requestId: id,
+        question: question.question,
+        status: "answered",
+        answer,
+        selectedOptionId: typeof input === "string" ? undefined : input.selectedOptionId,
+        options: question.options,
+      },
     });
     agentRun.markRecoveredActionForContinue(
       "question",
@@ -800,22 +1203,28 @@ export function useWorkspace() {
       `User answered: ${answer}`,
       "恢复的问题已回答。点击“继续执行”后，Agent 会继续当前任务。",
     );
-  }, [addAgentEvent, agentRun, fs.workspaceRoot, questionQueue, threadUi.threadId]);
+  }, [agentRun, emitWorkspaceEvent, fs.workspaceRoot, questionQueue, threadUi.threadId]);
 
   const cancelQuestion = useCallback((id: string) => {
     const question = questionQueue.questionRequests.find((item) => item.id === id);
     const hadLiveResolver = questionQueue.cancelQuestion(id);
     if (!question || hadLiveResolver) return;
-    addAgentEvent({
+    emitWorkspaceEvent({
       id: `recovered-question-cancel-${Date.now()}`,
+      kind: "question",
       workspacePath: question.workspacePath || fs.workspaceRoot,
       threadId: question.threadId || threadUi.threadId,
       taskId: question.taskId,
       role: "planner",
-      name: "Recovered Question Cancelled",
+      title: "Recovered Question Cancelled",
       status: "done",
       message: "你取消了恢复的问题。",
-      timestamp: new Date().toLocaleTimeString(),
+      question: {
+        requestId: id,
+        question: question.question,
+        status: "cancelled",
+        options: question.options,
+      },
     });
     agentRun.markRecoveredActionForContinue(
       "question",
@@ -823,7 +1232,7 @@ export function useWorkspace() {
       "User cancelled question.",
       "恢复的问题已取消。点击“继续执行”后，Agent 会收到取消结果并重新规划。",
     );
-  }, [addAgentEvent, agentRun, fs.workspaceRoot, questionQueue, threadUi.threadId]);
+  }, [agentRun, emitWorkspaceEvent, fs.workspaceRoot, questionQueue, threadUi.threadId]);
 
   useEffect(() => {
     if (session.isLoading) return;
@@ -833,22 +1242,23 @@ export function useWorkspace() {
         activeThreadId: threadUi.threadId,
         importedPlan: session.importedPlan,
         providerSettings: session.providerSettings,
-        agentEvents,
-        threadEvents: serializeThreadEvents(buildThreadEvents(agentEvents)),
+        agentEvents: [],
+        threadEvents: serializeThreadEvents(threadEvents),
         agentRunSession: agentRun.agentRunSession,
         approvalRequests: approvalQueue.approvalRequests,
         approvalGrants: approvalQueue.approvalGrants,
         questionRequests: questionQueue.questionRequests,
+        actionRequired,
         terminalRuns: fs.terminalRuns,
         lastActiveAt: new Date().toISOString(),
       }).catch(console.error);
     }, 2000);
     return () => clearTimeout(timer);
-  }, [session.importedPlan, session.providerSettings, agentEvents, agentRun.agentRunSession, approvalQueue.approvalRequests, questionQueue.questionRequests, fs.terminalRuns, session.isLoading, threadUi.threadId]);
+  }, [session.importedPlan, session.providerSettings, threadEvents, actionRequired, agentRun.agentRunSession, approvalQueue.approvalRequests, questionQueue.questionRequests, fs.terminalRuns, session.isLoading, threadUi.threadId]);
 
   useEffect(() => {
     persistCurrentThreadSnapshot();
-  }, [agentEvents, approvalQueue.approvalGrants, approvalQueue.approvalRequests, fs.terminalRuns, persistCurrentThreadSnapshot, questionQueue.questionRequests, session.importedPlan]);
+  }, [threadEvents, actionRequired, approvalQueue.approvalGrants, approvalQueue.approvalRequests, fs.terminalRuns, persistCurrentThreadSnapshot, questionQueue.questionRequests, session.importedPlan]);
 
   return {
     // From session
@@ -865,9 +1275,11 @@ export function useWorkspace() {
     activeTitle: session.activeTitle,
     outputFiles: session.outputFiles,
     importPlan: session.importPlan,
+    submitPlanMessage,
+    acceptPlanDraft,
     clearImportedPlan: () => {
       session.clearImportedPlan();
-      setAgentEvents([]);
+      setThreadEvents([]);
     },
     updateTask: session.updateTask,
     addTask: session.addTask,
@@ -894,14 +1306,20 @@ export function useWorkspace() {
     refreshFileTree: fs.refreshFileTree,
     executeCommand: fs.executeCommand,
     // From useWorkspace
-    agentEvents,
-    runSteps: mergeRunSteps(agentEvents, approvalQueue.approvalRequests),
+    threadEvents,
+    emitThreadEvent,
+    updateThreadEvent,
+    agentEvents: [],
+    actionRequired,
+    pendingActions: selectPendingActions(runtimeLedgerSnapshot),
+    runSteps: selectRunSteps(runtimeLedgerSnapshot),
     startCollaborationFlow: () => {
       if (session.importedPlan) {
         startCollaborationFlow(session.importedPlan);
       }
     },
     applyEventPatch: patchWorkflow.applyEventPatch,
+    rollbackEventPatch: patchWorkflow.rollbackEventPatch,
     refinePatch: patchWorkflow.refinePatch,
     updateEventPatch: patchWorkflow.updateEventPatch,
     agentLoopPhase: agentRun.agentLoopPhase,
@@ -917,6 +1335,10 @@ export function useWorkspace() {
     streamingActive: agentRun.streamingActive,
     agentRunSession: agentRun.agentRunSession,
     reviewDockModel,
+    currentContextInspector,
+    refreshCurrentContext,
+    evaluateDeepSeekSmokeRun,
+    writeProjectContextFile,
     questionRequests: questionQueue.questionRequests,
     pendingQuestions: questionQueue.pendingQuestions,
     answerQuestion,

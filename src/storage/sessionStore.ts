@@ -5,6 +5,7 @@ import type { CodingPlan, ProviderSmokeRecord } from "../domain/types";
 import type { ModelCapability } from "../domain/types";
 import type { AgentRunSession } from "../domain/agentRunSession";
 import type { QuestionRequest } from "../domain/questionRequest";
+import type { ActionRequiredEvent } from "../domain/actionRequired";
 import type { TerminalRun } from "../domain/terminalRun";
 import type { ApprovalGrant, ApprovalRequest } from "../state/useApprovalQueue";
 import type { ImportedPlanState } from "../state/useWorkspace";
@@ -35,6 +36,7 @@ export interface SessionState {
   approvalRequests?: ApprovalRequest[];
   approvalGrants?: ApprovalGrant[];
   questionRequests?: QuestionRequest[];
+  actionRequired?: ActionRequiredEvent[];
   terminalRuns?: TerminalRun[];
   lastActiveAt: string;
 }
