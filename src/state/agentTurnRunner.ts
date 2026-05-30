@@ -12,8 +12,9 @@ export type PlanTurnResult =
   | { kind: "done_plan"; summary: string };
 
 export type BuildTurnResult =
-  | { kind: "completed"; summary: string; state: AgentTurnState }
-  | { kind: "cancelled"; summary?: string; state: AgentTurnState }
+  | { kind: "completed"; summary: string; finalSummary?: string; state: AgentTurnState; lastToolResult?: string }
+  | { kind: "waitingAction"; waitingActionId?: string; lastToolResult?: string; state: AgentTurnState }
+  | { kind: "cancelled"; summary?: string; state: AgentTurnState; lastToolResult?: string }
   | { kind: "failed"; error: string; state: AgentTurnState };
 
 export interface BuildTurnInput {
@@ -28,10 +29,12 @@ export interface BuildTurnInput {
 
 export interface AgentTurnState {
   mode: "plan" | "build" | null;
-  status: "idle" | "running" | "completed" | "failed" | "cancelled";
+  status: "idle" | "running" | "waitingAction" | "completed" | "failed" | "cancelled";
   startedAt?: string;
   completedAt?: string;
   error?: string;
+  waitingActionId?: string;
+  lastToolResult?: string;
 }
 
 export interface AgentBuildEngineAdapter {
@@ -103,7 +106,7 @@ export class AgentTurnRunner {
       };
       return this.turnState.status === "cancelled"
         ? { kind: "cancelled", summary: result, state: this.getTurnState() }
-        : { kind: "completed", summary: result, state: this.getTurnState() };
+        : { kind: "completed", summary: result, finalSummary: result, state: this.getTurnState() };
     } catch (error) {
       this.turnState = {
         ...this.turnState,
@@ -117,6 +120,25 @@ export class AgentTurnRunner {
         state: this.getTurnState(),
       };
     }
+  }
+
+  markWaitingAction(input: { actionId?: string; lastToolResult?: string } = {}): BuildTurnResult {
+    this.turnState = {
+      ...this.turnState,
+      status: "waitingAction",
+      waitingActionId: input.actionId,
+      lastToolResult: input.lastToolResult,
+    };
+    return {
+      kind: "waitingAction",
+      waitingActionId: input.actionId,
+      lastToolResult: input.lastToolResult,
+      state: this.getTurnState(),
+    };
+  }
+
+  async resumeBuildTurn(input: BuildTurnInput & { resumeContext: string }): Promise<BuildTurnResult> {
+    return this.runBuildTurn(input);
   }
 
   async runPlanTurn(input: {

@@ -234,6 +234,14 @@ Orbit should add these cautiously:
 - `useAgentRun` is still too large, but this is the correct direction: move deterministic run preparation, Build turn execution, and tool/result lifecycle decisions into testable non-React modules before deleting legacy queue adapters.
 - `AgentTurnRunner` now owns injected Build-engine execution and returns structured Build turn results. The next split should move streaming repair, ask_user, patch callback handling, terminal recording, cancellation, and error finalization behind `AgentTurnRunner` / `ToolCallExecutor`.
 
+2026-05-30 Runner Kernel first pass:
+
+- `BuildTurnRuntime` now owns the Build callback surface that was previously embedded in `useAgentRun`: phase/stream projection, approval result handling, structured `ask_user`, patch sandbox preview, terminal run recording, context compaction, and done/error finalization.
+- `useAgentRun` is now a React Adapter for state wiring, provider/settings inputs, start/continue/cancel, and runner result projection. It no longer directly implements approval/question/patch/terminal tool branches.
+- `AgentTurnRunner` now exposes `completed / waitingAction / cancelled / failed` Build results and an explicit `resumeBuildTurn()` entrypoint. This aligns Orbit with Codex/Gemini-style explicit resume semantics: restored pending work does not auto-run stale Promises.
+- `ToolCallExecutor` now links terminal runs back to command lifecycle records, so command execution can be projected from the ledger instead of inferred by the UI hook.
+- Remaining gap: `agentLoopEngine.ts` still owns the model streaming/tool-call loop and strict envelope repair. The next deepening step is moving that loop into `AgentTurnRunner` while preserving the current strict JSON repair behavior and DeepSeek smoke gate.
+
 ### P1: Make The Workbench Understand Its Own History
 
 - Project-scoped multi-thread sessions.

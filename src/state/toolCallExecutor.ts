@@ -25,6 +25,8 @@ export interface ToolExecutionResult {
   approved: boolean;
   toolResult: string;
   actionRequiredId?: string;
+  threadEventId?: string;
+  terminalRunId?: string;
   policy?: PolicyDecision;
   status: ToolCallLifecycleStatus;
 }
@@ -84,6 +86,27 @@ export class ToolCallExecutor {
           : "completed",
       resultText: result,
     });
+  }
+
+  recordTerminalResult(input: {
+    toolCallId: string;
+    terminalRunId: string;
+    result: string;
+    exitCode?: number | null;
+  }): ToolExecutionResult {
+    const status: ToolCallLifecycleStatus = input.exitCode === 0 || input.exitCode == null ? "completed" : "failed";
+    this.lifecycle.update(input.toolCallId, {
+      status,
+      terminalRunId: input.terminalRunId,
+      resultText: input.result,
+      error: status === "failed" ? `Command exited with code ${input.exitCode}` : undefined,
+    });
+    return {
+      approved: true,
+      toolResult: input.result,
+      terminalRunId: input.terminalRunId,
+      status,
+    };
   }
 
   recordApprovalResult(input: {

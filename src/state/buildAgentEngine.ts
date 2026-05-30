@@ -39,6 +39,7 @@ export class BuildAgentEngine {
       resumeContext,
     }).then((result) => {
       if (result.kind === "failed") throw new Error(result.error);
+      if (result.kind === "waitingAction") return result.lastToolResult || "";
       return result.summary || "";
     });
   }

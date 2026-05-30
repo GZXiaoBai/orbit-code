@@ -2,10 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentLoopPhase, ToolCall, ToolParams } from "../domain/agentLoop";
 import type { ThreadEvent } from "../domain/threadEvents";
-import { stripFabricatedToolResults } from "./agentLoopEngine";
 import { AgentTurnRunner } from "./agentTurnRunner";
-import { normalizePatchProposal } from "./patchWorkflow";
-import type { PatchItem } from "./patchWorkflow";
 import type { ImportedPlanState, SessionState } from "./useSession";
 import { isTauri } from "../utils/tauri";
 import type { LLMProvider } from "../services/llmService";
@@ -13,19 +10,16 @@ import { optionsForReasoningEffort } from "../services/llmService";
 import type { RunControlsState } from "./useRunControls";
 import { createAgentRunSession, reduceAgentRunSession } from "../domain/agentRunSession";
 import type { AgentRunSession } from "../domain/agentRunSession";
-import type { ContextCompactionState, ProjectSecurityOverride, SecuritySettings } from "../domain/types";
+import type { ProjectSecurityOverride, SecuritySettings } from "../domain/types";
 import type { ApprovalRequest } from "./useApprovalQueue";
 import type { PermissionSchedulerResult } from "../runtime/permissionScheduler";
-import { normalizeQuestionOptions, type QuestionRequest, type QuestionOption } from "../domain/questionRequest";
-import { looksLikeNonStrictPatchProposal, parseToolEnvelopes } from "../domain/agentToolEnvelope";
-import { invokeDesktop, isDesktopRuntime } from "../runtime/desktopGateway";
+import type { QuestionRequest, QuestionOption } from "../domain/questionRequest";
 import type { ToolCallLifecycle } from "../domain/toolCallLifecycle";
-import {
-  summarizeToolParamsForLifecycle,
-  ToolCallExecutor,
-  type ToolLifecycleStore,
-} from "./toolCallExecutor";
+import { ToolCallExecutor, type ToolLifecycleStore } from "./toolCallExecutor";
 import { AgentRunKernel } from "./agentRunKernel";
+import { BuildTurnRuntime, type RuntimeEventInput } from "./buildTurnRuntime";
+
+export { summarizeAssistantToolOutput } from "./buildTurnRuntime";
 
 interface UseAgentRunArgs {
   importedPlan: ImportedPlanState | null;
@@ -78,89 +72,6 @@ interface UseAgentRunArgs {
   initialAgentRunSession?: AgentRunSession | null;
 }
 
-type RuntimeEventInput = Omit<ThreadEvent, "id" | "timestamp" | "kind" | "role" | "status" | "title" | "message"> & {
-  id?: string;
-  kind: ThreadEvent["kind"];
-  role?: ThreadEvent["role"];
-  status?: ThreadEvent["status"];
-  title: string;
-  message: string;
-};
-
-function toolDisplayName(tool: string): string {
-  if (tool === "run_command") return "命令";
-  if (tool === "apply_patch" || tool === "propose_patch") return "补丁";
-  if (tool === "ask_user") return "问题";
-  if (tool === "read_file") return "读取文件";
-  if (tool === "search_code") return "搜索代码";
-  if (tool === "list_files") return "列出文件";
-  return tool;
-}
-
-function compactPhaseMessage(message: string): string {
-  const toolMatch = message.match(/(?:Executing|Running):\s*([a-z_]+)/i);
-  if (toolMatch) return `正在处理：${toolDisplayName(toolMatch[1])}`;
-  const approvalMatch = message.match(/^(run_command|apply_patch|propose_patch|ask_user|read_file|search_code|list_files):/);
-  if (approvalMatch) return `等待中心操作确认：${toolDisplayName(approvalMatch[1])}`;
-  return message;
-}
-
-function approvalEventMessage(tool: string, params: ToolParams): string {
-  if (tool === "run_command") {
-    const command = typeof params.command === "string" ? params.command : "command";
-    const args = Array.isArray(params.args) ? params.args.filter((arg): arg is string => typeof arg === "string") : [];
-    const reason = typeof params.reason === "string" && params.reason.trim() ? `。原因：${params.reason}` : "";
-    return `等待你在中心授权命令：${[command, ...args].join(" ")}${reason}`;
-  }
-  if (tool === "apply_patch" || tool === "propose_patch") return "等待你在中心审查补丁。批准后才会写入当前工作区。";
-  return `等待你在中心确认：${toolDisplayName(tool)}`;
-}
-
-export function summarizeAssistantToolOutput(content: string): string | null {
-  const parsed = parseToolEnvelopes(content);
-  if (parsed.envelopes.length === 0) return null;
-
-  const envelope = parsed.envelopes[0];
-  if (envelope.tool === "run_command") {
-    const command = typeof envelope.params.command === "string" ? envelope.params.command : "command";
-    const args = Array.isArray(envelope.params.args) ? envelope.params.args.filter((arg): arg is string => typeof arg === "string") : [];
-    const reason = typeof envelope.params.reason === "string" ? envelope.params.reason : "";
-    return `Agent 请求运行命令：${[command, ...args].join(" ")}${reason ? `。原因：${reason}` : ""}`;
-  }
-  if (envelope.tool === "apply_patch" || envelope.tool === "propose_patch") {
-    const patches = Array.isArray(envelope.params.patches) ? envelope.params.patches : [];
-    const files = patches
-      .map((patch) => typeof patch === "object" && patch && "path" in patch ? String((patch as { path?: unknown }).path || "") : "")
-      .filter(Boolean);
-    return `Agent 提出补丁审查：${files.length || patches.length} 个文件${files.length ? `（${files.slice(0, 3).join("、")}${files.length > 3 ? " 等" : ""}）` : ""}`;
-  }
-  if (envelope.tool === "ask_user") {
-    const question = typeof envelope.params.question === "string" ? envelope.params.question : "需要用户确认";
-    return `Agent 正在询问：${question}`;
-  }
-  if (envelope.tool === "read_file") {
-    return `Agent 准备读取文件：${typeof envelope.params.path === "string" ? envelope.params.path : ""}`;
-  }
-  if (envelope.tool === "search_code") {
-    const query = typeof envelope.params.query === "string" ? envelope.params.query : envelope.params.pattern;
-    return `Agent 准备搜索代码：${typeof query === "string" ? query : ""}`;
-  }
-  if (envelope.tool === "list_files") return "Agent 准备读取项目文件列表";
-  if (envelope.tool === "done" || envelope.tool === "done_build" || envelope.tool === "done_plan") {
-    return typeof envelope.params.summary === "string" ? envelope.params.summary : "Agent 已完成当前任务。";
-  }
-  return null;
-}
-
-interface SandboxPreviewResult {
-  id: string;
-  proposal_id: string;
-  sandbox_path: string;
-  status: "sandboxed" | "failed";
-  output: string;
-  created_at: string;
-}
-
 export function selectAgentRunTask(input: {
   tasks: ImportedPlanState["plan"]["tasks"];
   resumeTaskId?: string | null;
@@ -201,49 +112,6 @@ export function shouldForceFinalSummaryRun(input: {
     return true;
   }
   return input.completionOnly;
-}
-
-async function previewPatchesInSandbox(
-  proposalId: string,
-  patches: PatchItem[],
-  workspaceRoot: string,
-): Promise<PatchItem[]> {
-  if (!isDesktopRuntime()) {
-    return patches.map((patch) => ({
-      ...patch,
-      sandboxStatus: "sandboxed",
-      sandboxPath: "browser-fixture",
-      sandboxOutput: "Browser fixture sandbox preview completed. No workspace files were changed.",
-      applyStatus: "proposed",
-    }));
-  }
-
-  try {
-    const preview = await invokeDesktop<SandboxPreviewResult>("preview_workspace_patches_in_sandbox", {
-      workspacePath: workspaceRoot,
-      proposalId,
-      patches: patches.map((patch) => ({
-        path: patch.path,
-        old_content: patch.oldContent,
-        new_content: patch.newContent,
-      })),
-    });
-
-    return patches.map((patch) => ({
-      ...patch,
-      sandboxStatus: preview.status,
-      sandboxPath: preview.sandbox_path,
-      sandboxOutput: preview.output,
-      applyStatus: "proposed",
-    }));
-  } catch (error) {
-    return patches.map((patch) => ({
-      ...patch,
-      sandboxStatus: "failed",
-      sandboxOutput: error instanceof Error ? error.message : String(error),
-      applyStatus: "failed",
-    }));
-  }
 }
 
 export function useAgentRun({
@@ -410,376 +278,43 @@ export function useAgentRun({
       }
     }
 
-    const runner = new AgentTurnRunner({
-      onPhaseChange: (phase, message) => {
-        setAgentLoopPhase(phase);
-        dispatchRunSession({ type: "phase", phase });
-        const eventId = `loop-${Date.now()}`;
-        latestPhaseEventIdRef.current = eventId;
-        emitRuntimeEvent({
-          id: eventId,
-          kind: "reasoningSummary",
-          runSessionId,
-          workspacePath: workspaceRoot,
-          threadId: runThreadId,
-          taskId: task.id,
-          role: phase === "implementing" ? "coder" : phase === "reviewing" ? "reviewer" : phase === "verifying" ? "verifier" : "planner",
-          title: `Agent (${phase})`,
-          status: phase === "done" || phase === "error" ? "done" : "thinking",
-          message: compactPhaseMessage(message),
-        });
-      },
-      onIteration: (iteration, conversationSummary) => {
-        dispatchRunSession({ type: "iteration", iteration, conversationSummary });
-      },
-      onToolCall: (toolCall) => {
-        toolCallsRef.current.set(toolCall.id, toolCall);
-        dispatchRunSession({ type: "tool", toolCall });
-        setAgentLoopToolCalls(prev => {
-          const next = prev.filter((item) => item.id !== toolCall.id);
-          return [...next, toolCall];
-        });
-        toolExecutor.recordGenerated(toolCall, summarizeToolParamsForLifecycle(toolCall.name, toolCall.params));
-      },
-      onToolResult: (id, result) => {
-        const toolCall = toolCallsRef.current.get(id);
-        if (toolCall?.name === "run_command") {
-          const command = typeof toolCall.params.command === "string" ? toolCall.params.command : "command";
-          const args = Array.isArray(toolCall.params.args) ? toolCall.params.args.filter((arg): arg is string => typeof arg === "string") : [];
-          const exitCodeMatch = result.match(/\[exit_code:\s*(-?\d+)\]/);
-          const terminalRunId = recordTerminalResult({
-            workspacePath: workspaceRoot,
-            threadId: runThreadId,
-            taskId: task.id,
-            cwd: typeof toolCall.params.cwd === "string" ? toolCall.params.cwd : undefined,
-            command,
-            args,
-            reason: typeof toolCall.params.reason === "string" ? toolCall.params.reason : "Agent command result",
-            output: result,
-            exitCode: exitCodeMatch ? Number(exitCodeMatch[1]) : null,
-          });
-          dispatchRunSession({ type: "terminal", terminalRunId });
-        }
-        setAgentLoopToolCalls(prev => prev.map(toolCall =>
-          toolCall.id === id
-            ? { ...toolCall, result, status: "done", completedAt: new Date().toISOString() }
-            : toolCall
-        ));
-        toolExecutor.recordResult(id, result);
-      },
-      onRequestApproval: async (tool, params) => {
-        if (["read_file", "list_files", "search_code"].includes(tool)) return true;
-        if (finalSummaryOnly) {
-          emitRuntimeEvent({
-            id: `completion-guard-${Date.now()}`,
-            kind: "toolDeniedByMode",
-            runSessionId,
-            workspacePath: workspaceRoot,
-            threadId: runThreadId,
-            taskId: task.id,
-            role: "reviewer",
-            title: "Run Guard",
-            status: "done",
-            message: `当前计划已完成或已验证，这次运行只用于生成最终总结。Orbit 已拒绝新的 ${tool} 请求；请让 Agent 返回 done 总结。`,
-          });
-          return { approved: false, toolResult: `Denied ${tool}: final-summary-only run cannot execute additional tools.` };
-        }
-        const reason = typeof params.reason === "string" ? params.reason : "";
-        const approvalParams: ToolParams = {
-          ...params,
-          taskId: task.id,
-          threadId: runThreadId,
-          workspacePath: workspaceRoot,
-        };
-        emitRuntimeEvent({
-          id: `approval-${Date.now()}`,
-          kind: "approval",
-          runSessionId,
-          workspacePath: workspaceRoot,
-          threadId: runThreadId,
-          taskId: task.id,
-          role: "reviewer",
-          title: "Approval Gate",
-          status: "thinking",
-          message: approvalEventMessage(tool, approvalParams),
-        });
-        let approvalId = "";
-        const toolCallId = typeof approvalParams.toolCallId === "string"
-          ? approvalParams.toolCallId
-          : `approval-${Date.now()}`;
-        const approvalResult = await toolExecutor.requestApproval({
-          toolCall: {
-            id: toolCallId,
-            name: tool as ToolCall["name"],
-            params: approvalParams,
-            status: "pending",
-          },
-          params: approvalParams,
-          reason,
-          requestApproval,
-          onCreated: (request) => {
-          approvalId = request.id;
-          dispatchRunSession({ type: "approval", approvalId: request.id });
-          },
-        });
-        const approval = approvalResult.approval;
-        dispatchRunSession({ type: "approval", approvalId: undefined });
-        emitRuntimeEvent({
-          id: `approval-result-${Date.now()}`,
-          kind: "approval",
-          runSessionId,
-          workspacePath: workspaceRoot,
-          threadId: runThreadId,
-          taskId: task.id,
-          role: "reviewer",
-          title: approval.approved ? "Approval Granted" : "Approval Denied",
-          status: "done",
-          message: approval.approved
-            ? `你已批准 ${tool}。结果已记录，点击“继续执行”后 Agent 才会继续。`
-            : `你已拒绝 ${tool}，Agent 将把拒绝结果纳入下一步规划。`,
-        });
-        const shouldContinue = await waitForExplicitContinue(
-          "approval",
-          { type: "approval", payloadId: approvalId },
-          approval.toolResult,
-        );
-        if (!shouldContinue) return { ...approval, approved: false, toolResult: "Cancelled by user before resuming the agent." };
-        return approval;
-      },
-      onToolDeniedByMode: (tool, mode) => {
-        emitRuntimeEvent({
-          id: `mode-denied-${Date.now()}`,
-          kind: "toolDeniedByMode",
-          runSessionId,
-          workspacePath: workspaceRoot,
-          threadId: runThreadId,
-          taskId: task.id,
-          role: "reviewer",
-          title: "Tool Denied By Mode",
-          status: "done",
-          message: `${mode === "plan" ? "Plan" : "Build"} 模式拒绝了工具 ${tool}。当前模式只能使用已注册的工具。`,
-        });
-      },
-      onAskUser: async (question, params) => {
-        if (!patchReviewPendingRef.current && /(patch|diff|补丁|审查台|review|apply)/i.test(question)) {
-          return [
-            "No patch proposal is currently available in Orbit.",
-            "You must call propose_patch with the actual file changes before asking the user to review or apply patches.",
-            "Do not install dependencies or run verification until a real patch proposal exists and the user applies it.",
-          ].join("\n");
-        }
-        const options = normalizeQuestionOptions(params.options);
-        const allowFreeform = params.allowFreeform === true;
-        let questionId = "";
-        const answer = await requestQuestion(question, task.id, {
-          workspacePath: workspaceRoot,
-          threadId: runThreadId,
-          source: "agent",
-          kind: options.length > 0 ? "singleChoice" : "text",
-          options,
-          allowFreeform,
-        }, (request) => {
-          questionId = request.id;
-          emitRuntimeEvent({
-            id: `question-${Date.now()}`,
-            kind: "question",
-            runSessionId,
-            workspacePath: workspaceRoot,
-            threadId: runThreadId,
-            taskId: task.id,
-            role: "planner",
-            title: "Question",
-            status: "thinking",
-            message: options.length > 0
-              ? `Agent 正在等待你的选择：${question}`
-              : `Agent 正在等待你的回答：${question}`,
-            question: {
-              requestId: request.id,
-              question,
-              status: "pending",
-              options,
-            },
-          });
-          dispatchRunSession({ type: "question", questionId: request.id });
-        });
-        dispatchRunSession({ type: "question", questionId: undefined });
-        emitRuntimeEvent({
-          id: `question-result-${Date.now()}`,
-          kind: "question",
-          runSessionId,
-          workspacePath: workspaceRoot,
-          threadId: runThreadId,
-          taskId: task.id,
-          role: "planner",
-          title: answer ? "Question Answered" : "Question Cancelled",
-          status: "done",
-          message: answer
-            ? `你已回答 Agent 的问题：${answer}。点击“继续执行”后 Agent 才会继续。`
-            : "你取消了 Agent 的问题，Agent 会收到取消结果。",
-          question: {
-            requestId: questionId,
-            question,
-            status: answer ? "answered" : "cancelled",
-            answer: answer || undefined,
-            options,
-          },
-        });
-        const shouldContinue = await waitForExplicitContinue(
-          "question",
-          { type: "question", payloadId: questionId },
-          answer ? `User answered: ${answer}` : "User cancelled question.",
-        );
-        if (!shouldContinue) return null;
-        return answer;
-      },
-      onPatchProposed: async (params) => {
-        if (finalSummaryOnly) {
-          return [
-            "Invalid propose_patch for this run: the current plan is already marked done or verified.",
-            "This Orbit run is a completion-summary pass only.",
-            "Do not generate patches, do not request commands, and do not rerun verification.",
-            'Return exactly: {"tool":"done_build","params":{"summary":"truthful final summary based on the existing successful verification results"}}',
-          ].join("\n");
-        }
-        const patches = normalizePatchProposal(params);
-        if (patches.length === 0) return "No valid patches were proposed.";
-
-        const hydratedPatches = await Promise.all(patches.map(async (patch) => {
-          if (patch.oldContent || !isDesktopRuntime()) return patch;
-          try {
-            const oldContent = await invokeDesktop<string>("read_workspace_file", {
-              path: patch.path,
-              workspacePath: workspaceRoot,
-            });
-            return { ...patch, oldContent };
-          } catch {
-            return patch;
-          }
-        }));
-
-        const eventId = `patch-${Date.now()}`;
-        const sandboxedPatches = await previewPatchesInSandbox(eventId, hydratedPatches, workspaceRoot);
-        const sandboxFailed = sandboxedPatches.some((patch) => patch.sandboxStatus === "failed");
-        patchReviewPendingRef.current = true;
-        dispatchRunSession({ type: "patch", patchProposalId: eventId });
-        const patchEvent: ThreadEvent = {
-          id: eventId,
-          kind: "patchProposal",
-          runSessionId,
-          workspacePath: workspaceRoot,
-          threadId: runThreadId,
-          taskId: task.id,
-          role: "coder",
-          title: "Patch Proposal",
-          status: "done",
-          message: sandboxFailed
-            ? `Agent 提出了 ${sandboxedPatches.length} 个文件修改，但沙盒预演失败。当前工作区没有被修改，请在详情中查看原因。`
-            : `Agent 提出了 ${sandboxedPatches.length} 个文件修改，已在临时沙盒中预演。请在中心补丁浮层审查，批准后才会事务写入本地文件。`,
-          timestamp: new Date().toLocaleTimeString(),
-          patches: sandboxedPatches,
-        };
-        emitThreadEvent(patchEvent);
-        onPatchReviewRequired?.(patchEvent);
-        const result = sandboxFailed
-          ? [
-              `Patch proposal ${eventId} was created, but sandbox preview failed. Do not claim files were changed.`,
-              sandboxedPatches.find((patch) => patch.sandboxOutput)?.sandboxOutput,
-              "The workspace was not modified. After the user clicks continue, regenerate a smaller corrected propose_patch using fresh file contents.",
-            ].filter(Boolean).join("\n")
-          : `Patch proposal ${eventId} created and sandbox preview completed for ${sandboxedPatches.map((patch) => patch.path).join(", ")}. Wait for the user to review and apply it before claiming the files are written.`;
-        if (sandboxFailed) {
-          const shouldContinue = await waitForExplicitContinue(
-            "patchReview",
-            { type: "patchReview", payloadId: eventId },
-            result,
-          );
-          if (!shouldContinue) return result;
-        }
-        return result;
-      },
-      getWorkspacePath: () => workspaceRoot,
-      getSecuritySettings: () => ({ global: securitySettings, project: projectSecurityOverride }),
-      getCommandSandboxMode: () => securitySettings?.sandboxMode || providerSettings.sandboxMode || "none",
+    const buildTurnRuntime = new BuildTurnRuntime({
+      task,
+      runSessionId,
+      runThreadId,
+      workspaceRoot,
+      finalSummaryOnly,
+      providerSandboxMode: providerSettings.sandboxMode,
+      securitySettings,
+      projectSecurityOverride,
+      toolExecutor,
+      toolCalls: toolCallsRef.current,
+      patchReviewPending: patchReviewPendingRef,
+      agentLoopCancelled: agentLoopCancelledRef,
+      latestPhaseEventId: latestPhaseEventIdRef,
+      emitRuntimeEvent,
+      emitThreadEvent,
+      updateThreadEvent,
+      dispatchRunSession,
+      setAgentLoopPhase,
+      setAgentLoopRunning,
+      setAgentLoopToolCalls,
+      setStreamingContent,
+      setStreamingActive,
+      updateTask,
+      recordTerminalResult,
+      requestApproval,
+      requestQuestion,
+      waitForExplicitContinue,
+      onPatchReviewRequired,
       getExtensionContext,
       getMaxIterations: () => providerSettings.agent?.maxIterations || 15,
       getAgentSettings: () => providerSettings.agent,
-      onContextCompaction: (state: ContextCompactionState) => {
-        emitRuntimeEvent({
-          id: `context-compaction-${Date.now()}`,
-          kind: "contextCompaction",
-          runSessionId,
-          workspacePath: workspaceRoot,
-          threadId: runThreadId,
-          taskId: task.id,
-          role: "planner",
-          title: "Context Compaction",
-          status: "done",
-          message: [
-            `上下文已压缩：约 ${state.sourceTokenEstimate} tokens，触发阈值 ${Math.round(state.triggerRatio * 100)}%。`,
-            state.lastSummary ? `摘要：${state.lastSummary.slice(0, 600)}${state.lastSummary.length > 600 ? "..." : ""}` : "",
-          ].filter(Boolean).join("\n"),
-        });
-      },
-      onError: (error) => {
+      markRuntimeError: () => {
         agentLoopErrorRef.current = true;
-        setAgentLoopPhase("error");
-        dispatchRunSession({ type: "complete", phase: "error" });
-        emitRuntimeEvent({
-          id: `error-${Date.now()}`,
-          kind: "error",
-          workspacePath: workspaceRoot,
-          threadId: runThreadId,
-          taskId: task.id,
-          role: "verifier",
-          title: "Agent Error",
-          status: "done",
-          message: `Agent loop error: ${error}`,
-        });
       },
-      onDone: (summary) => {
-        setAgentLoopRunning(false);
-        setAgentLoopPhase("done");
-        dispatchRunSession({ type: "complete", phase: "done" });
-        updateTask(task.id, { status: "done" });
-        emitRuntimeEvent({
-          id: `final-summary-${Date.now()}`,
-          kind: "finalSummary",
-          runSessionId,
-          workspacePath: workspaceRoot,
-          threadId: runThreadId,
-          taskId: task.id,
-          role: "planner",
-          title: "Final Summary",
-          status: "done",
-          message: summary || "Agent 已完成当前任务。",
-        });
-      },
-      onStreamStart: () => {
-        setStreamingContent("");
-        setStreamingActive(true);
-      },
-      onStreamChunk: (_streamId, _content, accumulated) => {
-        setStreamingContent(accumulated);
-      },
-      onStreamEnd: (_streamId, finalContent) => {
-        setStreamingActive(false);
-        if (!finalContent) return;
-        const summarized = summarizeAssistantToolOutput(finalContent);
-        const safeContent = stripFabricatedToolResults(finalContent);
-        const displayContent = looksLikeNonStrictPatchProposal(finalContent)
-          ? "Agent 输出了非严格补丁格式，Orbit 已拒绝直接展示或写入，并要求模型改用严格 propose_patch JSON 工具调用。"
-          : safeContent || "Agent 输出了疑似工具结果文本，Orbit 已忽略它并会要求模型改用严格 JSON 工具调用。";
-        const eventId = latestPhaseEventIdRef.current;
-        if (!eventId) return;
-        updateThreadEvent(eventId, (event) => event.status === "thinking"
-          ? {
-              ...event,
-              message: summarized || displayContent.substring(0, 500) + (displayContent.length > 500 ? "..." : ""),
-            }
-          : event);
-      },
-      shouldCancel: () => agentLoopCancelledRef.current,
     });
+    const runner = new AgentTurnRunner(buildTurnRuntime.callbacks());
 
     agentLoopEngineRef.current = runner;
 

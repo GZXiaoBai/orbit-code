@@ -58,6 +58,33 @@ describe("ToolCallExecutor", () => {
     }));
   });
 
+  it("links terminal runs back to command lifecycle records", () => {
+    const update = vi.fn();
+    const executor = new ToolCallExecutor({
+      list: () => [],
+      append: vi.fn(),
+      update,
+    });
+
+    const result = executor.recordTerminalResult({
+      toolCallId: "tool-terminal",
+      terminalRunId: "terminal-1",
+      result: "ok\n[exit_code: 0]",
+      exitCode: 0,
+    });
+
+    expect(result).toMatchObject({
+      approved: true,
+      terminalRunId: "terminal-1",
+      status: "completed",
+    });
+    expect(update).toHaveBeenCalledWith("tool-terminal", expect.objectContaining({
+      status: "completed",
+      terminalRunId: "terminal-1",
+      resultText: "ok\n[exit_code: 0]",
+    }));
+  });
+
   it("routes runtime approval requests through the executor lifecycle", async () => {
     const calls: ToolCallLifecycle[] = [];
     const update = vi.fn((id: string, patch: Partial<ToolCallLifecycle>) => {

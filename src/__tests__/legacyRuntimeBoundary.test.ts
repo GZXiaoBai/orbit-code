@@ -28,4 +28,12 @@ describe("legacy runtime boundary", () => {
     expect(agentRunSource).not.toContain("findProvider(");
     expect(agentRunSource).not.toContain("当前没有可用模型。请先在设置中选择服务商");
   });
+
+  it("keeps approval/question/patch/terminal tool branches out of the React run adapter", () => {
+    expect(agentRunSource).toContain("new BuildTurnRuntime");
+    expect(agentRunSource).not.toContain("onRequestApproval: async");
+    expect(agentRunSource).not.toContain("onAskUser: async");
+    expect(agentRunSource).not.toContain("onPatchProposed: async");
+    expect(agentRunSource).not.toContain("recordTerminalResult({");
+  });
 });

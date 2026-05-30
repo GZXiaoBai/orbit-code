@@ -20,6 +20,7 @@ export interface ToolCallLifecycle {
   policyDecision?: PolicyDecision;
   actionRequiredId?: string;
   threadEventId?: string;
+  terminalRunId?: string;
   resultText?: string;
   error?: string;
   createdAt: string;
