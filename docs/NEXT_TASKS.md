@@ -90,6 +90,8 @@ Done:
 - Added Context rule `globs / regex / policy` filtering and surfaced match reasons in the Current Context Inspector while preserving `permissionImpact: none`.
 - Added dedicated install/network risk copy in the unified approval overlay.
 - Added `AgentRunKernel` as the first deeper Runner Kernel extraction. `useAgentRun` now delegates Build-turn guard/provider/task/resume/final-summary preparation to a non-React module, and legacy-boundary tests prevent the hook from re-owning provider lookup.
+- Upgraded `AgentTurnRunner` to own injected Build-engine execution and return structured Build turn results; `useAgentRun` no longer constructs `BuildAgentEngine` directly.
+- Added `ToolCallExecutor.requestApproval()` so command approval lifecycle writes and ActionRequired linkage go through the executor instead of ad hoc hook code.
 - Moved the Rust gateway monolith from `src-tauri/src/commands.rs` to `src-tauri/src/commands/mod.rs` and added file/command/patch/context/provider/vault child-module entry points while keeping public Tauri command names stable.
 
 Next:
@@ -97,7 +99,7 @@ Next:
 1. Extract `StreamingMessage` if the streaming surface grows beyond the current inline node.
 2. Move runtime/generated Agent status strings into an i18n-aware message layer.
 3. Add E2E coverage for Active Grants revoke; after revoke, the same command should request approval again.
-4. Move more of `useAgentRun`'s callback-heavy approval/question/patch result wiring into `AgentTurnRunner` + `ToolCallExecutor`; the current `AgentRunKernel` covers turn preparation but not streaming/tool-result callbacks.
+4. Move more of `useAgentRun`'s callback-heavy question/patch/terminal result wiring into `AgentTurnRunner` + `ToolCallExecutor`; the current Runner Kernel covers turn preparation, injected Build execution, and command approval lifecycle, but not streaming repair, ask_user, patch result handling, or terminal recording.
 5. Remove the remaining legacy approval/question queue hooks after old snapshot migration no longer needs them.
 6. Add E2E coverage for:
    - Send button imports Plan.

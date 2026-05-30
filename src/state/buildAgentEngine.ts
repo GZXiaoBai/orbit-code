@@ -29,6 +29,17 @@ export class BuildAgentEngine {
     options?: LLMRequestOptions & { reasoningEffort?: ReasoningEffort },
     resumeContext?: string,
   ): Promise<string> {
-    return this.runner.runBuildTurn(task, provider, model, baseUrl, threadId, options, resumeContext);
+    return this.runner.runBuildTurn({
+      task,
+      provider,
+      model,
+      baseUrl,
+      threadId,
+      options,
+      resumeContext,
+    }).then((result) => {
+      if (result.kind === "failed") throw new Error(result.error);
+      return result.summary || "";
+    });
   }
 }

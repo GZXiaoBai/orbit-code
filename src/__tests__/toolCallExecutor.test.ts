@@ -58,6 +58,48 @@ describe("ToolCallExecutor", () => {
     }));
   });
 
+  it("routes runtime approval requests through the executor lifecycle", async () => {
+    const calls: ToolCallLifecycle[] = [];
+    const update = vi.fn((id: string, patch: Partial<ToolCallLifecycle>) => {
+      const index = calls.findIndex((call) => call.id === id);
+      calls[index] = { ...calls[index], ...patch };
+    });
+    const executor = new ToolCallExecutor({
+      list: () => calls,
+      append: vi.fn((call: ToolCallLifecycle) => calls.push(call)),
+      update,
+    });
+
+    const result = await executor.requestApproval({
+      toolCall: {
+        id: "tool-approval",
+        name: "run_command",
+        params: { command: "npm", args: ["test"] },
+        status: "pending",
+      },
+      params: { command: "npm", args: ["test"] },
+      requestApproval: vi.fn(async () => ({
+        approved: true,
+        action: { id: "action-approval" } as any,
+        resolution: { status: "approved" as const, toolResultText: "Approved run_command" },
+        policy: { decision: "ask" as const, actions: ["command"] as any, reason: "ask" },
+        toolResult: "Approved run_command",
+      })),
+    });
+
+    expect(result).toMatchObject({
+      approved: true,
+      actionRequiredId: "action-approval",
+      status: "actionRequired",
+    });
+    expect(calls[0]).toMatchObject({
+      id: "tool-approval",
+      tool: "run_command",
+      actionRequiredId: "action-approval",
+      resultText: "Approved run_command",
+    });
+  });
+
   it("executes permission scheduling and records policy/action lifecycle through the store", async () => {
     const calls: ToolCallLifecycle[] = [];
     const update = vi.fn((id: string, patch: Partial<ToolCallLifecycle>) => {

@@ -10,6 +10,7 @@ import type {
   PermissionSchedulerResult,
 } from "../runtime/permissionScheduler";
 import type { PolicyDecision } from "../runtime/policyEngine";
+import type { ApprovalRequest } from "./useApprovalQueue";
 
 export interface ToolLifecycleStore {
   list(): ToolCallLifecycle[];
@@ -31,6 +32,25 @@ export interface ToolExecutionResult {
 export interface ToolExecutionContext extends Omit<PermissionSchedulerRequest, "tool" | "params"> {
   permissionScheduler: PermissionScheduler;
 }
+
+export type RuntimeApprovalRequester = (
+  tool: string,
+  params: ToolParams,
+  reason?: string,
+  onCreated?: (request: ApprovalRequest) => void,
+) => Promise<PermissionSchedulerResult>;
+
+export interface RuntimeApprovalExecutionInput {
+  toolCall: ToolCall;
+  params: ToolParams;
+  reason?: string;
+  requestApproval: RuntimeApprovalRequester;
+  onCreated?: (request: ApprovalRequest) => void;
+}
+
+export type RuntimeApprovalExecutionResult = ToolExecutionResult & {
+  approval: PermissionSchedulerResult;
+};
 
 export class ToolCallExecutor {
   constructor(private readonly lifecycle: ToolLifecycleStore) {}
@@ -98,6 +118,20 @@ export class ToolCallExecutor {
 
   recordRunning(id: string): void {
     this.lifecycle.update(id, { status: "running" });
+  }
+
+  async requestApproval(input: RuntimeApprovalExecutionInput): Promise<RuntimeApprovalExecutionResult> {
+    this.recordGenerated(input.toolCall, summarizeToolParamsForLifecycle(input.toolCall.name, input.params));
+    const approval = await input.requestApproval(
+      input.toolCall.name,
+      input.params,
+      input.reason,
+      input.onCreated,
+    );
+    return {
+      ...this.recordApprovalResult({ toolCallId: input.toolCall.id, approval }),
+      approval,
+    };
   }
 
   async execute(toolCall: ToolCall, context: ToolExecutionContext): Promise<ToolExecutionResult> {

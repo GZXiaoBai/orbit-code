@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AgentLoopPhase, ToolCall, ToolParams } from "../domain/agentLoop";
 import type { ThreadEvent } from "../domain/threadEvents";
 import { stripFabricatedToolResults } from "./agentLoopEngine";
-import { BuildAgentEngine } from "./buildAgentEngine";
+import { AgentTurnRunner } from "./agentTurnRunner";
 import { normalizePatchProposal } from "./patchWorkflow";
 import type { PatchItem } from "./patchWorkflow";
 import type { ImportedPlanState, SessionState } from "./useSession";
@@ -275,7 +275,7 @@ export function useAgentRun({
   const [streamingActive, setStreamingActive] = useState(false);
   const [agentRunSession, dispatchRunSession] = useReducer(reduceAgentRunSession, createAgentRunSession());
 
-  const agentLoopEngineRef = useRef<BuildAgentEngine | null>(null);
+  const agentLoopEngineRef = useRef<AgentTurnRunner | null>(null);
   const agentLoopCancelledRef = useRef(false);
   const patchReviewPendingRef = useRef(false);
   const toolCallsRef = useRef(new Map<string, ToolCall>());
@@ -410,7 +410,7 @@ export function useAgentRun({
       }
     }
 
-    const engine = new BuildAgentEngine({
+    const runner = new AgentTurnRunner({
       onPhaseChange: (phase, message) => {
         setAgentLoopPhase(phase);
         dispatchRunSession({ type: "phase", phase });
@@ -504,17 +504,26 @@ export function useAgentRun({
           message: approvalEventMessage(tool, approvalParams),
         });
         let approvalId = "";
-        const approval = await requestApproval(tool, approvalParams, reason, (request) => {
+        const toolCallId = typeof approvalParams.toolCallId === "string"
+          ? approvalParams.toolCallId
+          : `approval-${Date.now()}`;
+        const approvalResult = await toolExecutor.requestApproval({
+          toolCall: {
+            id: toolCallId,
+            name: tool as ToolCall["name"],
+            params: approvalParams,
+            status: "pending",
+          },
+          params: approvalParams,
+          reason,
+          requestApproval,
+          onCreated: (request) => {
           approvalId = request.id;
           dispatchRunSession({ type: "approval", approvalId: request.id });
+          },
         });
+        const approval = approvalResult.approval;
         dispatchRunSession({ type: "approval", approvalId: undefined });
-        if (typeof approvalParams.toolCallId === "string") {
-          toolExecutor.recordApprovalResult({
-            toolCallId: approvalParams.toolCallId,
-            approval,
-          });
-        }
         emitRuntimeEvent({
           id: `approval-result-${Date.now()}`,
           kind: "approval",
@@ -772,24 +781,23 @@ export function useAgentRun({
       shouldCancel: () => agentLoopCancelledRef.current,
     });
 
-    agentLoopEngineRef.current = engine;
+    agentLoopEngineRef.current = runner;
 
-    try {
-      const providerConfig = providerSettings.configs[providerId] || {};
-      const resumeContext = completionContext || recoveredResumeContextRef.current;
-      recoveredResumeContextRef.current = undefined;
-      await engine.runTask(
+    const providerConfig = providerSettings.configs[providerId] || {};
+    const resumeContext = completionContext || recoveredResumeContextRef.current;
+    recoveredResumeContextRef.current = undefined;
+    const turnResult = await runner.runBuildTurn({
         task,
-        providerId as LLMProvider,
+        provider: providerId as LLMProvider,
         model,
-        providerConfig.baseUrl || provider.baseUrl,
-        runThreadId,
-        optionsForReasoningEffort(runControls.selection.reasoningEffort),
+        baseUrl: providerConfig.baseUrl || provider.baseUrl,
+        threadId: runThreadId,
+        options: optionsForReasoningEffort(runControls.selection.reasoningEffort),
         resumeContext,
-      );
-    } catch (e) {
+    });
+    if (turnResult.kind === "failed") {
       agentLoopErrorRef.current = true;
-      console.error("Agent loop failed:", e);
+      console.error("Agent loop failed:", turnResult.error);
     }
 
     setAgentLoopRunning(false);

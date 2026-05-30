@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { AgentTurnRunner, type AgentTurnRunnerCallbacks } from "../state/agentTurnRunner";
+import { AgentTurnRunner, type AgentBuildEngineAdapter, type AgentTurnRunnerCallbacks } from "../state/agentTurnRunner";
+import type { PlanTask } from "../domain/types";
 
 function callbacks(): AgentTurnRunnerCallbacks {
   return {
@@ -11,6 +12,18 @@ function callbacks(): AgentTurnRunnerCallbacks {
     onDone: vi.fn(),
     shouldCancel: () => false,
     getWorkspacePath: () => "/tmp/project",
+  };
+}
+
+function task(): PlanTask {
+  return {
+    id: "task-1",
+    title: "Task",
+    description: "Do it",
+    status: "queued",
+    dependsOn: [],
+    filesHint: [],
+    verification: [],
   };
 }
 
@@ -45,5 +58,43 @@ describe("AgentTurnRunner", () => {
       status: "failed",
       error: "planner failed",
     });
+  });
+
+  it("returns a structured completed result for Build turns", async () => {
+    const fakeEngine: AgentBuildEngineAdapter = {
+      getStatus: vi.fn(() => ({ isRunning: false, phase: "idle" as const, currentTask: null, currentIteration: 0, toolCalls: [], messages: [] })),
+      cancel: vi.fn(),
+      runTask: vi.fn(async () => "done"),
+    };
+    const runner = new AgentTurnRunner(callbacks(), () => fakeEngine);
+
+    const result = await runner.runBuildTurn({
+      task: task(),
+      provider: "deepseek" as any,
+      model: "deepseek-v4-flash",
+    });
+
+    expect(result).toMatchObject({ kind: "completed", summary: "done" });
+    expect(runner.getTurnState()).toMatchObject({ mode: "build", status: "completed" });
+  });
+
+  it("returns failed Build results instead of throwing into React callers", async () => {
+    const fakeEngine: AgentBuildEngineAdapter = {
+      getStatus: vi.fn(() => ({ isRunning: false, phase: "error" as const, currentTask: null, currentIteration: 0, toolCalls: [], messages: [] })),
+      cancel: vi.fn(),
+      runTask: vi.fn(async () => {
+        throw new Error("model failed");
+      }),
+    };
+    const runner = new AgentTurnRunner(callbacks(), () => fakeEngine);
+
+    const result = await runner.runBuildTurn({
+      task: task(),
+      provider: "deepseek" as any,
+      model: "deepseek-v4-flash",
+    });
+
+    expect(result).toMatchObject({ kind: "failed", error: "model failed" });
+    expect(runner.getTurnState()).toMatchObject({ mode: "build", status: "failed" });
   });
 });

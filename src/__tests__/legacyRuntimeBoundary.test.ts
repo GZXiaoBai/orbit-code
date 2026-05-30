@@ -23,6 +23,8 @@ describe("legacy runtime boundary", () => {
 
   it("keeps Build-turn selection and provider guards in the non-React run kernel", () => {
     expect(agentRunSource).toContain("prepareBuildTurn");
+    expect(agentRunSource).toContain("new AgentTurnRunner");
+    expect(agentRunSource).not.toContain("new BuildAgentEngine");
     expect(agentRunSource).not.toContain("findProvider(");
     expect(agentRunSource).not.toContain("当前没有可用模型。请先在设置中选择服务商");
   });

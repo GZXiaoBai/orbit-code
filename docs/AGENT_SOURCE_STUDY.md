@@ -105,7 +105,7 @@ These are the concrete gaps found while comparing Orbit to Cline/OpenCode/Aider:
 - Runtime state should pass through a single ledger seam: Orbit now has `RuntimeLedger` wrapping thread-event writes, `ActionRequired` writes/resolution, pending replay, and snapshot serialization. The next cleanup is removing remaining direct compatibility writes outside migration paths.
 - Runtime items should follow a small lifecycle vocabulary. Orbit now records `started / updated / completed / failed` through `RuntimeLedger.appendItem/updateItem/completeItem/failItem`, matching the Codex-style idea that command, patch, verification, terminal, question, and approval are protocol items before they are UI rows.
 - Tool calls need their own lifecycle projection. Orbit now has `ToolCallLifecycle` for `generated -> policyEvaluated -> actionRequired -> running -> completed/failed/denied/cancelled`, and run steps can be derived from the ledger snapshot rather than the legacy approval queue.
-- Tool-call writes should not live in React state. Orbit now routes lifecycle creation/result/approval updates through a non-React `ToolCallExecutor` backed by `RuntimeLedger.appendToolCall/updateToolCall`; the executor also has a first permission-scheduling seam for policy evaluation and ActionRequired linkage.
+- Tool-call writes should not live in React state. Orbit now routes lifecycle creation/result/approval updates through a non-React `ToolCallExecutor` backed by `RuntimeLedger.appendToolCall/updateToolCall`; the executor also has permission-scheduling and runtime-approval seams for policy evaluation, ActionRequired linkage, and stable approve/deny tool results.
 - Restored actions should not resume old Promises. Orbit now has `SessionRestoreController` plus `ResumeController` to turn restored command/question/patch/verification/terminal states into explicit continue results.
 - Checkpoint restore should restore runtime as well as files. Orbit now has `CheckpointRestoreController` to preview checkpoint restore feasibility, restore the saved ledger snapshot, write a rollback event, and recreate a patch-review action when needed.
 - Persisted grants must be policy inputs, not UI shortcuts. Orbit now feeds `PolicyGrant[]` into `PolicyEngine.evaluate()`; grants match by workspace, mode, tool/action, thread/session/project scope, and optional cwd/path scope. A Plan grant does not widen Build permissions.
@@ -231,8 +231,8 @@ Orbit should add these cautiously:
 2026-05-29 Runner Kernel update:
 
 - `AgentRunKernel` now owns Build-turn preparation outside React state: mode guard, provider/model/key/build-support checks, task selection, resume detection, run session id creation, and final-summary-only context.
-- `useAgentRun` is still too large, but this is the correct direction: move deterministic run preparation and tool/result lifecycle decisions into testable non-React modules before deleting legacy queue adapters.
-- The next split should move streaming repair, approval/question/patch callback handling, terminal recording, cancellation, and error finalization behind `AgentTurnRunner` / `ToolCallExecutor`.
+- `useAgentRun` is still too large, but this is the correct direction: move deterministic run preparation, Build turn execution, and tool/result lifecycle decisions into testable non-React modules before deleting legacy queue adapters.
+- `AgentTurnRunner` now owns injected Build-engine execution and returns structured Build turn results. The next split should move streaming repair, ask_user, patch callback handling, terminal recording, cancellation, and error finalization behind `AgentTurnRunner` / `ToolCallExecutor`.
 
 ### P1: Make The Workbench Understand Its Own History
 

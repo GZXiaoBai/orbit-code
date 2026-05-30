@@ -12,8 +12,19 @@ export type PlanTurnResult =
   | { kind: "done_plan"; summary: string };
 
 export type BuildTurnResult =
-  | { kind: "done_build"; summary: string }
-  | { kind: "waiting"; reason: string };
+  | { kind: "completed"; summary: string; state: AgentTurnState }
+  | { kind: "cancelled"; summary?: string; state: AgentTurnState }
+  | { kind: "failed"; error: string; state: AgentTurnState };
+
+export interface BuildTurnInput {
+  task: PlanTask;
+  provider: LLMProvider;
+  model: string;
+  baseUrl?: string;
+  threadId?: string;
+  options?: LLMRequestOptions & { reasoningEffort?: ReasoningEffort };
+  resumeContext?: string;
+}
 
 export interface AgentTurnState {
   mode: "plan" | "build" | null;
@@ -23,12 +34,34 @@ export interface AgentTurnState {
   error?: string;
 }
 
+export interface AgentBuildEngineAdapter {
+  getStatus(): AgentLoopStatus;
+  cancel(): void;
+  runTask(
+    task: PlanTask,
+    provider: LLMProvider,
+    model: string,
+    baseUrl?: string,
+    threadId?: string,
+    options?: LLMRequestOptions & { reasoningEffort?: ReasoningEffort },
+    resumeContext?: string,
+  ): Promise<string>;
+}
+
+export type AgentBuildEngineFactory = (callbacks: AgentTurnRunnerCallbacks) => AgentBuildEngineAdapter;
+
 export class AgentTurnRunner {
-  private buildEngine: AgentLoopEngine;
+  private buildEngine: AgentBuildEngineAdapter;
   private turnState: AgentTurnState = { mode: null, status: "idle" };
 
-  constructor(callbacks: AgentTurnRunnerCallbacks) {
-    this.buildEngine = new AgentLoopEngine({
+  constructor(
+    callbacks: AgentTurnRunnerCallbacks,
+    buildEngineFactory: AgentBuildEngineFactory = (engineCallbacks) => new AgentLoopEngine({
+      ...engineCallbacks,
+      getRuntimeMode: () => "build",
+    }),
+  ) {
+    this.buildEngine = buildEngineFactory({
       ...callbacks,
       getRuntimeMode: () => "build",
     });
@@ -51,24 +84,26 @@ export class AgentTurnRunner {
     return { ...this.turnState };
   }
 
-  async runBuildTurn(
-    task: PlanTask,
-    provider: LLMProvider,
-    model: string,
-    baseUrl?: string,
-    threadId?: string,
-    options?: LLMRequestOptions & { reasoningEffort?: ReasoningEffort },
-    resumeContext?: string,
-  ): Promise<string> {
+  async runBuildTurn(input: BuildTurnInput): Promise<BuildTurnResult> {
     this.turnState = { mode: "build", status: "running", startedAt: new Date().toISOString() };
     try {
-      const result = await this.buildEngine.runTask(task, provider, model, baseUrl, threadId, options, resumeContext);
+      const result = await this.buildEngine.runTask(
+        input.task,
+        input.provider,
+        input.model,
+        input.baseUrl,
+        input.threadId,
+        input.options,
+        input.resumeContext,
+      );
       this.turnState = {
         ...this.turnState,
         status: this.turnState.status === "cancelled" ? "cancelled" : "completed",
         completedAt: new Date().toISOString(),
       };
-      return result;
+      return this.turnState.status === "cancelled"
+        ? { kind: "cancelled", summary: result, state: this.getTurnState() }
+        : { kind: "completed", summary: result, state: this.getTurnState() };
     } catch (error) {
       this.turnState = {
         ...this.turnState,
@@ -76,7 +111,11 @@ export class AgentTurnRunner {
         completedAt: new Date().toISOString(),
         error: error instanceof Error ? error.message : String(error),
       };
-      throw error;
+      return {
+        kind: "failed",
+        error: this.turnState.error || "Build turn failed.",
+        state: this.getTurnState(),
+      };
     }
   }
 
