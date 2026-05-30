@@ -1533,8 +1533,50 @@ export function useWorkspace() {
 
   const restoreCheckpointRuntime = useCallback((checkpointId: string) => {
     const saved = runtimeState.checkpointRuntimeSnapshots[checkpointId];
-    if (!saved) return false;
     const checkpointEvent = threadEventsRef.current.find((item) => item.checkpoint?.checkpointId === checkpointId);
+    if (!saved) {
+      emitWorkspaceEvent({
+        kind: "rollback",
+        role: "reviewer",
+        title: "Checkpoint Restore Failed",
+        status: "done",
+        message: `Checkpoint ${checkpointId} cannot be restored because its runtime snapshot is missing.`,
+        workspacePath: fs.workspaceRoot,
+        threadId: threadUi.threadId,
+        rollback: {
+          checkpointId,
+          filePaths: checkpointEvent?.checkpoint?.filePaths || [],
+          status: "failed",
+          actor: "user",
+          error: "Missing checkpoint runtime snapshot.",
+        },
+      });
+      return false;
+    }
+    const preview = checkpointRestoreController.preview({
+      checkpointId,
+      checkpointEvent,
+      runtimeSnapshot: saved,
+    });
+    if (!preview.restorable) {
+      emitWorkspaceEvent({
+        kind: "rollback",
+        role: "reviewer",
+        title: "Checkpoint Restore Failed",
+        status: "done",
+        message: preview.drySummary,
+        workspacePath: saved.workspacePath || fs.workspaceRoot,
+        threadId: saved.threadId || threadUi.threadId,
+        rollback: {
+          checkpointId,
+          filePaths: preview.filePaths,
+          status: "failed",
+          actor: "user",
+          error: preview.errors.join(" ") || "Checkpoint is not restorable.",
+        },
+      });
+      return false;
+    }
     const restored = checkpointRestoreController.restore({
       checkpointId,
       checkpointEvent,
@@ -1565,7 +1607,7 @@ export function useWorkspace() {
       resume.message,
     );
     return true;
-  }, [agentRun, checkpointRestoreController, fs.workspaceRoot, recoverToolCallLifecycles, resumeController, runtimeState.checkpointRuntimeSnapshots, threadUi.threadId]);
+  }, [agentRun, checkpointRestoreController, emitWorkspaceEvent, fs.workspaceRoot, recoverToolCallLifecycles, resumeController, runtimeState.checkpointRuntimeSnapshots, threadUi.threadId]);
 
   const rollbackEventPatch = useCallback(async (eventId: string) => {
     const event = threadEventsRef.current.find((item) => item.id === eventId);

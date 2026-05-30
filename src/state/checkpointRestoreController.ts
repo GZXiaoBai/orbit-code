@@ -9,6 +9,12 @@ export interface CheckpointRestorePreview {
   filePaths: string[];
   strategy?: string;
   reason: string;
+  drySummary: string;
+  linkedActionId?: string;
+  linkedToolCallId?: string;
+  linkedEventId?: string;
+  recreateActionKind: "patchReview" | "verification";
+  status: "valid" | "missing-runtime" | "missing-files" | "corrupted" | "non-restorable";
   errors: string[];
 }
 
@@ -28,14 +34,49 @@ export class CheckpointRestoreController {
     const checkpoint = input.checkpointEvent?.checkpoint;
     const filePaths = checkpoint?.filePaths || [];
     const errors: string[] = [];
-    if (!input.runtimeSnapshot) errors.push("Missing runtime snapshot for checkpoint.");
-    if (!checkpoint && filePaths.length === 0) errors.push("Missing checkpoint file metadata.");
+    let status: CheckpointRestorePreview["status"] = "valid";
+    if (!input.runtimeSnapshot) {
+      status = "missing-runtime";
+      errors.push("Missing runtime snapshot for checkpoint.");
+    } else if (!input.runtimeSnapshot.runtimeLedgerSnapshot || typeof input.runtimeSnapshot.runtimeLedgerSnapshot !== "object") {
+      status = "corrupted";
+      errors.push("Checkpoint runtime snapshot is corrupted.");
+    }
+    if (!checkpoint || filePaths.length === 0) {
+      status = status === "valid" ? "missing-files" : status;
+      errors.push("Missing checkpoint file metadata.");
+    }
+    if (checkpoint?.status === "failed") {
+      status = "non-restorable";
+      errors.push(checkpoint.error || "Checkpoint creation failed.");
+    }
+    const restoredSnapshot = input.runtimeSnapshot && status !== "corrupted"
+      ? new RuntimeLedger(input.runtimeSnapshot.runtimeLedgerSnapshot).ledgerSnapshot()
+      : undefined;
+    const linkedAction = restoredSnapshot?.actionRequired.find((action) =>
+      (action.kind === "patchReview" || action.kind === "verification")
+      && (action.status === "pending" || action.sourceEventId === input.checkpointEvent?.id)
+    );
+    const linkedToolCall = linkedAction
+      ? restoredSnapshot?.toolCalls.find((call) => call.actionRequiredId === linkedAction.id)
+      : restoredSnapshot?.toolCalls.find((call) => call.threadEventId === input.checkpointEvent?.id);
+    const recreateActionKind = linkedAction?.kind === "verification" ? "verification" : "patchReview";
+    const strategy = checkpoint?.strategy || "unknown";
+    const drySummary = errors.length > 0
+      ? `Cannot restore checkpoint ${input.checkpointId}: ${errors.join(" ")}`
+      : `Restore ${filePaths.length} file${filePaths.length === 1 ? "" : "s"} using ${strategy}; runtime ledger will be restored and a ${recreateActionKind} action will require explicit Continue.`;
     return {
       checkpointId: input.checkpointId,
-      restorable: Boolean(input.runtimeSnapshot),
+      restorable: status === "valid",
       filePaths,
       strategy: checkpoint?.strategy,
       reason: input.checkpointEvent?.message || "Restore checkpoint runtime state.",
+      drySummary,
+      linkedActionId: linkedAction?.id,
+      linkedToolCallId: linkedToolCall?.id,
+      linkedEventId: input.checkpointEvent?.id,
+      recreateActionKind,
+      status,
       errors,
     };
   }
@@ -69,19 +110,21 @@ export class CheckpointRestoreController {
         actor: "user",
       },
     });
-    const hasPendingPatchReview = restoredSnapshot.actionRequired.some((action) => action.kind === "patchReview" && action.status === "pending");
-    const action = hasPendingPatchReview
-      ? restoredSnapshot.actionRequired.find((item) => item.kind === "patchReview" && item.status === "pending")!
+    const hasPendingRestoreAction = restoredSnapshot.actionRequired.some((action) => action.kind === preview.recreateActionKind && action.status === "pending");
+    const action = hasPendingRestoreAction
+      ? restoredSnapshot.actionRequired.find((item) => item.kind === preview.recreateActionKind && item.status === "pending")!
       : createActionRequiredEvent({
         id: `checkpoint-restore-action-${input.checkpointId}`,
-        kind: "patchReview",
+        kind: preview.recreateActionKind,
         workspacePath: input.runtimeSnapshot.workspacePath || input.fallbackWorkspacePath,
         threadId: input.runtimeSnapshot.threadId || input.fallbackThreadId,
         sourceEventId: input.checkpointEvent?.id,
+        toolCallId: preview.linkedToolCallId,
         title: "Checkpoint Restored",
         description: `Checkpoint ${input.checkpointId} was restored. Review or continue explicitly before model execution resumes.`,
+        toolResultText: `Checkpoint ${input.checkpointId} restored; explicit Continue is required before model execution resumes.`,
       });
-    if (!hasPendingPatchReview) {
+    if (!hasPendingRestoreAction) {
       restored.appendActionRequired(action);
     }
     restored.appendThreadEvent(restoreEvent);

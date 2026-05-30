@@ -1,4 +1,4 @@
-import type { ActionRequiredEvent } from "../domain/actionRequired";
+import { resumeActionFor, type ActionRequiredEvent } from "../domain/actionRequired";
 import type { AgentRunSession } from "../domain/agentRunSession";
 import { recoverTerminalRun, type TerminalRun } from "../domain/terminalRun";
 import type { ThreadEvent } from "../domain/threadEvents";
@@ -21,7 +21,11 @@ export interface SessionRestorePreview {
   pendingActions: ActionRequiredEvent[];
   lastTerminal?: TerminalRun;
   lastCheckpoint?: ThreadEvent;
+  lastEventSummary: string;
   explicitContinueRequired: boolean;
+  restorable: boolean;
+  errors: string[];
+  warnings: string[];
   summary: string;
 }
 
@@ -40,6 +44,24 @@ function eventSummary(event?: ThreadEvent): string {
   return event.message || event.title || event.kind;
 }
 
+function snapshotLooksCorrupted(runtime?: ThreadRuntimeSnapshot | null): boolean {
+  if (!runtime) return false;
+  return (runtime.threadEvents !== undefined && runtime.threadEvents !== null && !Array.isArray(runtime.threadEvents))
+    || (runtime.actionRequired !== undefined && runtime.actionRequired !== null && !Array.isArray(runtime.actionRequired))
+    || (runtime.toolCalls !== undefined && runtime.toolCalls !== null && !Array.isArray(runtime.toolCalls))
+    || (runtime.terminalRuns !== undefined && runtime.terminalRuns !== null && !Array.isArray(runtime.terminalRuns))
+    || (runtime.checkpointRuntimeSnapshots !== undefined
+      && runtime.checkpointRuntimeSnapshots !== null
+      && (typeof runtime.checkpointRuntimeSnapshots !== "object" || Array.isArray(runtime.checkpointRuntimeSnapshots)));
+}
+
+function replayPendingActions(actions: ActionRequiredEvent[]): ActionRequiredEvent[] {
+  return actions.map((action) => action.status === "pending" ? {
+    ...action,
+    resumeAction: action.resumeAction || resumeActionFor(action.kind, action.id),
+  } : { ...action });
+}
+
 export class SessionRestoreController {
   private resumeController: ResumeController;
 
@@ -53,6 +75,25 @@ export class SessionRestoreController {
     const terminalRuns = ledger.terminalRuns.map(recoverTerminalRun);
     const lastTerminal = lastItem(terminalRuns);
     const lastCheckpoint = lastItem(ledger.checkpoints);
+    const lastEventSummary = eventSummary(lastItem(ledger.threadEvents));
+    const errors = snapshotLooksCorrupted(input.runtimeLedgerSnapshot)
+      ? ["Runtime ledger snapshot is corrupted or has invalid collection fields."]
+      : [];
+    const checkpointRuntimeSnapshots = ledger.checkpointRuntimeSnapshots || {};
+    const warnings = [
+      ...pendingActions
+        .filter((action) => !action.resumeAction)
+        .map((action) => `Pending ${action.kind} action ${action.id} is missing resumeAction and will be replayed explicitly.`),
+      ...(lastTerminal?.recoveredState === "unknown-needs-continue"
+        ? [`Terminal ${lastTerminal.id} was running before restore and is now unknown-needs-continue.`]
+        : []),
+      ...ledger.checkpoints
+        .filter((event) => {
+          const checkpointId = event.checkpoint?.checkpointId;
+          return checkpointId && !checkpointRuntimeSnapshots[checkpointId];
+        })
+        .map((event) => `Checkpoint ${event.checkpoint!.checkpointId} has no runtime snapshot.`),
+    ];
     const explicitContinueRequired = pendingActions.length > 0
       || input.agentRunSession?.canContinue === true
       || lastTerminal?.recoveredState === "unknown-needs-continue";
@@ -62,18 +103,24 @@ export class SessionRestoreController {
       pendingActions,
       lastTerminal,
       lastCheckpoint,
+      lastEventSummary,
       explicitContinueRequired,
-      summary: eventSummary(lastItem(ledger.threadEvents)),
+      restorable: errors.length === 0,
+      errors,
+      warnings,
+      summary: lastEventSummary,
     };
   }
 
   restore(input: SessionRestoreInput): SessionRestoreResult {
+    const sourcePreview = this.preview(input);
     const ledger = this.buildLedger(input);
     const snapshot = ledger.ledgerSnapshot();
     const recoveredTerminals = snapshot.terminalRuns.map(recoverTerminalRun);
+    const recoveredActions = replayPendingActions(snapshot.actionRequired);
     const recoveredLedger = new RuntimeLedger({
       threadEvents: snapshot.threadEvents,
-      actionRequired: snapshot.actionRequired,
+      actionRequired: recoveredActions,
       toolCalls: snapshot.toolCalls,
       terminalRuns: recoveredTerminals,
       checkpointRuntimeSnapshots: snapshot.checkpointRuntimeSnapshots,
@@ -102,6 +149,9 @@ export class SessionRestoreController {
 
     return {
       ...preview,
+      errors: Array.from(new Set([...sourcePreview.errors, ...preview.errors])),
+      warnings: Array.from(new Set([...sourcePreview.warnings, ...preview.warnings])),
+      restorable: sourcePreview.restorable && preview.restorable,
       ledger: recoveredLedger,
       resumeResults,
       agentRunSession: input.agentRunSession,

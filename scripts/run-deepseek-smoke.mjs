@@ -136,7 +136,7 @@ async function callDeepSeek({ apiKey, model, scenario, workspacePath, context })
           { role: "user", content: prompt },
         ],
         temperature: 0.1,
-        max_tokens: 1200,
+        max_tokens: 2400,
         response_format: { type: "json_object" },
       }),
     });

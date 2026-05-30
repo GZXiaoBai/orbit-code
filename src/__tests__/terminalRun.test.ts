@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { appendTerminalOutput, completeTerminalRun, createTerminalRun, recoverTerminalRun } from "../domain/terminalRun";
+import {
+  appendTerminalOutput,
+  cancelTerminalRun,
+  completeTerminalRun,
+  createTerminalRun,
+  recoverTerminalRun,
+  terminalCancellationToolResult,
+} from "../domain/terminalRun";
 
 describe("terminal runs", () => {
   it("appends output and completes the latest running run for a task", () => {
@@ -35,5 +42,25 @@ describe("terminal runs", () => {
       recoveredState: "unknown-needs-continue",
       outputTail: "still running before reload\n",
     });
+  });
+
+  it("cancels terminal runs with recovered cancellation state and stable tool result", () => {
+    const run = createTerminalRun({
+      taskId: "task-1",
+      command: "npm",
+      args: ["run", "dev"],
+      output: "server output\n",
+      at: "2026-05-25T00:00:00.000Z",
+    });
+    const cancelled = cancelTerminalRun([run], run.id, "2026-05-25T00:00:02.000Z")[0];
+
+    expect(cancelled).toMatchObject({
+      status: "cancelled",
+      cancelledAt: "2026-05-25T00:00:02.000Z",
+      completedAt: "2026-05-25T00:00:02.000Z",
+      recoveredState: "cancelled",
+      outputTail: "server output\n",
+    });
+    expect(terminalCancellationToolResult(cancelled)).toBe("Cancelled command npm run dev: user cancelled the terminal run.");
   });
 });

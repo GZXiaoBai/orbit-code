@@ -127,3 +127,8 @@ export function cancelTerminalRun(
       : run
   );
 }
+
+export function terminalCancellationToolResult(run: TerminalRun, reason = "user cancelled the terminal run"): string {
+  const command = formatCommandForDisplay(run.command, run.args);
+  return `Cancelled command ${command}: ${reason}.`;
+}

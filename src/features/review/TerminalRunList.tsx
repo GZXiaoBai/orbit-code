@@ -25,6 +25,7 @@ function formatRunTime(value?: string): string {
 function terminalMeta(copy: AppCopy, run: TerminalRun): string {
   const started = formatRunTime(run.startedAt);
   const completed = formatRunTime(run.completedAt);
+  const cancelled = formatRunTime(run.cancelledAt);
   const timeRange = started && completed && started !== completed ? `${started} - ${completed}` : started || completed || run.taskId;
   const exit = run.exitCode !== null
     ? copy.language === "中" ? `退出码 ${run.exitCode}` : `exit ${run.exitCode}`
@@ -32,7 +33,19 @@ function terminalMeta(copy: AppCopy, run: TerminalRun): string {
   const cwd = run.cwd
     ? copy.language === "中" ? `目录 ${run.cwd}` : `cwd ${run.cwd}`
     : "";
-  return [timeRange, cwd, exit].filter(Boolean).join(" · ");
+  const process = run.processId
+    ? copy.language === "中" ? `进程 ${run.processId}` : `process ${run.processId}`
+    : "";
+  const session = run.sessionId
+    ? copy.language === "中" ? `会话 ${run.sessionId}` : `session ${run.sessionId}`
+    : "";
+  const recovered = run.recoveredState
+    ? copy.language === "中" ? `恢复状态 ${run.recoveredState}` : `recovered ${run.recoveredState}`
+    : "";
+  const cancelledAt = cancelled
+    ? copy.language === "中" ? `取消 ${cancelled}` : `cancelled ${cancelled}`
+    : "";
+  return [timeRange, cwd, exit, process, session, cancelledAt, recovered].filter(Boolean).join(" · ");
 }
 
 export function TerminalRunList({
@@ -68,7 +81,7 @@ export function TerminalRunList({
           {run.reason ? <small className="terminal-run-reason">{localizedRuntimeText(copy, run.reason)}</small> : null}
           <details className="terminal-output-details" open={index === 0 || run.status === "running"}>
             <summary>{copy.language === "中" ? "命令输出" : "Command output"}</summary>
-            <pre>{localizedRuntimeText(copy, run.output || copy.terminal.waiting)}</pre>
+            <pre>{localizedRuntimeText(copy, run.output || run.outputTail || copy.terminal.waiting)}</pre>
           </details>
         </section>
       ))}

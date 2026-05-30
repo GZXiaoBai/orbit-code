@@ -34,7 +34,66 @@ describe("CheckpointRestoreController", () => {
       restorable: true,
       filePaths: ["src/App.tsx"],
       strategy: "file-snapshot",
+      status: "valid",
+      drySummary: "Restore 1 file using file-snapshot; runtime ledger will be restored and a patchReview action will require explicit Continue.",
       errors: [],
+    });
+  });
+
+  it("reports missing runtime snapshots as non-restorable preview errors", () => {
+    const controller = new CheckpointRestoreController();
+
+    expect(controller.preview({
+      checkpointId: "checkpoint-1",
+      checkpointEvent,
+    })).toMatchObject({
+      restorable: false,
+      status: "missing-runtime",
+      errors: ["Missing runtime snapshot for checkpoint."],
+    });
+  });
+
+  it("recreates verification action when restored runtime was waiting for verification", () => {
+    const controller = new CheckpointRestoreController();
+    const result = controller.restore({
+      checkpointId: "checkpoint-1",
+      checkpointEvent,
+      runtimeSnapshot: {
+        checkpointId: "checkpoint-1",
+        threadId: "thread-1",
+        workspacePath: "/tmp/project",
+        runtimeLedgerSnapshot: {
+          actionRequired: [{
+            id: "verification-1",
+            kind: "verification",
+            title: "Verify",
+            description: "npm test",
+            status: "pending",
+            createdAt: "2026-05-29T00:00:00.000Z",
+            resumeAction: { type: "verification", payloadId: "verification-1" },
+          }],
+          toolCalls: [{
+            id: "tool-1",
+            tool: "verification",
+            status: "actionRequired",
+            actionRequiredId: "verification-1",
+            createdAt: "2026-05-29T00:00:00.000Z",
+          }],
+        },
+        createdAt: "2026-05-29T00:00:00.000Z",
+      },
+      at: "2026-05-29T00:00:01.000Z",
+    });
+
+    expect(result.preview).toMatchObject({
+      recreateActionKind: "verification",
+      linkedActionId: "verification-1",
+      linkedToolCallId: "tool-1",
+    });
+    expect(result.action).toMatchObject({
+      id: "verification-1",
+      kind: "verification",
+      status: "pending",
     });
   });
 

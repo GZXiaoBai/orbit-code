@@ -30,11 +30,35 @@ describe("SessionRestoreController", () => {
     });
 
     expect(result.mode).toBe("pending-action");
+    expect(result.restorable).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.lastEventSummary).toBe("Waiting");
     expect(result.pendingActions).toHaveLength(1);
     expect(result.resumeResults[0]).toMatchObject({
       explicitContinueRequired: true,
       resumeAction: { type: "approval", payloadId: "approval-1" },
     });
+  });
+
+  it("replays legacy pending actions that are missing resumeAction", () => {
+    const controller = new SessionRestoreController();
+    const result = controller.restore({
+      runtimeLedgerSnapshot: {
+        actionRequired: [{
+          id: "question-legacy",
+          kind: "question",
+          title: "Clarify",
+          description: "Choose direction",
+          status: "pending",
+          createdAt: "2026-05-29T00:00:00.000Z",
+        }],
+      },
+    });
+
+    expect(result.pendingActions[0].resumeAction).toEqual({ type: "question", payloadId: "question-legacy" });
+    expect(result.warnings).toEqual([
+      "Pending question action question-legacy is missing resumeAction and will be replayed explicitly.",
+    ]);
   });
 
   it("recovers restored running terminal runs as unknown-needs-continue", () => {
@@ -57,6 +81,8 @@ describe("SessionRestoreController", () => {
       status: "cancelled",
       recoveredState: "unknown-needs-continue",
     });
+    expect(result.explicitContinueRequired).toBe(true);
+    expect(result.warnings[0]).toContain("unknown-needs-continue");
     expect(result.resumeResults[0]).toMatchObject({
       kind: "terminal",
       explicitContinueRequired: true,
