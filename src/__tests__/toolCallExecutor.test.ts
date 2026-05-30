@@ -172,4 +172,37 @@ describe("ToolCallExecutor", () => {
       resultText: expect.stringContaining("Denied run_command"),
     }));
   });
+
+  it("executes already-approved tools through the lifecycle seam", async () => {
+    const calls: ToolCallLifecycle[] = [];
+    const update = vi.fn((id: string, patch: Partial<ToolCallLifecycle>) => {
+      const index = calls.findIndex((call) => call.id === id);
+      calls[index] = { ...calls[index], ...patch };
+    });
+    const executor = new ToolCallExecutor({
+      list: () => calls,
+      append: vi.fn((call: ToolCallLifecycle) => calls.push(call)),
+      update,
+    });
+
+    const result = await executor.executeApprovedTool({
+      id: "tool-read",
+      name: "read_file",
+      params: { path: "src/App.tsx" },
+      status: "running",
+    }, async () => "file contents");
+
+    expect(result).toMatchObject({
+      approved: true,
+      status: "completed",
+      toolResult: "file contents",
+    });
+    expect(calls[0]).toMatchObject({
+      id: "tool-read",
+      tool: "read_file",
+      status: "completed",
+      resultText: "file contents",
+    });
+    expect(update).toHaveBeenCalledWith("tool-read", { status: "running" });
+  });
 });

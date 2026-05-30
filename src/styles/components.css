@@ -2052,7 +2052,7 @@
   margin: 0 auto;
   z-index: 4;
   border-top: 0;
-  padding: 18px clamp(18px, 3.4vw, 44px) 14px;
+  padding: 18px clamp(18px, 3.4vw, 44px) 12px;
   flex-shrink: 0;
   background: transparent;
   -webkit-backdrop-filter: none;

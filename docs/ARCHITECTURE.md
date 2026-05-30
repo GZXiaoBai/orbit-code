@@ -49,7 +49,8 @@ Current state Modules:
 - `useWorkspace` - main coordinator; still too large.
 - `useSession` - Plan/provider/session state.
 - `useFileSystem` - workspace files, command logs, command status.
-- `agentLoopEngine` - ReAct-style Agent Loop class.
+- `agentTurnRunner` / `toolLoopController` - non-React Runner kernel for Build turns, model streaming, strict tool-envelope repair, and tool-result feedback.
+- `agentLoopEngine` - thin compatibility Adapter over `ToolLoopController`; do not add new loop logic here.
 
 Target direction:
 

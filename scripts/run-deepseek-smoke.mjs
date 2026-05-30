@@ -84,14 +84,15 @@ function ensureContextFiles(workspacePath) {
   }
 }
 
-function parseModelJson(content) {
+function parseModelJson(content, rawResponse = "") {
   const trimmed = content.trim().replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "").trim();
   try {
     return JSON.parse(trimmed);
   } catch {
     const match = trimmed.match(/\{[\s\S]*\}/);
     if (match) return JSON.parse(match[0]);
-    throw new Error(`DeepSeek response was not JSON: ${trimmed.slice(0, 240)}`);
+    const excerpt = trimmed || rawResponse;
+    throw new Error(`DeepSeek response was not JSON: ${excerpt.slice(0, 300)}`);
   }
 }
 
@@ -120,29 +121,38 @@ async function callDeepSeek({ apiKey, model, scenario, workspacePath, context })
     context.slice(0, 6000),
   ].join("\n");
 
-  const response = await fetch("https://api.deepseek.com/chat/completions", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: "Return only valid JSON. Escape all newlines inside string values. No Markdown fences." },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.1,
-      max_tokens: 1200,
-      response_format: { type: "json_object" },
-    }),
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`DeepSeek API failed (${response.status}): ${text.slice(0, 300)}`);
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const response = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: "Return only valid JSON. Escape all newlines inside string values. No Markdown fences." },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.1,
+        max_tokens: 1200,
+        response_format: { type: "json_object" },
+      }),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`DeepSeek API failed (${response.status}): ${text.slice(0, 300)}`);
+    }
+    try {
+      const parsed = JSON.parse(text);
+      return parseModelJson(parsed.choices?.[0]?.message?.content || "", text);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 750));
+    }
   }
-  const parsed = JSON.parse(text);
-  return parseModelJson(parsed.choices?.[0]?.message?.content || "");
+  throw lastError;
 }
 
 function createEvent(kind, extras = {}) {
@@ -365,6 +375,36 @@ async function runScenario({ apiKey, model, workspacePath, scenario }) {
   return record;
 }
 
+function createFailureRecord({ model, workspacePath, scenario, error }) {
+  const now = new Date().toISOString();
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    id: `deepseek-smoke-${scenario.path}-${Date.now()}`,
+    path: scenario.path,
+    model,
+    workspacePath,
+    targetFile: scenario.targetFile,
+    startedAt: now,
+    completedAt: now,
+    result: "failed",
+    missingStages: stages,
+    staleConflictRecovered: false,
+    lastEventId: undefined,
+    pendingActionIds: [],
+    terminalSummary: "",
+    modelSummary: message.slice(0, 500),
+    events: [],
+    actionRequired: [],
+    failure: {
+      stage: "modelResponse",
+      workspacePath,
+      model,
+      summary: message,
+      nextFix: "Inspect DeepSeek response/body handling, credential status, and retry behavior before marking smoke verified.",
+    },
+  };
+}
+
 async function main() {
   const workspacePath = path.resolve(process.argv[2] || process.env.ORBIT_DEEPSEEK_SMOKE_WORKSPACE || DEFAULT_WORKSPACE);
   const model = process.env.ORBIT_DEEPSEEK_SMOKE_MODEL || DEFAULT_MODEL;
@@ -373,7 +413,12 @@ async function main() {
   const records = [];
   for (const scenario of scenarios) {
     process.stdout.write(`Running ${scenario.path} with ${model}... `);
-    const record = await runScenario({ apiKey, model, workspacePath, scenario });
+    let record;
+    try {
+      record = await runScenario({ apiKey, model, workspacePath, scenario });
+    } catch (error) {
+      record = createFailureRecord({ model, workspacePath, scenario, error });
+    }
     records.push(record);
     console.log(record.result);
   }

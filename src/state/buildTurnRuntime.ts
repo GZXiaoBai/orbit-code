@@ -7,6 +7,7 @@ import { looksLikeNonStrictPatchProposal, parseToolEnvelopes } from "../domain/a
 import { stripFabricatedToolResults, type AgentLoopCallbacks } from "./agentLoopEngine";
 import { normalizePatchProposal, type PatchItem } from "./patchWorkflow";
 import { invokeDesktop, isDesktopRuntime } from "../runtime/desktopGateway";
+import { executeToolCall as executeRuntimeToolCall } from "../runtime/toolRegistry";
 import { summarizeToolParamsForLifecycle, ToolCallExecutor } from "./toolCallExecutor";
 import type { ApprovalRequest } from "./useApprovalQueue";
 import type { PermissionSchedulerResult } from "../runtime/permissionScheduler";
@@ -221,6 +222,7 @@ export class BuildTurnRuntime {
       onToolDeniedByMode: this.onToolDeniedByMode,
       onAskUser: this.onAskUser,
       onPatchProposed: this.onPatchProposed,
+      executeToolCall: this.executeToolCall,
       getWorkspacePath: () => this.input.workspaceRoot,
       getSecuritySettings: () => ({
         global: this.input.securitySettings,
@@ -406,6 +408,17 @@ export class BuildTurnRuntime {
       status: "done",
       message: `${mode === "plan" ? "Plan" : "Build"} 模式拒绝了工具 ${tool}。当前模式只能使用已注册的工具。`,
     });
+  };
+
+  private executeToolCall: NonNullable<AgentLoopCallbacks["executeToolCall"]> = async (toolCall) => {
+    const { input } = this;
+    const result = await input.toolExecutor.executeApprovedTool(toolCall, () =>
+      executeRuntimeToolCall(toolCall.name, toolCall.params, {
+        workspacePath: input.workspaceRoot,
+        sandboxMode: input.securitySettings?.sandboxMode || input.providerSandboxMode || "none",
+      })
+    );
+    return result.toolResult;
   };
 
   private onAskUser: NonNullable<AgentLoopCallbacks["onAskUser"]> = async (question, params) => {

@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 const workspaceSource = fs.readFileSync(fileURLToPath(new URL("../state/useWorkspace.ts", import.meta.url)), "utf8");
 const sessionStoreSource = fs.readFileSync(fileURLToPath(new URL("../storage/sessionStore.ts", import.meta.url)), "utf8");
 const agentRunSource = fs.readFileSync(fileURLToPath(new URL("../state/useAgentRun.ts", import.meta.url)), "utf8");
+const agentTurnRunnerSource = fs.readFileSync(fileURLToPath(new URL("../state/agentTurnRunner.ts", import.meta.url)), "utf8");
+const agentLoopEngineSource = fs.readFileSync(fileURLToPath(new URL("../state/agentLoopEngine.ts", import.meta.url)), "utf8");
 
 describe("legacy runtime boundary", () => {
   it("does not expose legacy approval/question queues as main workspace props", () => {
@@ -35,5 +37,13 @@ describe("legacy runtime boundary", () => {
     expect(agentRunSource).not.toContain("onAskUser: async");
     expect(agentRunSource).not.toContain("onPatchProposed: async");
     expect(agentRunSource).not.toContain("recordTerminalResult({");
+  });
+
+  it("routes the Build tool loop through AgentTurnRunner and ToolLoopController", () => {
+    expect(agentTurnRunnerSource).toContain("new ToolLoopController");
+    expect(agentTurnRunnerSource).not.toContain("new AgentLoopEngine");
+    expect(agentLoopEngineSource).toContain("new ToolLoopController");
+    expect(agentLoopEngineSource).not.toContain("while (");
+    expect(agentLoopEngineSource).not.toContain("callLLMApiStreaming");
   });
 });

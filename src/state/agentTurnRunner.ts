@@ -1,9 +1,9 @@
 import type { AgentLoopStatus } from "../domain/agentLoop";
 import type { PlanTask, ReasoningEffort } from "../domain/types";
 import type { LLMProvider, LLMRequestOptions } from "../services/llmService";
-import { AgentLoopEngine, type AgentLoopCallbacks } from "./agentLoopEngine";
+import { ToolLoopController, type ToolLoopCallbacks } from "./toolLoopController";
 
-export type AgentTurnRunnerCallbacks = AgentLoopCallbacks;
+export type AgentTurnRunnerCallbacks = ToolLoopCallbacks;
 
 export type PlanTurnResult =
   | { kind: "planDraft"; summary: string }
@@ -59,10 +59,28 @@ export class AgentTurnRunner {
 
   constructor(
     callbacks: AgentTurnRunnerCallbacks,
-    buildEngineFactory: AgentBuildEngineFactory = (engineCallbacks) => new AgentLoopEngine({
-      ...engineCallbacks,
-      getRuntimeMode: () => "build",
-    }),
+    buildEngineFactory: AgentBuildEngineFactory = (engineCallbacks) => {
+      const controller = new ToolLoopController({
+        ...engineCallbacks,
+        getRuntimeMode: () => "build",
+      });
+      return {
+        getStatus: () => controller.getStatus(),
+        cancel: () => controller.cancel(),
+        runTask: async (task, provider, model, baseUrl, threadId, options, resumeContext) => {
+          const result = await controller.run({
+            task,
+            provider,
+            model,
+            baseUrl,
+            threadId,
+            options,
+            resumeContext,
+          });
+          return result.summary;
+        },
+      };
+    },
   ) {
     this.buildEngine = buildEngineFactory({
       ...callbacks,

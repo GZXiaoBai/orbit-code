@@ -43,9 +43,10 @@ src/
     useWorkspace.ts               # 当前最大状态协调 Module，仍需拆分
     useSession.ts                 # Plan/provider/session 子状态
     useFileSystem.ts              # 文件树/命令日志子状态
-    agentLoopEngine.ts            # ReAct 风格 Agent Loop，正在被 runner/executor/controller 拆分
+    agentLoopEngine.ts            # 旧 Agent Loop 兼容 Adapter，主循环已迁入 ToolLoopController
     agentRunKernel.ts             # Build turn 准备、guard、task/resume/final-summary 选择
-    agentTurnRunner.ts            # Plan/Build turn lifecycle seam
+    agentTurnRunner.ts            # Plan/Build turn lifecycle runner
+    toolLoopController.ts         # 非 React 模型 streaming / tool loop / strict JSON repair 内核
     toolCallExecutor.ts           # ToolCallLifecycle / permission scheduling seam
     sessionRestoreController.ts   # 恢复 pending action / terminal explicit-continue
     checkpointRestoreController.ts# checkpoint runtime snapshot restore
@@ -102,7 +103,7 @@ npm run smoke:deepseek
 - 亮/暗主题已存在；当前视觉方向是独立 Agent Workbench，而不是复制 Codex 资产。
 - Plan/Build 第一版 runtime contract 已存在：Plan 只读，Build 才执行 command/patch/verification。
 - Rust SQLite、Keychain、LLM relay、事务 Patch、三方合并、AST/code graph、embedding 模块均有实现和部分测试。
-- `useWorkspace.ts` 仍是最大技术债，但 RuntimeLedger、ActionRequiredController、AgentRunKernel、ToolCallExecutor、SessionRestoreController 等深 Module 已开始分担职责。
+- `useWorkspace.ts` 仍是最大技术债，但 RuntimeLedger、ActionRequiredController、AgentRunKernel、AgentTurnRunner、ToolLoopController、ToolCallExecutor、SessionRestoreController 等深 Module 已开始分担职责。
 - 旧 `Conversation.tsx` / `Sidebar.tsx` / `CommandApprovalCard` 主路径已经删除；后续不要恢复两套审查体验。
 - Agent Loop 已通过真实 DeepSeek mini-lab smoke；`npm run smoke:deepseek` 已在 2026-05-30 跑通 happy path、stale-write recovery、rules/skills context path，并把证据写入 `docs/smoke/`。
 - Provider registry 声明了 Ollama，但 Rust LLM 网关目前没有 Ollama host 放行。
@@ -119,7 +120,7 @@ npm run smoke:deepseek
 ## 下一步优先级
 
 1. 保持完整验证基线：Vitest、build、E2E、Cargo、Tauri debug 包。
-2. 继续把 Runner 从 React hook 中拆深：`AgentTurnRunner`、`ToolCallExecutor`、`SessionRestoreController`、`CheckpointRestoreController`。
+2. 继续把 Runner 从兼容层中收口：删除薄 `agentLoopEngine.ts` Adapter，扩大 `ToolLoopController`、`ToolCallExecutor`、`SessionRestoreController`、`CheckpointRestoreController` 的边界测试。
 3. 继续把真实 DeepSeek smoke 接入日常验收，重点补桌面 overlay UX 和 restored verification 的人工验证。
 4. 继续拆分 `src-tauri/src/commands/mod.rs`，把 file/command/patch/context/provider/vault 的实现迁入子 Module。
 5. 重做前端视觉系统：保留三栏效率，但建立独立 Agent Workbench 风格，黑/白主题都要完整。

@@ -1,6 +1,6 @@
 # Orbit Code Agent Source Study
 
-Updated: 2026-05-29
+Updated: 2026-05-30
 
 This document summarizes lessons from public agent codebases cloned into:
 
@@ -240,7 +240,14 @@ Orbit should add these cautiously:
 - `useAgentRun` is now a React Adapter for state wiring, provider/settings inputs, start/continue/cancel, and runner result projection. It no longer directly implements approval/question/patch/terminal tool branches.
 - `AgentTurnRunner` now exposes `completed / waitingAction / cancelled / failed` Build results and an explicit `resumeBuildTurn()` entrypoint. This aligns Orbit with Codex/Gemini-style explicit resume semantics: restored pending work does not auto-run stale Promises.
 - `ToolCallExecutor` now links terminal runs back to command lifecycle records, so command execution can be projected from the ledger instead of inferred by the UI hook.
-- Remaining gap: `agentLoopEngine.ts` still owns the model streaming/tool-call loop and strict envelope repair. The next deepening step is moving that loop into `AgentTurnRunner` while preserving the current strict JSON repair behavior and DeepSeek smoke gate.
+
+2026-05-30 Runner Kernel tool-loop extraction:
+
+- `ToolLoopController` is now the non-React owner for model streaming, strict tool-envelope repair, tool-call iteration, mode-aware tool denial, model/tool-result feedback, context compaction, cancellation, max-iteration failure, and done/failure finalization.
+- `AgentTurnRunner` defaults to `ToolLoopController` instead of constructing `AgentLoopEngine`. Build turn output remains limited to `completed / waitingAction / cancelled / failed`, matching the Codex/Gemini expectation that the runner emits protocol state rather than UI-specific branches.
+- `agentLoopEngine.ts` is now a thin compatibility adapter over `ToolLoopController`. It keeps older tests/imports stable but no longer owns the ReAct loop.
+- `ToolCallExecutor.executeApprovedTool()` now routes approved direct runtime tools through the same lifecycle seam as approvals and terminal-linked command execution. This moves Orbit closer to OpenCode/Codex-style tool correlation: every tool call gets a lifecycle record even when it does not require a blocking user action.
+- Remaining gap: delete the `agentLoopEngine.ts` adapter after migration-only imports are gone, and keep tightening `ToolLoopController` tests for provider-specific repair prompts without weakening Plan/Build tool policy.
 
 ### P1: Make The Workbench Understand Its Own History
 

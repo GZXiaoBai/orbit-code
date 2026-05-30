@@ -184,6 +184,35 @@ export class ToolCallExecutor {
     return this.recordApprovalResult({ toolCallId: toolCall.id, approval });
   }
 
+  async executeApprovedTool(
+    toolCall: ToolCall,
+    run: () => Promise<string>,
+  ): Promise<ToolExecutionResult> {
+    this.recordGenerated(toolCall, summarizeToolParamsForLifecycle(toolCall.name, toolCall.params));
+    this.recordRunning(toolCall.id);
+    try {
+      const result = await run();
+      this.recordResult(toolCall.id, result);
+      return {
+        approved: true,
+        toolResult: result,
+        status: /^Tool error:/i.test(result) ? "failed" : "completed",
+      };
+    } catch (error) {
+      const result = `Tool error: ${error instanceof Error ? error.message : String(error)}`;
+      this.lifecycle.update(toolCall.id, {
+        status: "failed",
+        resultText: result,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        approved: false,
+        toolResult: result,
+        status: "failed",
+      };
+    }
+  }
+
   recordCancelled(id: string, reason = "Cancelled by user."): void {
     this.lifecycle.update(id, {
       status: "cancelled",
