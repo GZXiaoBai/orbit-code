@@ -21,8 +21,60 @@ Closed-source products such as Claude Code, Cursor, and Antigravity should be st
 | Continue | `/Users/zhoujunjie/PersonalProjects/agent-source-study/continue` | rules, context providers, streaming tool calls, Plan Mode boundary |
 | Aider | `/Users/zhoujunjie/PersonalProjects/agent-source-study/aider` | edit formats, git safety, auto-lint/test loops, token/cost reporting |
 | OpenHands | `/Users/zhoujunjie/PersonalProjects/agent-source-study/OpenHands` | sandbox/runtime architecture, repo integrations, conversation metadata |
+| Pi Agent | `/tmp/orbit-pi-study` | TypeScript agent/session runtime, thinking/tool message parts, session tree, ResourceLoader, packages/extensions |
 
 ## High-Value Patterns
+
+### 0. Pi Is Now The Better Runtime Spine Reference
+
+Pi is a better architecture reference for Orbit than the archived OpenCode codebase because it is already a TypeScript agent runtime with a clean stack:
+
+`SessionManager -> AgentMessage parts -> Agent loop -> Tool execution events -> ResourceLoader -> packages/extensions`
+
+The pieces Orbit should copy are:
+
+- Pi-style message content blocks: `text / thinking / toolCall / toolResult / finish / error`.
+- JSONL/tree session semantics with `id / parentId` entries, enabling restore, branch, fork, and clone.
+- Streaming event protocol for `thinking_delta`, `text_delta`, `toolcall_delta`, and terminal tool execution events.
+- Resource discovery for packages, skills, prompts, themes, and project context files.
+- Extension API shape for registering tools, commands, and UI prompts.
+
+The pieces Orbit must not copy directly are:
+
+- Pi's native Node file/bash/edit tool execution path, because Orbit requires Rust gateway workspace validation, command policy, credential isolation, and transactional patch review.
+- Pi's default package/extension security posture. Pi documents that packages/extensions run with full system access; Orbit must implement a compatibility layer where extension capabilities route through `ActionRequired + PolicyEngine + Rust gateway`.
+
+2026-05-30 Pi-spine first pass:
+
+- Added Pi aliases and support for `thinking` and `error` message parts on top of the existing runtime message protocol.
+- Added `PiSessionKernel` for clean runtime creation, restore, rename/archive/delete, and first-pass session forking.
+- Added `PiAgentKernel` as the public Plan/Build/resume seam over the existing runner while the deeper kernel migration continues.
+- Added `PiToolExecutor` to enforce Plan/Build tool filtering and route executable tools through durable approval when a scheduler is present.
+- Added `PiPackageLoader` to parse Pi package manifests and convention directories without executing third-party extension code.
+
+### 0.1. OpenCode Is A Useful But Secondary Runtime Spine Reference
+
+The local OpenCode repository is MIT licensed, but its README says it has been archived and continued as Charmbracelet Crush. Orbit should not directly fork this old codebase as its product foundation.
+
+The useful part to copy is the spine shape:
+
+`Session -> Message parts -> Agent loop -> Tool.Run -> Permission pubsub -> Tool result message`
+
+Concrete Orbit direction:
+
+- Keep Orbit as the Tauri/React desktop workbench.
+- Keep Rust gateway, credential vault, workspace validation, and transaction patch flow.
+- Rebuild Orbit's runtime toward OpenCode-style deep Modules rather than adding a Go sidecar.
+- Treat `ThreadEvent` as a UI projection over runtime messages, not the core model-loop fact.
+- Keep OpenCode/Crush as an architecture reference and attribution source, not a vendored runtime dependency.
+
+2026-05-30 first-pass implementation:
+
+- Added `RuntimeMessage` parts for `reasoning / text / toolCall / toolResult / finish`, with projection to safe `ThreadEvent` summaries that do not expose raw tool params.
+- Added `SessionKernel` as the new seam for clean session runtime creation, session listing, and restore through `SessionRestoreController`.
+- Added `ActionBus` as the small durable blocking-action primitive matching the OpenCode permission shape.
+- Added `AgentKernel` as the public Plan/Build/resume entrypoint above `AgentTurnRunner`.
+- Wired new thread creation through `createCleanSessionRuntime()` so a fresh thread clears ledger facts instead of selectively resetting only some arrays.
 
 ### 1. Permission Requests Need A Real Blocking Primitive
 

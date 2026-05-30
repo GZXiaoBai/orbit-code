@@ -59,6 +59,7 @@ import { inferPermissionActions } from "../runtime/policyEngine";
 import { ResumeController } from "./resumeController";
 import { CheckpointRestoreController } from "./checkpointRestoreController";
 import { SessionRestoreController } from "./sessionRestoreController";
+import { createCleanPiSessionRuntime, PiSessionKernel } from "./piSessionKernel";
 
 export type { AgentEvent } from "../domain/agentEvents";
 export type { ImportedPlanState, ImportErrorState, ProviderSettings } from "./useSession";
@@ -251,6 +252,7 @@ export function useWorkspace() {
   const resumeController = useMemo(() => new ResumeController(), []);
   const checkpointRestoreController = useMemo(() => new CheckpointRestoreController(), []);
   const sessionRestoreController = useMemo(() => new SessionRestoreController(resumeController), [resumeController]);
+  const sessionKernel = useMemo(() => new PiSessionKernel(undefined, sessionRestoreController), [sessionRestoreController]);
 
   useEffect(() => { threadEventsRef.current = threadEvents; }, [threadEvents]);
   useEffect(() => { actionRequiredRef.current = actionRequired; }, [actionRequired]);
@@ -955,7 +957,7 @@ export function useWorkspace() {
   const restoreThreadSnapshot = useCallback((threadId: string) => {
     const snapshot = threadSnapshots[threadId];
     const runtimeSnapshot = snapshot?.runtimeLedgerSnapshot;
-    const restoredSession = sessionRestoreController.restore({
+    const restoredSession = sessionKernel.restoreSession({
       runtimeLedgerSnapshot: runtimeSnapshot,
       agentRunSession: snapshot?.agentRunSession ?? null,
       threadEvents: snapshot?.threadEvents,
@@ -981,22 +983,22 @@ export function useWorkspace() {
     recoverToolCallLifecycles(restoredSession.ledger.toolCalls.length > 0 ? restoredSession.ledger.toolCalls : snapshot?.toolCalls || [], true);
     setRuntimeCheckpointSnapshots(runtimeSnapshot?.checkpointRuntimeSnapshots || snapshot?.checkpointRuntimeSnapshots || {});
     recoverAgentRunSessionRef.current?.(snapshot?.agentRunSession ?? null);
-  }, [cancelRuntimeActionsByKind, recoverToolCallLifecycles, session, sessionRestoreController, threadSnapshots]);
+  }, [cancelRuntimeActionsByKind, recoverToolCallLifecycles, session, sessionKernel, threadSnapshots]);
 
   const createThread = useCallback(() => {
     persistCurrentThreadSnapshot();
     const nextThreadId = threadUi.createThread();
+    const cleanRuntime = createCleanPiSessionRuntime();
     cancelRuntimeActionsByKind("all");
     setApprovalGrants((prev) => prev.filter((grant) => grant.scope === "project"));
-    setActionRequired([]);
+    replaceRuntimeLedgerSnapshot(cleanRuntime.runtimeLedgerSnapshot);
     recoverToolCallLifecycles([], true);
     recoverTerminalRunsRef.current?.([], true);
     recoverAgentRunSessionRef.current?.(null);
     session.restoreImportedPlan(null);
-    setThreadEvents([]);
     setRuntimeCheckpointSnapshots({});
     return nextThreadId;
-  }, [cancelRuntimeActionsByKind, persistCurrentThreadSnapshot, recoverToolCallLifecycles, session, threadUi]);
+  }, [cancelRuntimeActionsByKind, persistCurrentThreadSnapshot, recoverToolCallLifecycles, replaceRuntimeLedgerSnapshot, session, threadUi]);
 
   const switchThread = useCallback((nextThreadId: string) => {
     if (!nextThreadId || nextThreadId === threadUi.threadId) return;
