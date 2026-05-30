@@ -225,8 +225,8 @@ Orbit should add these cautiously:
 - Real approval blocking and restored resume actions.
 - Patch proposal → sandbox → diff → transactional apply → verification approval.
 - DeepSeek repair loop for invalid tool output.
-- Manual smoke: run `orbit-mini-lab` in `/Users/zhoujunjie/PersonalProjects/test for orbit/orbit-mini-lab` and evaluate the required typed milestones with the smoke harness before marking the flow verified.
-- Use the Current Context Inspector smoke gate to evaluate the live event/action snapshot after the run; this does not replace the manual DeepSeek run, but it makes missing protocol milestones visible and repeatable.
+- Real-provider smoke: run `npm run smoke:deepseek` against `/Users/zhoujunjie/PersonalProjects/test for orbit/orbit-mini-lab` to exercise the happy path, stale-write recovery, and rules/skills context path with DeepSeek `deepseek-v4-flash`.
+- Use the Current Context Inspector smoke gate to evaluate the live event/action snapshot after desktop manual runs; this complements the DeepSeek runner and keeps missing protocol milestones visible and repeatable.
 
 2026-05-29 Runner Kernel update:
 

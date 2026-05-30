@@ -83,7 +83,7 @@ src-tauri/src/
 
 ## 已验证基线
 
-最近审查日期：2026-05-29。
+最近审查日期：2026-05-30。
 
 ```bash
 npm test -- --run
@@ -91,6 +91,7 @@ npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 npm run test:e2e
 npm run tauri build -- --debug
+npm run smoke:deepseek
 ```
 
 当前目标是让以上四项长期全部通过。任何接手 Agent 修改前后都要至少跑受影响层的测试。
@@ -103,7 +104,7 @@ npm run tauri build -- --debug
 - Rust SQLite、Keychain、LLM relay、事务 Patch、三方合并、AST/code graph、embedding 模块均有实现和部分测试。
 - `useWorkspace.ts` 仍是最大技术债，但 RuntimeLedger、ActionRequiredController、AgentRunKernel、ToolCallExecutor、SessionRestoreController 等深 Module 已开始分担职责。
 - 旧 `Conversation.tsx` / `Sidebar.tsx` / `CommandApprovalCard` 主路径已经删除；后续不要恢复两套审查体验。
-- Agent Loop 已通过真实 DeepSeek mini-lab happy path smoke；stale-write recovery、restored verification、rules/skills context path 仍需继续做真实 smoke。
+- Agent Loop 已通过真实 DeepSeek mini-lab smoke；`npm run smoke:deepseek` 已在 2026-05-30 跑通 happy path、stale-write recovery、rules/skills context path，并把证据写入 `docs/smoke/`。
 - Provider registry 声明了 Ollama，但 Rust LLM 网关目前没有 Ollama host 放行。
 
 ## 架构约束
@@ -119,7 +120,7 @@ npm run tauri build -- --debug
 
 1. 保持完整验证基线：Vitest、build、E2E、Cargo、Tauri debug 包。
 2. 继续把 Runner 从 React hook 中拆深：`AgentTurnRunner`、`ToolCallExecutor`、`SessionRestoreController`、`CheckpointRestoreController`。
-3. 完成 stale-write recovery、restored verification、rules/skills context 的真实 DeepSeek smoke。
+3. 继续把真实 DeepSeek smoke 接入日常验收，重点补桌面 overlay UX 和 restored verification 的人工验证。
 4. 继续拆分 `src-tauri/src/commands/mod.rs`，把 file/command/patch/context/provider/vault 的实现迁入子 Module。
 5. 重做前端视觉系统：保留三栏效率，但建立独立 Agent Workbench 风格，黑/白主题都要完整。
 

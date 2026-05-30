@@ -108,7 +108,7 @@ Next:
    - Manual API smoke for OpenRouter, xAI, Mistral, Groq, Qwen/DashScope, Kimi/Moonshot, SiliconFlow, and Zhipu/GLM.
    - Task edit/delete/reorder flow.
    - Verification approval reload recovery and terminal run completion after restored command execution.
-   - Additional real DeepSeek small-project smoke in `/Users/zhoujunjie/PersonalProjects/test for orbit/orbit-mini-lab` for stale-write conflict recovery, restored verification approval, restart resume, and explicit project rules/skills visibility. The current happy path passed on 2026-05-29 with `SMOKE_LEDGER_20260529.md`.
+- Additional real DeepSeek small-project smoke in `/Users/zhoujunjie/PersonalProjects/test for orbit/orbit-mini-lab` for restored verification approval, restart resume, and desktop overlay UX. The current happy path passed on 2026-05-29 with `SMOKE_LEDGER_20260529.md`; `npm run smoke:deepseek` passed on 2026-05-30 for happy path, stale-write recovery, and rules/skills context.
    - Explicit continue after restored verification approval and restored command completion.
 
 ## P2 - State Architecture
@@ -150,10 +150,10 @@ Done:
 Next:
 
 1. Move implementations out of `src-tauri/src/commands/mod.rs` into the file/command/patch/context/provider/vault child modules, then make Rust command execution fully explicit about workspace root/project id in every remaining compatibility path.
-2. Add stale-write DeepSeek smoke coverage that verifies sandbox-preview conflict, replan, retry, and final typed event recovery.
+2. Keep `npm run smoke:deepseek` as the real-provider gate and extend it with restored verification approval and restart resume cases.
 3. Add E2E for verification approval reload recovery and terminal run completion after restored command execution.
 4. Add more localized install/network risk copy in Inspector history.
-5. Add real-project smoke coverage for user rules, `.orbit/rules`, `ORBIT.md`, and read-only skill manifests without allowing those sources to change permissions.
+5. Continue desktop manual smoke for user rules, `.orbit/rules`, `ORBIT.md`, and read-only skill manifests; the 2026-05-30 runner path verifies the protocol evidence and permission impact.
 
 ## P4 - Product Design Cleanup
 
