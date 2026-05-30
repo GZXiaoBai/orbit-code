@@ -565,8 +565,11 @@
 }
 
 .thread-row-menu {
-  top: 28px;
-  right: 0;
+  position: fixed;
+  right: auto;
+  z-index: 260;
+  min-width: 220px;
+  max-width: min(260px, calc(100vw - 16px));
 }
 
 .project-thread-list span {

@@ -720,6 +720,35 @@
   font-weight: 760;
 }
 
+.reasoning-message details {
+  width: 100%;
+}
+
+.reasoning-message summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 650;
+  list-style: none;
+}
+
+.reasoning-message summary::-webkit-details-marker {
+  display: none;
+}
+
+.reasoning-message summary small {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.reasoning-message details:not([open]) .node-message {
+  display: none;
+}
+
 .agent-collaboration-timeline .node-message {
   color: var(--text-primary);
   font-size: var(--font-size-md);

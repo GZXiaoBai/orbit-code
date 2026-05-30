@@ -805,9 +805,21 @@ export function useWorkspace() {
       return false;
     }
 
+    let reasoningEventId = "";
     try {
       const config = session.providerSettings.configs[providerId] || {};
       const runtimeContext = await collectRuntimeContext();
+      reasoningEventId = `plan-reasoning-${Date.now()}`;
+      emitWorkspaceEvent({
+        id: reasoningEventId,
+        kind: "reasoningSummary",
+        workspacePath: fs.workspaceRoot,
+        threadId: threadUi.threadId,
+        role: "planner",
+        title: "Plan Reasoning",
+        status: "thinking",
+        message: "只读 Planner 正在审查项目上下文、约束和可行步骤。",
+      });
       const result = await runPlannerTurn({
         providerId: providerId as LLMProvider,
         model,
@@ -835,6 +847,11 @@ export function useWorkspace() {
         throw new Error(result.message || "Planner did not return a plan draft.");
       }
       const planDraft = result.plan;
+      updateThreadEvent(reasoningEventId, (event) => ({
+        ...event,
+        status: "done",
+        message: `只读 Planner 已完成：${summarizePlanDraft(planDraft)}`,
+      }));
       emitWorkspaceEvent({
         id: `plan-draft-${Date.now()}`,
         kind: "planDraft",
@@ -848,6 +865,24 @@ export function useWorkspace() {
       });
       return true;
     } catch (error) {
+      if (reasoningEventId) {
+        updateThreadEvent(reasoningEventId, (event) => ({
+          ...event,
+          status: "done",
+          message: `只读 Planner 已停止：${error instanceof Error ? error.message : String(error)}`,
+        }));
+      } else {
+        emitWorkspaceEvent({
+          id: `plan-reasoning-failed-${Date.now()}`,
+          kind: "reasoningSummary",
+          workspacePath: fs.workspaceRoot,
+          threadId: threadUi.threadId,
+          role: "planner",
+          title: "Plan Reasoning",
+          status: "done",
+          message: `只读 Planner 已停止：${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
       emitWorkspaceEvent({
         id: `plan-error-${Date.now()}`,
         kind: "error",
@@ -860,7 +895,7 @@ export function useWorkspace() {
       });
       return false;
     }
-  }, [collectRuntimeContext, emitWorkspaceEvent, fs.workspaceRoot, runControls, session, threadUi.threadId]);
+  }, [collectRuntimeContext, emitWorkspaceEvent, fs.workspaceRoot, runControls, session, threadUi.threadId, updateThreadEvent]);
 
   useEffect(() => {
     const title = session.importedPlan?.plan.title?.trim();

@@ -66,6 +66,63 @@ function codingPlanFromGeneratedJson(parsedPlan: any): CodingPlan {
   };
 }
 
+function extractJsonObjectCandidate(input: string): string | null {
+  const start = input.indexOf("{");
+  if (start === -1) return null;
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < input.length; index += 1) {
+    const char = input[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      stack.push("}");
+      continue;
+    }
+    if (char === "[") {
+      stack.push("]");
+      continue;
+    }
+    if (char === "}" || char === "]") {
+      const expected = stack.pop();
+      if (expected !== char) return null;
+      if (stack.length === 0) return input.slice(start, index + 1);
+    }
+  }
+  if (inString) return null;
+  return `${input.slice(start)}${stack.reverse().join("")}`;
+}
+
+export function parsePlannerJsonOutput(output: string): unknown {
+  const cleaned = cleanJsonOutput(output);
+  const objectCandidate = extractJsonObjectCandidate(cleaned);
+  const candidates = [cleaned, objectCandidate].filter((candidate, index, items): candidate is string =>
+    Boolean(candidate && items.indexOf(candidate) === index)
+  );
+  let lastError: unknown;
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Planner output was not valid JSON.");
+}
+
 export function summarizePlanDraft(plan: CodingPlan): string {
   const goals = plan.goals.slice(0, 4).map((goal) => `- ${goal}`).join("\n");
   const tasks = plan.tasks.slice(0, 6).map((task, index) => `${index + 1}. ${task.title}`).join("\n");
@@ -116,8 +173,21 @@ export class PlannerEngine {
       const cleaned = cleanJsonOutput(output);
       const envelopes = parseToolEnvelopes(cleaned).envelopes;
       if (envelopes.length === 0) {
-        const parsed = JSON.parse(cleaned);
-        return { kind: "planDraft", plan: codingPlanFromGeneratedJson(parsed) };
+        try {
+          const parsed = parsePlannerJsonOutput(cleaned);
+          return { kind: "planDraft", plan: codingPlanFromGeneratedJson(parsed) };
+        } catch (error) {
+          messages.push({ role: "assistant", content: cleaned });
+          messages.push({
+            role: "user",
+            content: [
+              `Planner JSON parse failed: ${error instanceof Error ? error.message : "invalid JSON"}.`,
+              "Return only one complete JSON object matching the planner schema.",
+              "Do not include Markdown fences, prose, patches, commands, or tool results.",
+            ].join("\n"),
+          });
+          continue;
+        }
       }
 
       const toolResults: Array<{ id: string; name: any; result: string }> = [];

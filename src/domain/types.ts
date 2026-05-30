@@ -98,6 +98,7 @@ export interface LayoutPreferences {
   density: DensityMode;
   settingsSection: string;
   composerPinned: boolean;
+  showAgentReasoning: boolean;
   projectRailWidth?: number;
   reviewDockWidth?: number;
 }

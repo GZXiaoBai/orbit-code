@@ -125,6 +125,7 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
           onAcceptPlanDraft={workspace.acceptPlanDraft}
           streamingContent={workspace.streamingContent}
           streamingActive={workspace.streamingActive}
+          showReasoningProcess={workspace.layoutPreferences.showAgentReasoning}
         />
       </div>
 

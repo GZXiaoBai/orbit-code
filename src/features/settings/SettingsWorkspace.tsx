@@ -395,6 +395,12 @@ export function SettingsWorkspace({
               checked={layoutPreferences.reviewDockVisible}
               onChange={(checked) => onUpdateLayoutPreferences({ reviewDockVisible: checked })}
             />
+            <ToggleRow
+              title={copy.settingsModal.showAgentReasoning}
+              description={copy.settingsModal.showAgentReasoningHelp}
+              checked={layoutPreferences.showAgentReasoning}
+              onChange={(checked) => onUpdateLayoutPreferences({ showAgentReasoning: checked })}
+            />
           </SettingsPage>
         ) : null}
 

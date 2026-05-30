@@ -633,6 +633,7 @@ export class BuildTurnRuntime {
     input.updateThreadEvent(eventId, (event) => event.status === "thinking"
       ? {
           ...event,
+          status: "done",
           message: summarized || displayContent.substring(0, 500) + (displayContent.length > 500 ? "..." : ""),
         }
       : event);

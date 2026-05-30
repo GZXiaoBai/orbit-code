@@ -25,6 +25,7 @@ interface AgentTimelineProps {
   onAcceptPlanDraft?: (eventId: string) => void;
   streamingContent?: string;
   streamingActive?: boolean;
+  showReasoningProcess?: boolean;
 }
 
 export function AgentTimeline({
@@ -45,6 +46,7 @@ export function AgentTimeline({
   onAcceptPlanDraft,
   streamingContent,
   streamingActive,
+  showReasoningProcess = true,
 }: AgentTimelineProps) {
   const hasActions = Boolean(
     onStartAgentLoop ||
@@ -55,7 +57,7 @@ export function AgentTimeline({
     streamingActive,
   );
   if (threadEvents.length === 0 && !hasActions) return null;
-  const visibleEvents = compactThreadEvents(threadEvents);
+  const visibleEvents = compactThreadEvents(threadEvents, showReasoningProcess);
   const hiddenCount = Math.max(0, threadEvents.length - visibleEvents.length);
   const localizedPhase = agentLoopPhase
     ? copy.workbench.agentPhases[agentLoopPhase as keyof typeof copy.workbench.agentPhases] || agentLoopPhase
@@ -89,7 +91,7 @@ export function AgentTimeline({
           copy={copy}
           actions={pendingActions}
         />
-        {streamingActive && (
+        {showReasoningProcess && streamingActive && (
           <div className="timeline-node message-stream-item message-assistant role-coder status-thinking">
             <article className="assistant-message">
               <div className="message-author">{copy.thread.thinking}</div>
@@ -312,6 +314,30 @@ function MessageBubble({
   label: string;
   isUser: boolean;
 }) {
+  if (event.kind === "reasoningSummary") {
+    return (
+      <article className="assistant-message reasoning-message">
+        <details open={event.status === "thinking"}>
+          <summary>
+            <span>{label}</span>
+            <small>{event.status === "thinking" ? (copy.language === "中" ? "进行中" : "running") : (copy.language === "中" ? "已折叠" : "collapsed")}</small>
+          </summary>
+          <div className="node-message">
+            <RichFileText
+              copy={copy}
+              text={compactRuntimeTextForTimeline(copy, event.message)}
+              workspacePath={event.workspacePath}
+              surface="timeline"
+            />
+          </div>
+        </details>
+        <footer className="message-meta">
+          <span>{event.timestamp}</span>
+        </footer>
+      </article>
+    );
+  }
+
   return (
     <article className={isUser ? "user-message" : "assistant-message"}>
       {!isUser ? <div className="message-author">{label}</div> : null}
@@ -384,6 +410,9 @@ function getThreadEventDisplay(copy: AppCopy, event: ThreadEvent): {
   if (event.kind === "userMessage") {
     return { variant: "user", label: copy.language === "中" ? "你" : "You", icon: <MessageSquare size={14} /> };
   }
+  if (event.kind === "reasoningSummary") {
+    return { variant: "assistant", label: getToolEventLabel(copy, event), icon: <Clock3 size={14} /> };
+  }
   if (["plan", "planDraft", "toolCall", "approval", "terminalRun", "error", "commandBegin", "commandEnd", "commandExecution", "approvalRequest", "approvalResult", "patchProposal", "question", "verification", "finalSummary", "contextCompaction", "modeSwitch", "toolDeniedByMode"].includes(event.kind)) {
     return {
       variant: "tool",
@@ -436,6 +465,9 @@ function getToolEventLabel(copy: AppCopy, event: ThreadEvent): string {
   if (event.kind === "contextCompaction") return isZh ? "上下文已压缩" : "Context compacted";
   if (event.kind === "modeSwitch") return isZh ? "模式切换" : "Mode switched";
   if (event.kind === "toolDeniedByMode") return isZh ? "模式已拒绝工具" : "Tool denied by mode";
+  if (event.kind === "reasoningSummary") return event.status === "thinking"
+    ? (isZh ? "Agent 正在思考" : "Agent reasoning")
+    : (isZh ? "思考过程" : "Reasoning");
   if (event.kind === "finalSummary") return isZh ? "最终总结" : "Final summary";
   if (/denied|拒绝/i.test(text)) return isZh ? "已拒绝" : "Denied";
   if (/granted|approved|批准|已批准/i.test(text)) return isZh ? "已批准" : "Approved";
@@ -486,8 +518,9 @@ function summarizeToolEvent(copy: AppCopy, event: ThreadEvent): string {
   return message;
 }
 
-function compactThreadEvents(events: ThreadEvent[]): ThreadEvent[] {
+function compactThreadEvents(events: ThreadEvent[], showReasoningProcess: boolean): ThreadEvent[] {
   const important = events.filter((event) => {
+    if (event.kind === "reasoningSummary") return showReasoningProcess;
     if (event.patches?.length) return true;
     if (["userMessage", "plan", "planDraft", "toolCall", "approval", "terminalRun", "error", "commandBegin", "commandEnd", "commandExecution", "approvalRequest", "approvalResult", "patchProposal", "question", "verification", "finalSummary", "contextCompaction", "modeSwitch", "toolDeniedByMode"].includes(event.kind)) return true;
     if (/final summary|最终总结|完成总结/i.test(`${event.title} ${event.message}`)) return true;

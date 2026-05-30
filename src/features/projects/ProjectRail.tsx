@@ -10,6 +10,7 @@ import { FileTree } from "./FileTree";
 import { openContextProjectMenu, toggleButtonProjectMenu } from "./projectMenuState";
 
 type WorkspaceState = ReturnType<typeof useWorkspace>;
+type ThreadMenuState = { threadId: string; left: number; top: number };
 
 interface ProjectRailProps {
   copy: AppCopy;
@@ -23,12 +24,12 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
   const [manualOpen, setManualOpen] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
   const [menuState, setMenuState] = useState<ProjectMenuState | null>(null);
-  const [threadMenuId, setThreadMenuId] = useState<string | null>(null);
+  const [threadMenuState, setThreadMenuState] = useState<ThreadMenuState | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
   const fileTree = useFileTree(workspace.workspaceRoot, workspace.workspaceFiles, workspace.activeFilePath);
 
   useEffect(() => {
-    if (!menuState && !threadMenuId) return;
+    if (!menuState && !threadMenuState) return;
 
     const closeOnOutside = (event: PointerEvent) => {
       const target = event.target as Element | null;
@@ -47,11 +48,11 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
       document.removeEventListener("pointerdown", closeOnOutside, true);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [menuState, threadMenuId]);
+  }, [menuState, threadMenuState]);
 
   const closeProjectMenu = () => {
     setMenuState(null);
-    setThreadMenuId(null);
+    setThreadMenuState(null);
   };
 
   const selectProject = async (workspacePath: string) => {
@@ -60,18 +61,28 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
   };
 
   const openButtonMenu = (workspacePath: string) => {
-    setThreadMenuId(null);
+    setThreadMenuState(null);
     setMenuState((current) => toggleButtonProjectMenu(current, workspacePath));
   };
 
   const openContextMenu = (workspacePath: string, x: number, y: number) => {
-    setThreadMenuId(null);
+    setThreadMenuState(null);
     setMenuState(openContextProjectMenu(workspacePath, x, y));
   };
 
-  const openThreadMenu = (threadId: string) => {
+  const openThreadMenu = (threadId: string, button: HTMLElement) => {
     setMenuState(null);
-    setThreadMenuId((current) => current === threadId ? null : threadId);
+    setThreadMenuState((current) => {
+      if (current?.threadId === threadId) return null;
+      const rect = button.getBoundingClientRect();
+      const menuWidth = 230;
+      const menuHeight = 220;
+      return {
+        threadId,
+        left: Math.max(8, Math.min(window.innerWidth - menuWidth - 8, rect.right - menuWidth)),
+        top: Math.max(8, Math.min(window.innerHeight - menuHeight - 8, rect.bottom + 6)),
+      };
+    });
   };
 
   const openFolder = async () => {
@@ -252,14 +263,19 @@ export function ProjectRail({ copy, workspace, onOpenSettings }: ProjectRailProp
                   type="button"
                   className="thread-row-more-button"
                   aria-label={copy.workbench.threadActions}
-                  aria-expanded={threadMenuId === thread.threadId}
+                  aria-expanded={threadMenuState?.threadId === thread.threadId}
                   data-thread-row-menu-trigger="true"
-                  onClick={() => openThreadMenu(thread.threadId)}
+                  onClick={(event) => openThreadMenu(thread.threadId, event.currentTarget)}
                 >
                   <MoreHorizontal size={13} />
                 </button>
-                {threadMenuId === thread.threadId ? (
-                  <div ref={menuRef} className="project-context-menu thread-row-menu" role="menu">
+                {threadMenuState?.threadId === thread.threadId ? (
+                  <div
+                    ref={menuRef}
+                    className="project-context-menu thread-row-menu"
+                    role="menu"
+                    style={{ left: threadMenuState.left, top: threadMenuState.top }}
+                  >
                     <button type="button" role="menuitem" onClick={() => { workspace.togglePinnedThreadById(thread.threadId); closeProjectMenu(); }}>
                       <Pin size={15} />
                       {thread.pinned ? copy.workbench.unpinThread : copy.workbench.pinThread}

@@ -8,6 +8,7 @@ describe("layout preferences", () => {
       reviewDockVisible: true,
       settingsSection: "general",
       composerPinned: true,
+      showAgentReasoning: true,
     });
   });
 });
