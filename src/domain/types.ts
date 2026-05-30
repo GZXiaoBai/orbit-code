@@ -92,6 +92,7 @@ export interface AdvancedSettings {
 }
 
 export type DensityMode = "comfortable" | "compact";
+export type ThinkingDisplayPreference = "expanded" | "collapsed" | "hidden";
 
 export interface LayoutPreferences {
   reviewDockVisible: boolean;
@@ -99,6 +100,7 @@ export interface LayoutPreferences {
   settingsSection: string;
   composerPinned: boolean;
   showAgentReasoning: boolean;
+  thinkingDisplayPreference: ThinkingDisplayPreference;
   projectRailWidth?: number;
   reviewDockWidth?: number;
 }

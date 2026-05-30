@@ -1,4 +1,5 @@
 import type { ActionRequiredEvent } from "../domain/actionRequired";
+import { restoreRuntimeMessages, serializeRuntimeMessages, type RuntimeMessage } from "../domain/runtimeMessages";
 import type { TerminalRun } from "../domain/terminalRun";
 import type { ThreadEvent } from "../domain/threadEvents";
 import { updateToolCallLifecycle, type ToolCallLifecycle } from "../domain/toolCallLifecycle";
@@ -14,6 +15,7 @@ export interface ThreadRuntimeSnapshot {
   actionRequired?: ActionRequiredEvent[] | null;
   toolCalls?: ToolCallLifecycle[] | null;
   terminalRuns?: TerminalRun[] | null;
+  runtimeMessages?: RuntimeMessage[] | null;
   checkpointRuntimeSnapshots?: Record<string, CheckpointRuntimeSnapshot> | null;
 }
 
@@ -22,6 +24,7 @@ export interface ThreadRuntimeState {
   actionRequired: ActionRequiredEvent[];
   toolCalls: ToolCallLifecycle[];
   terminalRuns: TerminalRun[];
+  runtimeMessages: RuntimeMessage[];
   checkpointRuntimeSnapshots: Record<string, CheckpointRuntimeSnapshot>;
 }
 
@@ -30,6 +33,7 @@ export interface RuntimeLedgerSnapshot {
   actionRequired: ActionRequiredEvent[];
   toolCalls: ToolCallLifecycle[];
   terminalRuns: TerminalRun[];
+  runtimeMessages: RuntimeMessage[];
   checkpoints: ThreadEvent[];
   checkpointRuntimeSnapshots: Record<string, CheckpointRuntimeSnapshot>;
 }
@@ -49,6 +53,9 @@ export type RuntimeLedgerAction =
   | { type: "updateToolCall"; id: string; update: Partial<ToolCallLifecycle> | ((call: ToolCallLifecycle) => ToolCallLifecycle) }
   | { type: "appendTerminalRun"; run: TerminalRun }
   | { type: "setTerminalRuns"; runs: TerminalRun[] }
+  | { type: "appendRuntimeMessage"; message: RuntimeMessage }
+  | { type: "setRuntimeMessages"; messages: RuntimeMessage[] }
+  | { type: "updateRuntimeMessage"; id: string; update: Partial<RuntimeMessage> | ((message: RuntimeMessage) => RuntimeMessage) }
   | { type: "saveCheckpointRuntimeSnapshot"; checkpoint: CheckpointRuntimeSnapshot }
   | { type: "setCheckpointRuntimeSnapshots"; snapshots: Record<string, CheckpointRuntimeSnapshot> };
 
@@ -74,6 +81,7 @@ export function runtimeLedgerReducer(
         actionRequired: state.actionRequired,
         toolCalls: state.toolCalls,
         terminalRuns: state.terminalRuns,
+        runtimeMessages: state.runtimeMessages,
         checkpointRuntimeSnapshots: state.checkpointRuntimeSnapshots,
       }).appendThreadEvent(action.event);
     case "setThreadEvents":
@@ -84,6 +92,7 @@ export function runtimeLedgerReducer(
         actionRequired: state.actionRequired,
         toolCalls: state.toolCalls,
         terminalRuns: state.terminalRuns,
+        runtimeMessages: state.runtimeMessages,
         checkpointRuntimeSnapshots: state.checkpointRuntimeSnapshots,
       }).updateThreadEvent(action.id, action.update);
     case "appendActionRequired":
@@ -92,6 +101,7 @@ export function runtimeLedgerReducer(
         actionRequired: state.actionRequired,
         toolCalls: state.toolCalls,
         terminalRuns: state.terminalRuns,
+        runtimeMessages: state.runtimeMessages,
         checkpointRuntimeSnapshots: state.checkpointRuntimeSnapshots,
       }).appendActionRequired(action.action);
     case "setActionRequired":
@@ -102,6 +112,7 @@ export function runtimeLedgerReducer(
         actionRequired: state.actionRequired,
         toolCalls: state.toolCalls,
         terminalRuns: state.terminalRuns,
+        runtimeMessages: state.runtimeMessages,
         checkpointRuntimeSnapshots: state.checkpointRuntimeSnapshots,
       }).resolveActionRequired(action.id, action.resolution);
     case "updateActionRequired":
@@ -110,6 +121,7 @@ export function runtimeLedgerReducer(
         actionRequired: state.actionRequired,
         toolCalls: state.toolCalls,
         terminalRuns: state.terminalRuns,
+        runtimeMessages: state.runtimeMessages,
         checkpointRuntimeSnapshots: state.checkpointRuntimeSnapshots,
       }).updateActionRequired(action.id, action.update);
     case "expireActionRequired":
@@ -118,6 +130,7 @@ export function runtimeLedgerReducer(
         actionRequired: state.actionRequired,
         toolCalls: state.toolCalls,
         terminalRuns: state.terminalRuns,
+        runtimeMessages: state.runtimeMessages,
         checkpointRuntimeSnapshots: state.checkpointRuntimeSnapshots,
       }).expireActionRequired(action.now);
     case "appendToolCall":
@@ -126,6 +139,7 @@ export function runtimeLedgerReducer(
         actionRequired: state.actionRequired,
         toolCalls: state.toolCalls,
         terminalRuns: state.terminalRuns,
+        runtimeMessages: state.runtimeMessages,
         checkpointRuntimeSnapshots: state.checkpointRuntimeSnapshots,
       }).appendToolCall(action.call);
     case "setToolCalls":
@@ -136,6 +150,7 @@ export function runtimeLedgerReducer(
         actionRequired: state.actionRequired,
         toolCalls: state.toolCalls,
         terminalRuns: state.terminalRuns,
+        runtimeMessages: state.runtimeMessages,
         checkpointRuntimeSnapshots: state.checkpointRuntimeSnapshots,
       }).updateToolCall(action.id, action.update);
     case "appendTerminalRun":
@@ -144,16 +159,38 @@ export function runtimeLedgerReducer(
         actionRequired: state.actionRequired,
         toolCalls: state.toolCalls,
         terminalRuns: state.terminalRuns,
+        runtimeMessages: state.runtimeMessages,
         checkpointRuntimeSnapshots: state.checkpointRuntimeSnapshots,
       }).appendTerminalRun(action.run);
     case "setTerminalRuns":
       return { ...state, terminalRuns: action.runs.map((run) => ({ ...run })) };
+    case "appendRuntimeMessage":
+      return new RuntimeLedger({
+        threadEvents: state.events,
+        actionRequired: state.actionRequired,
+        toolCalls: state.toolCalls,
+        terminalRuns: state.terminalRuns,
+        runtimeMessages: state.runtimeMessages,
+        checkpointRuntimeSnapshots: state.checkpointRuntimeSnapshots,
+      }).appendRuntimeMessage(action.message);
+    case "setRuntimeMessages":
+      return { ...state, runtimeMessages: serializeRuntimeMessages(action.messages) };
+    case "updateRuntimeMessage":
+      return new RuntimeLedger({
+        threadEvents: state.events,
+        actionRequired: state.actionRequired,
+        toolCalls: state.toolCalls,
+        terminalRuns: state.terminalRuns,
+        runtimeMessages: state.runtimeMessages,
+        checkpointRuntimeSnapshots: state.checkpointRuntimeSnapshots,
+      }).updateRuntimeMessage(action.id, action.update);
     case "saveCheckpointRuntimeSnapshot":
       return new RuntimeLedger({
         threadEvents: state.events,
         actionRequired: state.actionRequired,
         toolCalls: state.toolCalls,
         terminalRuns: state.terminalRuns,
+        runtimeMessages: state.runtimeMessages,
         checkpointRuntimeSnapshots: state.checkpointRuntimeSnapshots,
       }).saveCheckpointRuntimeSnapshot(action.checkpoint);
     case "setCheckpointRuntimeSnapshots":
@@ -172,6 +209,7 @@ export class RuntimeLedger {
       actionRequired: this.actionStore.snapshot(),
       toolCalls: (snapshot.toolCalls || []).map((call) => ({ ...call })),
       terminalRuns: (snapshot.terminalRuns || []).map((run) => ({ ...run })),
+      runtimeMessages: restoreRuntimeMessages({ messages: snapshot.runtimeMessages }),
       checkpointRuntimeSnapshots: { ...(snapshot.checkpointRuntimeSnapshots || {}) },
     };
   }
@@ -260,6 +298,28 @@ export class RuntimeLedger {
     return this.snapshot();
   }
 
+  appendRuntimeMessage(message: RuntimeMessage): ThreadRuntimeState {
+    const exists = this.state.runtimeMessages.some((item) => item.id === message.id);
+    this.state = {
+      ...this.state,
+      runtimeMessages: serializeRuntimeMessages(exists
+        ? this.state.runtimeMessages.map((item) => item.id === message.id ? message : item)
+        : [...this.state.runtimeMessages, message]),
+    };
+    return this.snapshot();
+  }
+
+  updateRuntimeMessage(id: string, update: Partial<RuntimeMessage> | ((message: RuntimeMessage) => RuntimeMessage)): ThreadRuntimeState {
+    this.state = {
+      ...this.state,
+      runtimeMessages: serializeRuntimeMessages(this.state.runtimeMessages.map((message) => {
+        if (message.id !== id) return message;
+        return typeof update === "function" ? update(message) : { ...message, ...update };
+      })),
+    };
+    return this.snapshot();
+  }
+
   saveCheckpointRuntimeSnapshot(input: CheckpointRuntimeSnapshot): ThreadRuntimeState {
     this.state = {
       ...this.state,
@@ -272,6 +332,7 @@ export class RuntimeLedger {
             actionRequired: input.runtimeLedgerSnapshot.actionRequired?.map((action) => ({ ...action })),
             toolCalls: input.runtimeLedgerSnapshot.toolCalls?.map((call) => ({ ...call })),
             terminalRuns: input.runtimeLedgerSnapshot.terminalRuns?.map((run) => ({ ...run })),
+            runtimeMessages: serializeRuntimeMessages(input.runtimeLedgerSnapshot.runtimeMessages || []),
           },
         },
       },
@@ -287,6 +348,7 @@ export class RuntimeLedger {
       toolCalls: snapshot.toolCalls,
       terminalRuns: snapshot.terminalRuns,
     };
+    if (snapshot.runtimeMessages.length > 0) serialized.runtimeMessages = snapshot.runtimeMessages;
     if (Object.keys(snapshot.checkpointRuntimeSnapshots).length > 0) {
       serialized.checkpointRuntimeSnapshots = snapshot.checkpointRuntimeSnapshots;
     }
@@ -343,6 +405,7 @@ export class RuntimeLedger {
       actionRequired: this.state.actionRequired.map((event) => ({ ...event })),
       toolCalls: this.state.toolCalls.map((call) => ({ ...call })),
       terminalRuns: this.state.terminalRuns.map((run) => ({ ...run })),
+      runtimeMessages: serializeRuntimeMessages(this.state.runtimeMessages),
       checkpointRuntimeSnapshots: { ...this.state.checkpointRuntimeSnapshots },
     };
   }
@@ -354,6 +417,7 @@ export class RuntimeLedger {
       actionRequired: snapshot.actionRequired,
       toolCalls: snapshot.toolCalls,
       terminalRuns: snapshot.terminalRuns,
+      runtimeMessages: snapshot.runtimeMessages,
       checkpoints: snapshot.events.filter((event) => event.kind === "checkpoint" || Boolean(event.checkpoint)),
       checkpointRuntimeSnapshots: snapshot.checkpointRuntimeSnapshots,
     };

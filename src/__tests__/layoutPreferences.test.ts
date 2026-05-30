@@ -9,6 +9,7 @@ describe("layout preferences", () => {
       settingsSection: "general",
       composerPinned: true,
       showAgentReasoning: true,
+      thinkingDisplayPreference: "expanded",
     });
   });
 });

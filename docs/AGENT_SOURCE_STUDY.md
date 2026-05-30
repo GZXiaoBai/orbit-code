@@ -52,6 +52,15 @@ The pieces Orbit must not copy directly are:
 - Added `PiToolExecutor` to enforce Plan/Build tool filtering and route executable tools through durable approval when a scheduler is present.
 - Added `PiPackageLoader` to parse Pi package manifests and convention directories without executing third-party extension code.
 
+2026-05-30 Pi SDK adapter spike:
+
+- Added `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` as guarded protocol dependencies, not as Orbit's core runtime.
+- Added `PiSdkAdapter` as the only allowed SDK import seam. It normalizes thinking/text/toolcall stream events, validates tool-call shape, and returns model-readable validation failures.
+- Kept SDK loading lazy so Pi's Node-heavy provider/runtime surface does not become a default UI execution path.
+- Added a RuntimeMessage-based center-thread selector so `thinking / text / toolCall / toolResult / finish / error` parts can drive the main thread projection before `ThreadEvent`.
+- Added a three-state thinking display preference: expanded by default, collapsed by default, or hidden. Finished assistant messages auto-collapse thinking.
+- Classified Pi extension resources as SDK-compatible but Orbit-blocked until a separate extension host can route all capabilities through `ActionRequired + PolicyEngine + Rust gateway`.
+
 ### 0.1. OpenCode Is A Useful But Secondary Runtime Spine Reference
 
 The local OpenCode repository is MIT licensed, but its README says it has been archived and continued as Charmbracelet Crush. Orbit should not directly fork this old codebase as its product foundation.

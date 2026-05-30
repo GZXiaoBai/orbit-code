@@ -30,6 +30,15 @@ describe("PiPackageLoader", () => {
       "theme:themes/dark.json",
     ]);
     expect(manifest.resources.find((resource) => resource.kind === "extension")?.executable).toBe(true);
+    expect(manifest.resources.find((resource) => resource.kind === "extension")).toMatchObject({
+      sdkCompatible: true,
+      orbitSupported: false,
+      blockedReason: expect.stringContaining("extension host"),
+    });
+    expect(manifest.resources.find((resource) => resource.kind === "skill")).toMatchObject({
+      sdkCompatible: true,
+      orbitSupported: true,
+    });
     expect(manifest.resources.find((resource) => resource.kind === "skill")?.executable).toBe(false);
   });
 

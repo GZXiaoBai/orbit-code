@@ -12,6 +12,7 @@ import {
   type ActionRequiredEvent,
 } from "../domain/actionRequired";
 import type { ToolParams } from "../domain/agentLoop";
+import { appendRuntimeMessagePart, createRuntimeMessage, finishRuntimeMessage, type RuntimeMessage } from "../domain/runtimeMessages";
 import type { PermissionAction, PermissionDecision, PermissionPreset, ProjectSecurityOverride } from "../domain/types";
 import { selectRunSteps } from "../domain/runSteps";
 import { selectPendingActions } from "../domain/threadEventSelectors";
@@ -98,6 +99,7 @@ interface ThreadSnapshot {
   actionRequired?: ActionRequiredEvent[];
   toolCalls?: ToolCallLifecycle[];
   terminalRuns?: TerminalRun[];
+  runtimeMessages?: RuntimeMessage[];
   runtimeLedgerSnapshot?: ThreadRuntimeSnapshot;
   checkpointRuntimeSnapshots?: Record<string, CheckpointRuntimeSnapshot>;
   updatedAt: string;
@@ -194,6 +196,7 @@ export function useWorkspace() {
   const threadEvents = runtimeState.events;
   const actionRequired = runtimeState.actionRequired;
   const toolCallLifecycles = runtimeState.toolCalls;
+  const runtimeMessages = runtimeState.runtimeMessages;
   const setThreadEvents = useCallback((next: SetStateAction<ThreadEvent[]>) => {
     dispatchRuntimeLedger({
       type: "setThreadEvents",
@@ -217,6 +220,12 @@ export function useWorkspace() {
         ? (next as (value: ToolCallLifecycle[]) => ToolCallLifecycle[])(toolCallLifecyclesRef.current)
         : next,
     });
+  }, []);
+  const appendRuntimeMessage = useCallback((message: RuntimeMessage) => {
+    dispatchRuntimeLedger({ type: "appendRuntimeMessage", message });
+  }, []);
+  const updateRuntimeMessage = useCallback((id: string, update: Partial<RuntimeMessage> | ((message: RuntimeMessage) => RuntimeMessage)) => {
+    dispatchRuntimeLedger({ type: "updateRuntimeMessage", id, update });
   }, []);
   const setRuntimeCheckpointSnapshots = useCallback((next: SetStateAction<Record<string, CheckpointRuntimeSnapshot>>) => {
     dispatchRuntimeLedger({
@@ -246,6 +255,7 @@ export function useWorkspace() {
   const agentRunSessionRef = useRef<AgentRunSession | null>(null);
   const actionRequiredRef = useRef<ActionRequiredEvent[]>([]);
   const terminalRunsRef = useRef<TerminalRun[]>([]);
+  const runtimeMessagesRef = useRef<RuntimeMessage[]>([]);
   const toolCallLifecyclesRef = useRef<ToolCallLifecycle[]>([]);
   const runtimeCheckpointSnapshotsRef = useRef<Record<string, CheckpointRuntimeSnapshot>>({});
   const [approvalGrants, setApprovalGrants] = useState<ApprovalGrant[]>([]);
@@ -257,6 +267,7 @@ export function useWorkspace() {
   useEffect(() => { threadEventsRef.current = threadEvents; }, [threadEvents]);
   useEffect(() => { actionRequiredRef.current = actionRequired; }, [actionRequired]);
   useEffect(() => { toolCallLifecyclesRef.current = toolCallLifecycles; }, [toolCallLifecycles]);
+  useEffect(() => { runtimeMessagesRef.current = runtimeMessages; }, [runtimeMessages]);
   useEffect(() => { runtimeCheckpointSnapshotsRef.current = runtimeState.checkpointRuntimeSnapshots; }, [runtimeState.checkpointRuntimeSnapshots]);
   useEffect(() => { isRealLLMActiveRef.current = session.isRealLLMActive; }, [session.isRealLLMActive]);
   useEffect(() => { activeLLMConfigRef.current = session.activeLLMConfig; }, [session.activeLLMConfig]);
@@ -753,8 +764,17 @@ export function useWorkspace() {
       return session.importPlan(trimmed, "composer-input.md");
     }
 
+    const now = Date.now();
+    appendRuntimeMessage(createRuntimeMessage({
+      id: `runtime-user-${now}`,
+      threadId: threadUi.threadId,
+      role: "user",
+      status: "completed",
+      parts: [{ type: "text", text: trimmed }],
+    }));
+
     emitWorkspaceEvent({
-      id: `plan-user-${Date.now()}`,
+      id: `plan-user-${now}`,
       kind: "userMessage",
       workspacePath: fs.workspaceRoot,
       threadId: threadUi.threadId,
@@ -811,6 +831,14 @@ export function useWorkspace() {
     try {
       const config = session.providerSettings.configs[providerId] || {};
       reasoningEventId = `plan-reasoning-${Date.now()}`;
+      const runtimeReasoningId = `runtime-${reasoningEventId}`;
+      appendRuntimeMessage(createRuntimeMessage({
+        id: runtimeReasoningId,
+        threadId: threadUi.threadId,
+        role: "assistant",
+        status: "streaming",
+        parts: [{ type: "thinking", text: "只读 Planner 已收到请求，正在准备收集项目上下文。" }],
+      }));
       emitWorkspaceEvent({
         id: reasoningEventId,
         kind: "reasoningSummary",
@@ -825,10 +853,18 @@ export function useWorkspace() {
         ...event,
         message: "只读 Planner 正在收集当前项目、规则、上下文和用户约束。",
       }));
+      updateRuntimeMessage(runtimeReasoningId, (message) => appendRuntimeMessagePart(message, {
+        type: "thinking",
+        text: "只读 Planner 正在收集当前项目、规则、上下文和用户约束。",
+      }));
       const runtimeContext = await collectRuntimeContext();
       updateThreadEvent(reasoningEventId, (event) => ({
         ...event,
         message: "只读 Planner 已收集上下文，正在请求模型生成计划草案。",
+      }));
+      updateRuntimeMessage(runtimeReasoningId, (message) => appendRuntimeMessagePart(message, {
+        type: "thinking",
+        text: "只读 Planner 已收集上下文，正在请求模型生成计划草案。",
       }));
       const result = await runPlannerTurn({
         providerId: providerId as LLMProvider,
@@ -837,11 +873,17 @@ export function useWorkspace() {
         reasoningEffort: runControls.selection.reasoningEffort,
         request: [runtimeContext, trimmed].filter(Boolean).join("\n\n---\n\n"),
         workspacePath: fs.workspaceRoot,
-        onStatus: (message) => updateThreadEvent(reasoningEventId, (event) => ({
-          ...event,
-          status: "thinking",
-          message,
-        })),
+        onStatus: (message) => {
+          updateThreadEvent(reasoningEventId, (event) => ({
+            ...event,
+            status: "thinking",
+            message,
+          }));
+          updateRuntimeMessage(runtimeReasoningId, (runtimeMessage) => appendRuntimeMessagePart(runtimeMessage, {
+            type: "thinking",
+            text: message,
+          }));
+        },
         onToolDeniedByMode: (tool) => emitWorkspaceEvent({
           id: `plan-mode-denied-${Date.now()}`,
           kind: "toolDeniedByMode",
@@ -867,6 +909,10 @@ export function useWorkspace() {
         status: "done",
         message: `只读 Planner 已完成：${summarizePlanDraft(planDraft)}`,
       }));
+      updateRuntimeMessage(runtimeReasoningId, (message) => finishRuntimeMessage(appendRuntimeMessagePart(message, {
+        type: "text",
+        text: summarizePlanDraft(planDraft),
+      })));
       emitWorkspaceEvent({
         id: `plan-draft-${Date.now()}`,
         kind: "planDraft",
@@ -910,7 +956,7 @@ export function useWorkspace() {
       });
       return false;
     }
-  }, [collectRuntimeContext, emitWorkspaceEvent, fs.workspaceRoot, runControls, session, threadUi.threadId, updateThreadEvent]);
+  }, [appendRuntimeMessage, collectRuntimeContext, emitWorkspaceEvent, fs.workspaceRoot, runControls, session, threadUi.threadId, updateRuntimeMessage, updateThreadEvent]);
 
   useEffect(() => {
     const title = session.importedPlan?.plan.title?.trim();
@@ -945,6 +991,7 @@ export function useWorkspace() {
           actionRequired: actionRequiredRef.current,
           toolCalls: toolCallLifecyclesRef.current,
           terminalRuns: terminalRunsRef.current,
+          runtimeMessages: runtimeMessagesRef.current,
           checkpointRuntimeSnapshots: runtimeState.checkpointRuntimeSnapshots,
         }).serializeSnapshot(),
         agentRunSession: agentRunSessionRef.current,
@@ -1400,6 +1447,7 @@ export function useWorkspace() {
         actionRequired: actionRequiredRef.current,
         toolCalls: toolCallLifecyclesRef.current,
         terminalRuns: terminalRunsRef.current,
+        runtimeMessages: runtimeMessagesRef.current,
       },
       agentRunSession: agentRunSessionRef.current || undefined,
       createdAt: new Date().toISOString(),
@@ -1437,8 +1485,9 @@ export function useWorkspace() {
     actionRequired,
     toolCalls: toolCallLifecycles,
     terminalRuns: runtimeState.terminalRuns,
+    runtimeMessages,
     checkpointRuntimeSnapshots: runtimeState.checkpointRuntimeSnapshots,
-  }).ledgerSnapshot(), [actionRequired, runtimeState.terminalRuns, runtimeState.checkpointRuntimeSnapshots, threadEvents, toolCallLifecycles]);
+  }).ledgerSnapshot(), [actionRequired, runtimeMessages, runtimeState.terminalRuns, runtimeState.checkpointRuntimeSnapshots, threadEvents, toolCallLifecycles]);
 
   const reviewDockModel = useMemo(() => buildReviewDockModel({
     ledger: runtimeLedgerSnapshot,
@@ -1639,6 +1688,7 @@ export function useWorkspace() {
       actionRequired: restored.ledger.actionRequired,
       toolCalls: restored.ledger.toolCalls,
       terminalRuns: restored.ledger.terminalRuns,
+      runtimeMessages: restored.ledger.runtimeMessages,
       checkpointRuntimeSnapshots: runtimeState.checkpointRuntimeSnapshots,
     });
     recoverTerminalRunsRef.current?.(restored.ledger.terminalRuns || [], true);
@@ -1688,6 +1738,7 @@ export function useWorkspace() {
           actionRequired,
           toolCalls: toolCallLifecycles,
           terminalRuns: runtimeState.terminalRuns,
+          runtimeMessages,
           checkpointRuntimeSnapshots: runtimeState.checkpointRuntimeSnapshots,
         }).serializeSnapshot(),
         agentRunSession: agentRun.agentRunSession,
@@ -1696,11 +1747,11 @@ export function useWorkspace() {
       }).catch(console.error);
     }, 2000);
     return () => clearTimeout(timer);
-  }, [session.importedPlan, session.providerSettings, threadEvents, actionRequired, agentRun.agentRunSession, toolCallLifecycles, runtimeState.terminalRuns, runtimeState.checkpointRuntimeSnapshots, approvalGrants, session.isLoading, threadUi.threadId]);
+  }, [session.importedPlan, session.providerSettings, threadEvents, actionRequired, agentRun.agentRunSession, toolCallLifecycles, runtimeMessages, runtimeState.terminalRuns, runtimeState.checkpointRuntimeSnapshots, approvalGrants, session.isLoading, threadUi.threadId]);
 
   useEffect(() => {
     persistCurrentThreadSnapshot();
-  }, [threadEvents, actionRequired, toolCallLifecycles, approvalGrants, runtimeState.terminalRuns, persistCurrentThreadSnapshot, session.importedPlan]);
+  }, [threadEvents, actionRequired, toolCallLifecycles, runtimeMessages, approvalGrants, runtimeState.terminalRuns, persistCurrentThreadSnapshot, session.importedPlan]);
 
   return {
     // From session
@@ -1749,6 +1800,7 @@ export function useWorkspace() {
     executeCommand: fs.executeCommand,
     // From useWorkspace
     threadEvents,
+    runtimeMessages,
     emitThreadEvent,
     updateThreadEvent,
     actionRequired,

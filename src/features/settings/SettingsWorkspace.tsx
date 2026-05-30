@@ -395,11 +395,18 @@ export function SettingsWorkspace({
               checked={layoutPreferences.reviewDockVisible}
               onChange={(checked) => onUpdateLayoutPreferences({ reviewDockVisible: checked })}
             />
-            <ToggleRow
-              title={copy.settingsModal.showAgentReasoning}
-              description={copy.settingsModal.showAgentReasoningHelp}
-              checked={layoutPreferences.showAgentReasoning}
-              onChange={(checked) => onUpdateLayoutPreferences({ showAgentReasoning: checked })}
+            <SelectSetting
+              label={copy.settingsModal.thinkingDisplay}
+              value={layoutPreferences.thinkingDisplayPreference}
+              options={[
+                { value: "expanded", label: copy.settingsModal.thinkingExpanded },
+                { value: "collapsed", label: copy.settingsModal.thinkingCollapsed },
+                { value: "hidden", label: copy.settingsModal.thinkingHidden },
+              ]}
+              onChange={(value) => onUpdateLayoutPreferences({
+                thinkingDisplayPreference: value as LayoutPreferences["thinkingDisplayPreference"],
+                showAgentReasoning: value !== "hidden",
+              })}
             />
           </SettingsPage>
         ) : null}

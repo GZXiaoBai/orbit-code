@@ -17,6 +17,9 @@ export interface PiPackageResource {
   source: string;
   enabled: boolean;
   executable: boolean;
+  sdkCompatible: boolean;
+  orbitSupported: boolean;
+  blockedReason?: string;
 }
 
 export interface PackageResourceManifest {
@@ -51,6 +54,11 @@ export class PiPackageLoader {
           source: input.source,
           enabled: input.enabled !== false,
           executable: kind === "extension",
+          sdkCompatible: true,
+          orbitSupported: kind !== "extension",
+          blockedReason: kind === "extension"
+            ? "Pi extensions are executable and require an Orbit extension host before they can run."
+            : undefined,
         });
       }
     }

@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { AgentLoopPhase, ToolCall } from "../../domain/agentLoop";
 import type { PendingAction } from "../../domain/threadEventSelectors";
 import type { ThreadEvent } from "../../domain/threadEvents";
+import type { RuntimeThreadViewModel } from "../../domain/runtimeThreadSelectors";
 import type { AppCopy } from "../../i18n/copy";
 import { compactRuntimeTextForTimeline, localizedAgentEventName } from "./agentDisplayText";
 import { RichFileText } from "./RichFileText";
@@ -10,6 +11,7 @@ import { RichFileText } from "./RichFileText";
 interface AgentTimelineProps {
   copy: AppCopy;
   threadEvents: ThreadEvent[];
+  runtimeThread?: RuntimeThreadViewModel;
   agentLoopPhase?: AgentLoopPhase;
   agentLoopRunning?: boolean;
   agentLoopToolCalls?: ToolCall[];
@@ -31,6 +33,7 @@ interface AgentTimelineProps {
 export function AgentTimeline({
   copy,
   threadEvents,
+  runtimeThread,
   agentLoopPhase,
   agentLoopRunning,
   agentLoopToolCalls = [],
@@ -56,8 +59,14 @@ export function AgentTimeline({
     agentLoopRunning ||
     streamingActive,
   );
-  if (threadEvents.length === 0 && !hasActions) return null;
-  const visibleEvents = compactThreadEvents(threadEvents, showReasoningProcess);
+  const hasRuntimeMessages = Boolean(runtimeThread?.messages.length);
+  if (threadEvents.length === 0 && !hasActions && !hasRuntimeMessages) return null;
+  const visibleEvents = compactThreadEvents(
+    hasRuntimeMessages
+      ? threadEvents.filter((event) => !["userMessage", "agentMessage", "reasoningSummary", "toolCall"].includes(event.kind))
+      : threadEvents,
+    showReasoningProcess,
+  );
   const hiddenCount = Math.max(0, threadEvents.length - visibleEvents.length);
   const localizedPhase = agentLoopPhase
     ? copy.workbench.agentPhases[agentLoopPhase as keyof typeof copy.workbench.agentPhases] || agentLoopPhase
@@ -72,6 +81,7 @@ export function AgentTimeline({
             {copy.language === "中" ? `已收起 ${hiddenCount} 条低优先级运行记录` : `${hiddenCount} low-priority run records hidden`}
           </div>
         ) : null}
+        {hasRuntimeMessages ? <RuntimeThreadMessages copy={copy} runtimeThread={runtimeThread!} /> : null}
         {visibleEvents.map((evt) => {
           const display = getThreadEventDisplay(copy, evt);
           return (
@@ -142,6 +152,59 @@ export function AgentTimeline({
         </div>
       </div>
     </section>
+  );
+}
+
+function RuntimeThreadMessages({ copy, runtimeThread }: { copy: AppCopy; runtimeThread: RuntimeThreadViewModel }) {
+  return (
+    <>
+      {runtimeThread.messages.map((message) => (
+        <div
+          key={message.id}
+          className={`timeline-node message-stream-item message-${message.role === "user" ? "user" : "assistant"} role-${message.role} status-${message.status === "streaming" ? "thinking" : "done"}`}
+        >
+          <article className={message.role === "user" ? "user-message" : "assistant-message"}>
+            <div className="message-author">{message.role === "user" ? (copy.language === "中" ? "你" : "You") : "Agent"}</div>
+            {message.parts.map((part, index) => {
+              if (part.type === "thinking" || part.type === "reasoning") {
+                const text = part.text;
+                if (!text) return null;
+                return (
+                  <details key={`${message.id}-thinking-${index}`} className="reasoning-message" open={part.type === "thinking" ? !part.collapsed : false}>
+                    <summary>
+                      <span>{copy.thread.thinking}</span>
+                      <small>{part.type === "thinking" && !part.collapsed ? (copy.language === "中" ? "进行中" : "running") : (copy.language === "中" ? "已折叠" : "collapsed")}</small>
+                    </summary>
+                    <div className="node-message">
+                      <RichFileText copy={copy} text={compactRuntimeTextForTimeline(copy, text, 1200)} surface="timeline" />
+                    </div>
+                  </details>
+                );
+              }
+              if (part.type === "text") {
+                return <div key={`${message.id}-text-${index}`} className="node-message"><RichFileText copy={copy} text={part.text} surface="timeline" /></div>;
+              }
+              if (part.type === "toolCall") {
+                return (
+                  <div key={`${message.id}-tool-${part.id}-${index}`} className="tool-event-row">
+                    <TerminalSquare size={14} />
+                    <strong>{String(part.name)}</strong>
+                    <span>{part.argsSummary}</span>
+                  </div>
+                );
+              }
+              if (part.type === "toolResult") {
+                return <div key={`${message.id}-result-${index}`} className="node-message tool-result-message">{compactRuntimeTextForTimeline(copy, part.content, 360)}</div>;
+              }
+              if (part.type === "error") {
+                return <div key={`${message.id}-error-${index}`} className="node-message timeline-error">{part.message}</div>;
+              }
+              return null;
+            })}
+          </article>
+        </div>
+      ))}
+    </>
   );
 }
 

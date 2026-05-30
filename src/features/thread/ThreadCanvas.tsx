@@ -3,6 +3,7 @@ import { useMemo, useState, type KeyboardEvent } from "react";
 import type { AppCopy } from "../../i18n/copy";
 import type { useWorkspace } from "../../state/useWorkspace";
 import { selectCenterTimeline } from "../../domain/threadEventSelectors";
+import { selectRuntimeThread } from "../../domain/runtimeThreadSelectors";
 import { Composer } from "../../components/Composer";
 import { AgentTimeline } from "../../components/thread/AgentTimeline";
 import { PlanSummary } from "../../components/thread/PlanSummary";
@@ -24,6 +25,12 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
   const isBuildMode = workspace.runControls.mode === "build";
   const title = workspace.threadUiState.title || plan?.title || copy.workbench.startEmptyTitle;
   const centerThreadEvents = useMemo(() => selectCenterTimeline(workspace.threadEvents), [workspace.threadEvents]);
+  const runtimeThread = useMemo(() => selectRuntimeThread(
+    workspace.runtimeMessages || [],
+    workspace.actionRequired,
+    [],
+    workspace.layoutPreferences.thinkingDisplayPreference,
+  ), [workspace.actionRequired, workspace.layoutPreferences.thinkingDisplayPreference, workspace.runtimeMessages]);
   const threadSummary = useMemo(() => {
     const taskCount = plan?.tasks.length || 0;
     return [
@@ -97,7 +104,7 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
       </header>
 
       <div className="thread-scroll">
-        {!plan && workspace.threadEvents.length === 0 ? (
+        {!plan && workspace.threadEvents.length === 0 && runtimeThread.messages.length === 0 ? (
           <EmptyState
             icon={<Bot size={24} />}
             title={copy.workbench.startEmptyTitle}
@@ -110,6 +117,7 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
         <AgentTimeline
           copy={copy}
           threadEvents={centerThreadEvents}
+          runtimeThread={runtimeThread}
           agentLoopPhase={workspace.agentLoopPhase}
           agentLoopRunning={workspace.agentLoopRunning}
           agentLoopToolCalls={workspace.agentLoopToolCalls}
