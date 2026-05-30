@@ -808,7 +808,6 @@ export function useWorkspace() {
     let reasoningEventId = "";
     try {
       const config = session.providerSettings.configs[providerId] || {};
-      const runtimeContext = await collectRuntimeContext();
       reasoningEventId = `plan-reasoning-${Date.now()}`;
       emitWorkspaceEvent({
         id: reasoningEventId,
@@ -818,8 +817,17 @@ export function useWorkspace() {
         role: "planner",
         title: "Plan Reasoning",
         status: "thinking",
-        message: "只读 Planner 正在审查项目上下文、约束和可行步骤。",
+        message: "只读 Planner 已收到请求，正在准备收集项目上下文。",
       });
+      updateThreadEvent(reasoningEventId, (event) => ({
+        ...event,
+        message: "只读 Planner 正在收集当前项目、规则、上下文和用户约束。",
+      }));
+      const runtimeContext = await collectRuntimeContext();
+      updateThreadEvent(reasoningEventId, (event) => ({
+        ...event,
+        message: "只读 Planner 已收集上下文，正在请求模型生成计划草案。",
+      }));
       const result = await runPlannerTurn({
         providerId: providerId as LLMProvider,
         model,
@@ -827,6 +835,11 @@ export function useWorkspace() {
         reasoningEffort: runControls.selection.reasoningEffort,
         request: [runtimeContext, trimmed].filter(Boolean).join("\n\n---\n\n"),
         workspacePath: fs.workspaceRoot,
+        onStatus: (message) => updateThreadEvent(reasoningEventId, (event) => ({
+          ...event,
+          status: "thinking",
+          message,
+        })),
         onToolDeniedByMode: (tool) => emitWorkspaceEvent({
           id: `plan-mode-denied-${Date.now()}`,
           kind: "toolDeniedByMode",

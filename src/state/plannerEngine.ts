@@ -14,6 +14,7 @@ export interface PlannerEngineInput {
   workspacePath?: string;
   onAskUser?: (question: string, params: ToolParams) => Promise<string | null>;
   onToolDeniedByMode?: (tool: string, params: ToolParams) => void;
+  onStatus?: (message: string) => void;
 }
 
 export type PlannerResult =
@@ -158,6 +159,7 @@ export class PlannerEngine {
     }];
 
     for (let iteration = 0; iteration < 6; iteration++) {
+      input.onStatus?.(`只读 Planner 正在调用模型生成计划草案（第 ${iteration + 1} 轮）。`);
       const userPrompt = messages
         .map((message) => `${message.role.toUpperCase()}:\n${message.content}`)
         .join("\n\n---\n\n");
@@ -170,6 +172,7 @@ export class PlannerEngine {
         undefined,
         options,
       );
+      input.onStatus?.("只读 Planner 正在解析模型输出。");
       const cleaned = cleanJsonOutput(output);
       const envelopes = parseToolEnvelopes(cleaned).envelopes;
       if (envelopes.length === 0) {
@@ -177,6 +180,7 @@ export class PlannerEngine {
           const parsed = parsePlannerJsonOutput(cleaned);
           return { kind: "planDraft", plan: codingPlanFromGeneratedJson(parsed) };
         } catch (error) {
+          input.onStatus?.("只读 Planner 输出不是完整 JSON，正在要求模型修复为严格计划格式。");
           messages.push({ role: "assistant", content: cleaned });
           messages.push({
             role: "user",
@@ -194,6 +198,7 @@ export class PlannerEngine {
       for (const [index, envelope] of envelopes.entries()) {
         const toolName = envelope.tool;
         if (!isToolAllowedInMode("plan", toolName as any)) {
+          input.onStatus?.(`Plan 模式拒绝了工具 ${toolName}，正在把拒绝结果交回模型。`);
           input.onToolDeniedByMode?.(toolName, envelope.params);
           toolResults.push({
             id: `planner-tool-${iteration}-${index}`,
@@ -208,6 +213,7 @@ export class PlannerEngine {
         }
         if (toolName === "ask_user") {
           const question = typeof envelope.params.question === "string" ? envelope.params.question : "Continue?";
+          input.onStatus?.(`只读 Planner 正在询问用户：${question}`);
           const answer = input.onAskUser ? await input.onAskUser(question, envelope.params) : null;
           toolResults.push({
             id: `planner-tool-${iteration}-${index}`,
@@ -217,6 +223,7 @@ export class PlannerEngine {
           continue;
         }
         const result = await executeToolCall(toolName as any, envelope.params, { workspacePath: input.workspacePath });
+        input.onStatus?.(`只读 Planner 已执行只读工具 ${toolName}，正在继续规划。`);
         toolResults.push({ id: `planner-tool-${iteration}-${index}`, name: toolName as any, result });
       }
       messages.push({ role: "assistant", content: cleaned });
