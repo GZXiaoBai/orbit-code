@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentEvent } from "../domain/agentEvents";
 import type { AgentRunSession } from "../domain/agentRunSession";
@@ -47,7 +47,12 @@ import { runPlannerTurn, summarizePlanDraft } from "./plannerEngine";
 import {
   restoreThreadEventStore,
 } from "./threadEventStore";
-import { RuntimeLedger, type CheckpointRuntimeSnapshot, type ThreadRuntimeSnapshot, type ThreadRuntimeState } from "./threadRuntimeStore";
+import {
+  RuntimeLedger,
+  runtimeLedgerReducer,
+  type CheckpointRuntimeSnapshot,
+  type ThreadRuntimeSnapshot,
+} from "./threadRuntimeStore";
 import { createDeepSeekSmokeRunRecord, type SmokeRunRecord } from "../runtime/deepSeekSmokeHarness";
 import { buildSessionBrowserModel } from "../domain/sessionBrowser";
 import { inferPermissionActions } from "../runtime/policyEngine";
@@ -184,33 +189,44 @@ async function readPackageScripts(workspacePath: string, cwd?: string): Promise<
 export function useWorkspace() {
   const session = useSession();
 
-  const [runtimeState, setRuntimeState] = useState<ThreadRuntimeState>(() => new RuntimeLedger().snapshot());
+  const [runtimeState, dispatchRuntimeLedger] = useReducer(runtimeLedgerReducer, undefined, () => new RuntimeLedger().snapshot());
   const threadEvents = runtimeState.events;
   const actionRequired = runtimeState.actionRequired;
   const toolCallLifecycles = runtimeState.toolCalls;
   const setThreadEvents = useCallback((next: SetStateAction<ThreadEvent[]>) => {
-    setRuntimeState((prev) => {
-      const events = typeof next === "function"
-        ? (next as (value: ThreadEvent[]) => ThreadEvent[])(prev.events)
-        : next;
-      return { ...prev, events };
+    dispatchRuntimeLedger({
+      type: "setThreadEvents",
+      events: typeof next === "function"
+        ? (next as (value: ThreadEvent[]) => ThreadEvent[])(threadEventsRef.current)
+        : next,
     });
   }, []);
   const setActionRequired = useCallback((next: SetStateAction<ActionRequiredEvent[]>) => {
-    setRuntimeState((prev) => {
-      const actions = typeof next === "function"
-        ? (next as (value: ActionRequiredEvent[]) => ActionRequiredEvent[])(prev.actionRequired)
-        : next;
-      return { ...prev, actionRequired: actions };
+    dispatchRuntimeLedger({
+      type: "setActionRequired",
+      actions: typeof next === "function"
+        ? (next as (value: ActionRequiredEvent[]) => ActionRequiredEvent[])(actionRequiredRef.current)
+        : next,
     });
   }, []);
   const setToolCallLifecycles = useCallback((next: SetStateAction<ToolCallLifecycle[]>) => {
-    setRuntimeState((prev) => {
-      const calls = typeof next === "function"
-        ? (next as (value: ToolCallLifecycle[]) => ToolCallLifecycle[])(prev.toolCalls)
-        : next;
-      return { ...prev, toolCalls: calls.map((call) => ({ ...call })) };
+    dispatchRuntimeLedger({
+      type: "setToolCalls",
+      calls: typeof next === "function"
+        ? (next as (value: ToolCallLifecycle[]) => ToolCallLifecycle[])(toolCallLifecyclesRef.current)
+        : next,
     });
+  }, []);
+  const setRuntimeCheckpointSnapshots = useCallback((next: SetStateAction<Record<string, CheckpointRuntimeSnapshot>>) => {
+    dispatchRuntimeLedger({
+      type: "setCheckpointRuntimeSnapshots",
+      snapshots: typeof next === "function"
+        ? (next as (value: Record<string, CheckpointRuntimeSnapshot>) => Record<string, CheckpointRuntimeSnapshot>)(runtimeCheckpointSnapshotsRef.current)
+        : next,
+    });
+  }, []);
+  const replaceRuntimeLedgerSnapshot = useCallback((snapshot: ThreadRuntimeSnapshot) => {
+    dispatchRuntimeLedger({ type: "replace", snapshot });
   }, []);
   const [currentContextInspector, setCurrentContextInspector] = useState<ContextInspectorModel>(() => emptyContextInspector());
   const [healingAttempts, setHealingAttempts] = useState<Record<string, number>>({});
@@ -230,6 +246,7 @@ export function useWorkspace() {
   const actionRequiredRef = useRef<ActionRequiredEvent[]>([]);
   const terminalRunsRef = useRef<TerminalRun[]>([]);
   const toolCallLifecyclesRef = useRef<ToolCallLifecycle[]>([]);
+  const runtimeCheckpointSnapshotsRef = useRef<Record<string, CheckpointRuntimeSnapshot>>({});
   const [approvalGrants, setApprovalGrants] = useState<ApprovalGrant[]>([]);
   const resumeController = useMemo(() => new ResumeController(), []);
   const checkpointRestoreController = useMemo(() => new CheckpointRestoreController(), []);
@@ -238,6 +255,7 @@ export function useWorkspace() {
   useEffect(() => { threadEventsRef.current = threadEvents; }, [threadEvents]);
   useEffect(() => { actionRequiredRef.current = actionRequired; }, [actionRequired]);
   useEffect(() => { toolCallLifecyclesRef.current = toolCallLifecycles; }, [toolCallLifecycles]);
+  useEffect(() => { runtimeCheckpointSnapshotsRef.current = runtimeState.checkpointRuntimeSnapshots; }, [runtimeState.checkpointRuntimeSnapshots]);
   useEffect(() => { isRealLLMActiveRef.current = session.isRealLLMActive; }, [session.isRealLLMActive]);
   useEffect(() => { activeLLMConfigRef.current = session.activeLLMConfig; }, [session.activeLLMConfig]);
   useEffect(() => { healingAttemptsRef.current = healingAttempts; }, [healingAttempts]);
@@ -247,7 +265,9 @@ export function useWorkspace() {
   const actionRequiredController = useActionRequiredController({
     getThreadEvents: getRuntimeThreadEvents,
     getActions: getRuntimeActions,
-    setActions: setActionRequired,
+    appendAction: (action) => dispatchRuntimeLedger({ type: "appendActionRequired", action }),
+    updateAction: (id, action) => dispatchRuntimeLedger({ type: "updateActionRequired", id, update: action }),
+    setActions: (actions) => dispatchRuntimeLedger({ type: "setActionRequired", actions }),
   });
 
   useEffect(() => {
@@ -259,6 +279,11 @@ export function useWorkspace() {
 
   useEffect(() => {
     if (restoredInitialSessionEventsRef.current) return;
+    if (session.loadedRuntimeLedgerSnapshot && threadEvents.length === 0 && actionRequired.length === 0 && toolCallLifecycles.length === 0) {
+      restoredInitialSessionEventsRef.current = true;
+      replaceRuntimeLedgerSnapshot(session.loadedRuntimeLedgerSnapshot);
+      return;
+    }
     if (session.loadedThreadEvents && session.loadedThreadEvents.length > 0 && threadEvents.length === 0) {
       restoredInitialSessionEventsRef.current = true;
       setThreadEvents(restoreThreadEventStore({ threadEvents: session.loadedThreadEvents }));
@@ -268,68 +293,42 @@ export function useWorkspace() {
       restoredInitialSessionEventsRef.current = true;
       setThreadEvents(restoreThreadEventStore({ agentEvents: session.loadedAgentEvents as AgentEvent[] }));
     }
-  }, [session.loadedAgentEvents, session.loadedThreadEvents, threadEvents.length]);
+  }, [actionRequired.length, replaceRuntimeLedgerSnapshot, session.loadedAgentEvents, session.loadedRuntimeLedgerSnapshot, session.loadedThreadEvents, threadEvents.length, toolCallLifecycles.length]);
 
   const emitThreadEvent = useCallback((event: ThreadEvent) => {
-    setThreadEvents((prev) => new RuntimeLedger({
-      threadEvents: prev,
-      actionRequired: actionRequiredRef.current,
-    }).appendThreadEvent(event).events);
+    dispatchRuntimeLedger({ type: "appendThreadEvent", event });
   }, []);
 
   const emitWorkspaceEvent = useCallback((event: CreateThreadEventInput) => {
-    setThreadEvents((prev) => new RuntimeLedger({
-      threadEvents: prev,
-      actionRequired: actionRequiredRef.current,
-    }).appendThreadEvent(createThreadEvent(event)).events);
+    dispatchRuntimeLedger({ type: "appendThreadEvent", event: createThreadEvent(event) });
   }, []);
 
   const updateThreadEvent = useCallback((id: string, update: Partial<ThreadEvent> | ((event: ThreadEvent) => ThreadEvent)) => {
-    setThreadEvents((prev) => new RuntimeLedger({
-      threadEvents: prev,
-      actionRequired: actionRequiredRef.current,
-    }).updateThreadEvent(id, update).events);
+    dispatchRuntimeLedger({ type: "updateThreadEvent", id, update });
   }, []);
 
   const appendPatchReviewAction = useCallback((event: ThreadEvent) => {
     if (!event.patches?.some((patch) => !patch.applied)) return;
-    setActionRequired((prev) => {
-      if (prev.some((action) => action.sourceEventId === event.id || action.id === `patch-review-${event.id}`)) return prev;
-      return new RuntimeLedger({
-        threadEvents: threadEventsRef.current,
-        actionRequired: prev,
-      }).appendActionRequired(createActionRequiredEvent({
-        id: `patch-review-${event.id}`,
-        kind: "patchReview",
-        sourceEventId: event.id,
-        workspacePath: event.workspacePath,
-        threadId: event.threadId,
-        taskId: event.taskId,
-        runSessionId: event.runSessionId,
-        title: "Patch Review",
-        description: event.patches?.map((patch) => patch.path).join(", ") || event.message,
-      })).actionRequired;
-    });
+    if (actionRequiredRef.current.some((action) => action.sourceEventId === event.id || action.id === `patch-review-${event.id}`)) return;
+    dispatchRuntimeLedger({ type: "appendActionRequired", action: createActionRequiredEvent({
+      id: `patch-review-${event.id}`,
+      kind: "patchReview",
+      sourceEventId: event.id,
+      workspacePath: event.workspacePath,
+      threadId: event.threadId,
+      taskId: event.taskId,
+      runSessionId: event.runSessionId,
+      title: "Patch Review",
+      description: event.patches?.map((patch) => patch.path).join(", ") || event.message,
+    }) });
   }, []);
 
   const appendToolCallLifecycle = useCallback((call: ToolCallLifecycle) => {
-    setRuntimeState((prev) => new RuntimeLedger({
-      threadEvents: prev.events,
-      actionRequired: prev.actionRequired,
-      toolCalls: prev.toolCalls,
-      terminalRuns: prev.terminalRuns,
-      checkpointRuntimeSnapshots: prev.checkpointRuntimeSnapshots,
-    }).appendToolCall(call));
+    dispatchRuntimeLedger({ type: "appendToolCall", call });
   }, []);
 
   const updateToolCallLifecycle = useCallback((id: string, update: Partial<ToolCallLifecycle> | ((call: ToolCallLifecycle) => ToolCallLifecycle)) => {
-    setRuntimeState((prev) => new RuntimeLedger({
-      threadEvents: prev.events,
-      actionRequired: prev.actionRequired,
-      toolCalls: prev.toolCalls,
-      terminalRuns: prev.terminalRuns,
-      checkpointRuntimeSnapshots: prev.checkpointRuntimeSnapshots,
-    }).updateToolCall(id, update));
+    dispatchRuntimeLedger({ type: "updateToolCall", id, update });
   }, []);
 
   const recoverToolCallLifecycles = useCallback((calls: ToolCallLifecycle[] = [], replace = true) => {
@@ -391,26 +390,19 @@ export function useWorkspace() {
     const existingSources = new Set(actionRequired.map((action) => action.sourceEventId).filter(Boolean));
     const missing = pendingPatchEvents.filter((event) => !existingSources.has(event.id));
     if (missing.length === 0) return;
-    setActionRequired((prev) => {
-      let next = prev;
-      for (const event of missing) {
-        next = new RuntimeLedger({
-          threadEvents,
-          actionRequired: next,
-        }).appendActionRequired(createActionRequiredEvent({
-          id: `patch-review-${event.id}`,
-          kind: "patchReview",
-          sourceEventId: event.id,
-          workspacePath: event.workspacePath,
-          threadId: event.threadId,
-          taskId: event.taskId,
-          runSessionId: event.runSessionId,
-          title: "Patch Review",
-          description: event.patches?.map((patch) => patch.path).join(", ") || event.message,
-        })).actionRequired;
-      }
-      return next;
-    });
+    for (const event of missing) {
+      dispatchRuntimeLedger({ type: "appendActionRequired", action: createActionRequiredEvent({
+        id: `patch-review-${event.id}`,
+        kind: "patchReview",
+        sourceEventId: event.id,
+        workspacePath: event.workspacePath,
+        threadId: event.threadId,
+        taskId: event.taskId,
+        runSessionId: event.runSessionId,
+        title: "Patch Review",
+        description: event.patches?.map((patch) => patch.path).join(", ") || event.message,
+      }) });
+    }
   }, [actionRequired, threadEvents]);
 
   useEffect(() => {
@@ -420,19 +412,12 @@ export function useWorkspace() {
       return Boolean(event?.patches?.length && event.patches.every((patch) => patch.applied));
     });
     if (completedPatchActions.length === 0) return;
-    setActionRequired((prev) => {
-      let next = prev;
-      for (const action of completedPatchActions) {
-        next = new RuntimeLedger({
-          threadEvents,
-          actionRequired: next,
-        }).resolveActionRequired(action.id, {
-          status: "approved",
-          toolResultText: `Patch review approved and applied for ${action.sourceEventId}.`,
-        }).actionRequired;
-      }
-      return next;
-    });
+    for (const action of completedPatchActions) {
+      dispatchRuntimeLedger({ type: "resolveActionRequired", id: action.id, resolution: {
+        status: "approved",
+        toolResultText: `Patch review approved and applied for ${action.sourceEventId}.`,
+      } });
+    }
   }, [actionRequired, threadEvents]);
 
   useEffect(() => {
@@ -444,12 +429,9 @@ export function useWorkspace() {
   useEffect(() => {
     const snapshots = session.loadedRuntimeLedgerSnapshot?.checkpointRuntimeSnapshots;
     if (!snapshots || Object.keys(snapshots).length === 0) return;
-    setRuntimeState((prev) => ({
+    setRuntimeCheckpointSnapshots((prev) => ({
+      ...snapshots,
       ...prev,
-      checkpointRuntimeSnapshots: {
-        ...snapshots,
-        ...prev.checkpointRuntimeSnapshots,
-      },
     }));
   }, [session.loadedRuntimeLedgerSnapshot?.checkpointRuntimeSnapshots]);
 
@@ -915,13 +897,8 @@ export function useWorkspace() {
           terminalRuns: terminalRunsRef.current,
           checkpointRuntimeSnapshots: runtimeState.checkpointRuntimeSnapshots,
         }).serializeSnapshot(),
-        threadEvents: serializeThreadEvents(threadEventsRef.current),
         agentRunSession: agentRunSessionRef.current,
         approvalGrants: persistableApprovalGrants(approvalGrants),
-        actionRequired: actionRequiredRef.current,
-        toolCalls: toolCallLifecyclesRef.current,
-        terminalRuns: terminalRunsRef.current,
-        checkpointRuntimeSnapshots: runtimeState.checkpointRuntimeSnapshots,
         updatedAt: new Date().toISOString(),
       },
     }));
@@ -954,10 +931,7 @@ export function useWorkspace() {
     ]));
     recoverTerminalRunsRef.current?.(restoredSession.ledger.terminalRuns.length > 0 ? restoredSession.ledger.terminalRuns : snapshot?.terminalRuns || [], true);
     recoverToolCallLifecycles(restoredSession.ledger.toolCalls.length > 0 ? restoredSession.ledger.toolCalls : snapshot?.toolCalls || [], true);
-    setRuntimeState((prev) => ({
-      ...prev,
-      checkpointRuntimeSnapshots: runtimeSnapshot?.checkpointRuntimeSnapshots || snapshot?.checkpointRuntimeSnapshots || {},
-    }));
+    setRuntimeCheckpointSnapshots(runtimeSnapshot?.checkpointRuntimeSnapshots || snapshot?.checkpointRuntimeSnapshots || {});
     recoverAgentRunSessionRef.current?.(snapshot?.agentRunSession ?? null);
   }, [cancelRuntimeActionsByKind, recoverToolCallLifecycles, session, sessionRestoreController, threadSnapshots]);
 
@@ -972,7 +946,7 @@ export function useWorkspace() {
     recoverAgentRunSessionRef.current?.(null);
     session.restoreImportedPlan(null);
     setThreadEvents([]);
-    setRuntimeState((prev) => ({ ...prev, checkpointRuntimeSnapshots: {} }));
+    setRuntimeCheckpointSnapshots({});
     return nextThreadId;
   }, [cancelRuntimeActionsByKind, persistCurrentThreadSnapshot, recoverToolCallLifecycles, session, threadUi]);
 
@@ -1115,16 +1089,10 @@ export function useWorkspace() {
     projectOverride: projectSecurityOverride,
     approvalGrants,
     onActionCreated: (action) => {
-      setActionRequired((prev) => new RuntimeLedger({
-        threadEvents: threadEventsRef.current,
-        actionRequired: prev.filter((item) => item.id !== action.id),
-      }).appendActionRequired(action).actionRequired);
+      dispatchRuntimeLedger({ type: "appendActionRequired", action });
     },
     onActionResolved: (action) => {
-      setActionRequired((prev) => new RuntimeLedger({
-        threadEvents: threadEventsRef.current,
-        actionRequired: prev,
-      }).updateActionRequired(action.id, action).actionRequired);
+      dispatchRuntimeLedger({ type: "updateActionRequired", id: action.id, update: action });
     },
     onCreated: (request) => onCreated?.(request),
   }), [
@@ -1350,7 +1318,10 @@ export function useWorkspace() {
     initialAgentRunSession: session.loadedAgentRunSession,
   });
 
-  useEffect(() => { terminalRunsRef.current = fs.terminalRuns; }, [fs.terminalRuns]);
+  useEffect(() => {
+    dispatchRuntimeLedger({ type: "setTerminalRuns", runs: fs.terminalRuns });
+  }, [fs.terminalRuns]);
+  useEffect(() => { terminalRunsRef.current = runtimeState.terminalRuns; }, [runtimeState.terminalRuns]);
   useEffect(() => { agentRunSessionRef.current = agentRun.agentRunSession; }, [agentRun.agentRunSession]);
 
   useEffect(() => {
@@ -1370,25 +1341,19 @@ export function useWorkspace() {
   }, [agentRun.markVerificationCompletedForContinue]);
 
   const saveCheckpointRuntimeSnapshot = useCallback((checkpointId: string, event: ThreadEvent) => {
-    setRuntimeState((prev) => new RuntimeLedger({
-      threadEvents: prev.events,
-      actionRequired: prev.actionRequired,
-      toolCalls: prev.toolCalls,
-      terminalRuns: terminalRunsRef.current,
-      checkpointRuntimeSnapshots: prev.checkpointRuntimeSnapshots,
-    }).saveCheckpointRuntimeSnapshot({
+    dispatchRuntimeLedger({ type: "saveCheckpointRuntimeSnapshot", checkpoint: {
       checkpointId,
       threadId: event.threadId || threadUi.threadId,
       workspacePath: event.workspacePath || fs.workspaceRoot,
       runtimeLedgerSnapshot: {
-        threadEvents: serializeThreadEvents(prev.events),
-        actionRequired: prev.actionRequired,
-        toolCalls: prev.toolCalls,
+        threadEvents: serializeThreadEvents(threadEventsRef.current),
+        actionRequired: actionRequiredRef.current,
+        toolCalls: toolCallLifecyclesRef.current,
         terminalRuns: terminalRunsRef.current,
       },
       agentRunSession: agentRunSessionRef.current || undefined,
       createdAt: new Date().toISOString(),
-    }));
+    } });
   }, [fs.workspaceRoot, threadUi.threadId]);
 
   const patchWorkflow = usePatchWorkflow({
@@ -1421,9 +1386,9 @@ export function useWorkspace() {
     threadEvents,
     actionRequired,
     toolCalls: toolCallLifecycles,
-    terminalRuns: fs.terminalRuns,
+    terminalRuns: runtimeState.terminalRuns,
     checkpointRuntimeSnapshots: runtimeState.checkpointRuntimeSnapshots,
-  }).ledgerSnapshot(), [actionRequired, fs.terminalRuns, runtimeState.checkpointRuntimeSnapshots, threadEvents, toolCallLifecycles]);
+  }).ledgerSnapshot(), [actionRequired, runtimeState.terminalRuns, runtimeState.checkpointRuntimeSnapshots, threadEvents, toolCallLifecycles]);
 
   const reviewDockModel = useMemo(() => buildReviewDockModel({
     ledger: runtimeLedgerSnapshot,
@@ -1555,10 +1520,7 @@ export function useWorkspace() {
   }, [actionRequiredController, agentRun, emitWorkspaceEvent, fs.workspaceRoot, threadUi.threadId]);
 
   const updateActionRequiredGrantScope = useCallback((id: string, grantScope: "once" | "session" | "project") => {
-    setActionRequired((prev) => new RuntimeLedger({
-      threadEvents: threadEventsRef.current,
-      actionRequired: prev,
-    }).updateActionRequired(id, { grantScope }).actionRequired);
+    dispatchRuntimeLedger({ type: "updateActionRequired", id, update: { grantScope } });
   }, []);
 
   const revokeApprovalGrant = useCallback((id: string) => {
@@ -1580,8 +1542,8 @@ export function useWorkspace() {
       fallbackWorkspacePath: fs.workspaceRoot,
       fallbackThreadId: threadUi.threadId,
     });
-    setRuntimeState({
-      events: serializeThreadEvents(restored.ledger.threadEvents),
+    replaceRuntimeLedgerSnapshot({
+      threadEvents: serializeThreadEvents(restored.ledger.threadEvents),
       actionRequired: restored.ledger.actionRequired,
       toolCalls: restored.ledger.toolCalls,
       terminalRuns: restored.ledger.terminalRuns,
@@ -1633,7 +1595,7 @@ export function useWorkspace() {
           threadEvents: serializeThreadEvents(threadEvents),
           actionRequired,
           toolCalls: toolCallLifecycles,
-          terminalRuns: fs.terminalRuns,
+          terminalRuns: runtimeState.terminalRuns,
           checkpointRuntimeSnapshots: runtimeState.checkpointRuntimeSnapshots,
         }).serializeSnapshot(),
         agentRunSession: agentRun.agentRunSession,
@@ -1642,11 +1604,11 @@ export function useWorkspace() {
       }).catch(console.error);
     }, 2000);
     return () => clearTimeout(timer);
-  }, [session.importedPlan, session.providerSettings, threadEvents, actionRequired, agentRun.agentRunSession, toolCallLifecycles, runtimeState.checkpointRuntimeSnapshots, approvalGrants, fs.terminalRuns, session.isLoading, threadUi.threadId]);
+  }, [session.importedPlan, session.providerSettings, threadEvents, actionRequired, agentRun.agentRunSession, toolCallLifecycles, runtimeState.terminalRuns, runtimeState.checkpointRuntimeSnapshots, approvalGrants, session.isLoading, threadUi.threadId]);
 
   useEffect(() => {
     persistCurrentThreadSnapshot();
-  }, [threadEvents, actionRequired, toolCallLifecycles, approvalGrants, fs.terminalRuns, persistCurrentThreadSnapshot, session.importedPlan]);
+  }, [threadEvents, actionRequired, toolCallLifecycles, approvalGrants, runtimeState.terminalRuns, persistCurrentThreadSnapshot, session.importedPlan]);
 
   return {
     // From session
@@ -1687,7 +1649,7 @@ export function useWorkspace() {
     activeFilePath: fs.activeFilePath,
     activeFileContent: fs.activeFileContent,
     terminalLogs: fs.terminalLogs,
-    terminalRuns: fs.terminalRuns,
+    terminalRuns: runtimeState.terminalRuns,
     commandStatus: fs.commandStatus,
     viewFile: fs.viewFile,
     setWorkspaceRoot,
@@ -1755,7 +1717,7 @@ export function useWorkspace() {
     layoutPreferences: layout.layoutPreferences,
     updateLayoutPreferences: layout.updateLayoutPreferences,
     toggleReviewDock: layout.toggleReviewDock,
-    usageSnapshot: buildUsageSnapshot(fs.terminalRuns),
+    usageSnapshot: buildUsageSnapshot(runtimeState.terminalRuns),
     threadId: threadUi.threadId,
     threadUiState: threadUi.threadUiState,
     threadList: threadUi.threadList,

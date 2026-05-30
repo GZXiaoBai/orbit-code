@@ -1,4 +1,4 @@
-import { useCallback, useRef, type SetStateAction } from "react";
+import { useCallback, useRef } from "react";
 import {
   actionRequiredResolution,
   createActionRequiredEvent,
@@ -28,30 +28,38 @@ export interface ActionRequiredController {
 export interface ActionRequiredControllerOptions {
   getThreadEvents: () => ThreadEvent[];
   getActions: () => ActionRequiredEvent[];
-  setActions: (next: SetStateAction<ActionRequiredEvent[]>) => void;
+  appendAction: (action: ActionRequiredEvent) => void;
+  updateAction: (id: string, action: ActionRequiredEvent) => void;
+  setActions: (next: ActionRequiredEvent[]) => void;
 }
 
-export function useActionRequiredController({
-  getThreadEvents,
-  getActions,
-  setActions,
-}: ActionRequiredControllerOptions): ActionRequiredController {
-  const resolversRef = useRef(new Map<string, (resolution: ActionRequiredResolution) => void>());
+export interface ActionRequiredControllerCoreOptions {
+  getThreadEvents: () => ThreadEvent[];
+  getActions: () => ActionRequiredEvent[];
+  appendAction: (action: ActionRequiredEvent) => void;
+  updateAction: (id: string, action: ActionRequiredEvent) => void;
+  setActions: (next: ActionRequiredEvent[]) => void;
+  resolvers?: Map<string, (resolution: ActionRequiredResolution) => void>;
+}
 
-  const request = useCallback((input: ActionRequiredRequestInput) => {
+export class ActionRequiredControllerCore implements ActionRequiredController {
+  private resolvers: Map<string, (resolution: ActionRequiredResolution) => void>;
+
+  constructor(private readonly options: ActionRequiredControllerCoreOptions) {
+    this.resolvers = options.resolvers || new Map();
+  }
+
+  request(input: ActionRequiredRequestInput): Promise<ActionRequiredResolution> {
     const action = createActionRequiredEvent(input);
-    setActions((prev) => new RuntimeLedger({
-      threadEvents: getThreadEvents(),
-      actionRequired: prev.filter((item) => item.id !== action.id),
-    }).appendActionRequired(action).actionRequired);
+    this.options.appendAction(action);
 
     return new Promise<ActionRequiredResolution>((resolve) => {
-      resolversRef.current.set(action.id, resolve);
+      this.resolvers.set(action.id, resolve);
     });
-  }, [getThreadEvents, setActions]);
+  }
 
-  const resolve = useCallback((id: string, resolution: ActionResolution): ActionRequiredResolution => {
-    const current = getActions().find((action) => action.id === id);
+  resolve(id: string, resolution: ActionResolution): ActionRequiredResolution {
+    const current = this.options.getActions().find((action) => action.id === id);
     const resolved = current
       ? resolveActionRequiredEvent(current, resolution)
       : createActionRequiredEvent({
@@ -62,40 +70,97 @@ export function useActionRequiredController({
         status: resolution.status || (resolution.approved === false ? "denied" : "resolved"),
         toolResultText: resolution.toolResultText,
       });
-    const liveResolver = resolversRef.current.get(id);
+    const liveResolver = this.resolvers.get(id);
     const result = {
       ...actionRequiredResolution(resolved),
       hadLiveResolver: Boolean(liveResolver),
     };
-    setActions((prev) => new RuntimeLedger({
-      threadEvents: getThreadEvents(),
-      actionRequired: prev,
-    }).updateActionRequired(id, resolved).actionRequired);
+    if (current) {
+      this.options.updateAction(id, resolved);
+    } else {
+      this.options.appendAction(resolved);
+    }
 
     if (liveResolver) {
       liveResolver(result);
-      resolversRef.current.delete(id);
+      this.resolvers.delete(id);
     }
     return result;
-  }, [getActions, getThreadEvents, setActions]);
+  }
+
+  cancel(id: string, reason = "User cancelled this action."): ActionRequiredResolution {
+    return this.resolve(id, { status: "cancelled", reason });
+  }
+
+  expire(now?: string): ActionRequiredEvent[] {
+    const next = new RuntimeLedger({
+      threadEvents: this.options.getThreadEvents(),
+      actionRequired: this.options.getActions(),
+    }).expireActionRequired(now).actionRequired;
+    this.options.setActions(next);
+    return next;
+  }
+
+  replayPending(): ActionRequiredEvent[] {
+    return new RuntimeLedger({
+      threadEvents: this.options.getThreadEvents(),
+      actionRequired: this.options.getActions(),
+    }).replayPending();
+  }
+}
+
+export function useActionRequiredController({
+  getThreadEvents,
+  getActions,
+  appendAction,
+  updateAction,
+  setActions,
+}: ActionRequiredControllerOptions): ActionRequiredController {
+  const resolversRef = useRef(new Map<string, (resolution: ActionRequiredResolution) => void>());
+
+  const request = useCallback((input: ActionRequiredRequestInput) => {
+    return new ActionRequiredControllerCore({
+      getThreadEvents,
+      getActions,
+      appendAction,
+      updateAction,
+      setActions,
+      resolvers: resolversRef.current,
+    }).request(input);
+  }, [appendAction, getActions, getThreadEvents, setActions, updateAction]);
+
+  const resolve = useCallback((id: string, resolution: ActionResolution) => {
+    return new ActionRequiredControllerCore({
+      getThreadEvents,
+      getActions,
+      appendAction,
+      updateAction,
+      setActions,
+      resolvers: resolversRef.current,
+    }).resolve(id, resolution);
+  }, [appendAction, getActions, getThreadEvents, setActions, updateAction]);
 
   const cancel = useCallback((id: string, reason = "User cancelled this action.") => {
     return resolve(id, { status: "cancelled", reason });
   }, [resolve]);
 
-  const expire = useCallback((now?: string) => {
-    const next = new RuntimeLedger({
-      threadEvents: getThreadEvents(),
-      actionRequired: getActions(),
-    }).expireActionRequired(now).actionRequired;
-    setActions(next);
-    return next;
-  }, [getActions, getThreadEvents, setActions]);
+  const expire = useCallback((now?: string) => new ActionRequiredControllerCore({
+    getThreadEvents,
+    getActions,
+    appendAction,
+    updateAction,
+    setActions,
+    resolvers: resolversRef.current,
+  }).expire(now), [appendAction, getActions, getThreadEvents, setActions, updateAction]);
 
-  const replayPending = useCallback(() => new RuntimeLedger({
-    threadEvents: getThreadEvents(),
-    actionRequired: getActions(),
-  }).replayPending(), [getActions, getThreadEvents]);
+  const replayPending = useCallback(() => new ActionRequiredControllerCore({
+    getThreadEvents,
+    getActions,
+    appendAction,
+    updateAction,
+    setActions,
+    resolvers: resolversRef.current,
+  }).replayPending(), [appendAction, getActions, getThreadEvents, setActions, updateAction]);
 
   return {
     request,

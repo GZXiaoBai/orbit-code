@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createActionRequiredEvent } from "../domain/actionRequired";
 import type { ThreadEvent } from "../domain/threadEvents";
 import { createToolCallLifecycle } from "../domain/toolCallLifecycle";
-import { RuntimeLedger, ThreadRuntimeStore } from "../state/threadRuntimeStore";
+import { RuntimeLedger, runtimeLedgerReducer, ThreadRuntimeStore } from "../state/threadRuntimeStore";
 import { ActionRequiredStore } from "../state/actionRequiredStore";
 
 describe("ThreadRuntimeStore", () => {
@@ -189,6 +189,37 @@ describe("ThreadRuntimeStore", () => {
       resultText: "ok",
     });
     expect(snapshot.toolCalls[0].updatedAt).toBeTruthy();
+  });
+
+  it("updates runtime facts through the reducer so React callers do not own parallel queues", () => {
+    const initial = new RuntimeLedger().snapshot();
+    const withEvent = runtimeLedgerReducer(initial, { type: "appendThreadEvent", event });
+    const withAction = runtimeLedgerReducer(withEvent, {
+      type: "appendActionRequired",
+      action: createActionRequiredEvent({
+        id: "approval-1",
+        kind: "command",
+        title: "Run command",
+        description: "npm test",
+      }),
+    });
+    const withTool = runtimeLedgerReducer(withAction, {
+      type: "appendToolCall",
+      call: createToolCallLifecycle({
+        id: "tool-1",
+        tool: "run_command",
+        argsSummary: "npm test",
+      }),
+    });
+    const resolved = runtimeLedgerReducer(withTool, {
+      type: "resolveActionRequired",
+      id: "approval-1",
+      resolution: { approved: true },
+    });
+
+    expect(resolved.events).toHaveLength(1);
+    expect(resolved.actionRequired[0]).toMatchObject({ id: "approval-1", status: "approved" });
+    expect(resolved.toolCalls[0]).toMatchObject({ id: "tool-1", status: "generated" });
   });
 
   it("expires blocking actions through the ActionRequiredStore", () => {
