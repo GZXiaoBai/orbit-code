@@ -1,8 +1,13 @@
 import type { ActionRequiredEvent } from "./actionRequired";
-import type { AgentRunSession } from "./agentRunSession";
+import type { TerminalRun } from "./terminalRun";
 import type { ThreadEvent } from "./threadEvents";
 import type { ThreadUiState } from "./types";
-import type { ThreadRuntimeSnapshot } from "../state/threadRuntimeStore";
+
+export interface CodexSessionSnapshot {
+  threadEvents?: ThreadEvent[];
+  actionRequired?: ActionRequiredEvent[];
+  terminalRuns?: TerminalRun[];
+}
 
 export interface SessionBrowserItem {
   threadId: string;
@@ -24,7 +29,6 @@ export interface SessionBrowserModel {
     threadId: string;
     eventCount: number;
     pendingActionCount: number;
-    hasAgentRunSession: boolean;
     lastSummary: string;
     lastTerminalState?: string;
     lastCheckpointId?: string;
@@ -35,10 +39,9 @@ export interface SessionBrowserModel {
 }
 
 export interface SessionBrowserSnapshotLike {
-  runtimeLedgerSnapshot?: ThreadRuntimeSnapshot | null;
+  codexSnapshot?: CodexSessionSnapshot | null;
   threadEvents?: ThreadEvent[];
   actionRequired?: ActionRequiredEvent[];
-  agentRunSession?: AgentRunSession | null;
   updatedAt?: string;
 }
 
@@ -48,12 +51,12 @@ function eventSummary(event?: ThreadEvent): string {
 }
 
 function pendingCount(snapshot?: SessionBrowserSnapshotLike): number {
-  const actions = snapshot?.runtimeLedgerSnapshot?.actionRequired || snapshot?.actionRequired || [];
+  const actions = snapshot?.codexSnapshot?.actionRequired || snapshot?.actionRequired || [];
   return actions.filter((action) => action.status === "pending").length;
 }
 
 function eventsFor(snapshot?: SessionBrowserSnapshotLike): ThreadEvent[] {
-  return snapshot?.runtimeLedgerSnapshot?.threadEvents || snapshot?.threadEvents || [];
+  return snapshot?.codexSnapshot?.threadEvents || snapshot?.threadEvents || [];
 }
 
 export function buildSessionBrowserModel(input: {
@@ -119,7 +122,7 @@ export function buildSessionBrowserModel(input: {
   const selectedSnapshot = selected ? input.snapshots[selected.threadId] : undefined;
   const selectedEvents = eventsFor(selectedSnapshot);
   const selectedPendingCount = pendingCount(selectedSnapshot);
-  const terminalRuns = selectedSnapshot?.runtimeLedgerSnapshot?.terminalRuns || [];
+  const terminalRuns = selectedSnapshot?.codexSnapshot?.terminalRuns || [];
   const lastTerminal = terminalRuns[terminalRuns.length - 1];
   const checkpointEvents = selectedEvents.filter((event) => event.checkpoint?.checkpointId || event.kind === "checkpoint");
   const lastCheckpoint = checkpointEvents[checkpointEvents.length - 1]?.checkpoint;
@@ -132,12 +135,10 @@ export function buildSessionBrowserModel(input: {
       threadId: selected.threadId,
       eventCount: selectedEvents.length,
       pendingActionCount: selectedPendingCount,
-      hasAgentRunSession: Boolean(selectedSnapshot?.agentRunSession),
       lastSummary: selected.lastSummary,
       lastTerminalState: lastTerminal?.recoveredState || lastTerminal?.status,
       lastCheckpointId: lastCheckpoint?.checkpointId,
       explicitContinueRequired: selectedPendingCount > 0
-        || selectedSnapshot?.agentRunSession?.canContinue === true
         || lastTerminal?.recoveredState === "unknown-needs-continue",
       mode: selectedPendingCount > 0 ? "pending-action" : selectedEvents.length > 0 ? "read-only" : "empty",
     } : undefined,

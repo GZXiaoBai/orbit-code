@@ -1,4 +1,4 @@
-import type { ToolName, ToolParams } from "./agentLoop";
+import type { ToolParams } from "./runtimePrimitives";
 import type { TerminalRun } from "./terminalRun";
 import type { CodingPlan, PatchApplyStatus, PatchSandboxStatus } from "./types";
 
@@ -67,7 +67,7 @@ export interface ThreadQuestion {
 
 export interface ThreadToolCallPayload {
   id: string;
-  name: ToolName | string;
+  name: string;
   params?: ToolParams;
   status: "pending" | "running" | "done" | "error" | "denied";
   result?: string;
@@ -118,7 +118,7 @@ export interface ThreadModeSwitchPayload {
 }
 
 export interface ThreadToolDeniedPayload {
-  tool: ToolName | string;
+  tool: string;
   mode: "plan" | "build";
   reason: string;
 }

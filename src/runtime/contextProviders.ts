@@ -1,4 +1,4 @@
-import type { AgentRuntimeMode } from "../domain/agentLoop";
+import type { WorkbenchMode } from "../domain/runtimePrimitives";
 import type { CodingPlan, ContextRule, ContextRuleMode, ContextSkill } from "../domain/types";
 import { parseSkillManifest, skillManifestContext } from "./skillManifest";
 
@@ -24,7 +24,7 @@ export interface ContextBlock {
   title: string;
   source: string;
   content: string;
-  mode?: AgentRuntimeMode;
+  mode?: WorkbenchMode;
   tokenEstimate?: number;
   matchedRules?: string[];
   matchReason?: string;
@@ -32,7 +32,7 @@ export interface ContextBlock {
 }
 
 export interface ContextProviderInput {
-  mode: AgentRuntimeMode;
+  mode: WorkbenchMode;
   workspacePath?: string;
   threadId?: string;
   planSnapshot?: CodingPlan | null;
@@ -54,7 +54,7 @@ export interface ContextInspectorModel {
   editableSources: Array<{ path: string; title: string; source: RuleSource; exists: boolean; content: string }>;
   externalRuleCandidates: Array<{ path: string; title: string; enabled: false }>;
   source: string;
-  mode: AgentRuntimeMode;
+  mode: WorkbenchMode;
   tokenEstimate: number;
   errors: Array<{ providerId: string; message: string }>;
   matchedRules: string[];
@@ -68,7 +68,7 @@ function estimateTokens(content: string): number {
   return Math.max(1, Math.ceil(normalized.length / 4));
 }
 
-function normalizeBlock(block: ContextBlock, mode: AgentRuntimeMode): ContextBlock {
+function normalizeBlock(block: ContextBlock, mode: WorkbenchMode): ContextBlock {
   return {
     ...block,
     mode: block.mode || mode,
@@ -78,7 +78,7 @@ function normalizeBlock(block: ContextBlock, mode: AgentRuntimeMode): ContextBlo
   };
 }
 
-function ruleAppliesToMode(ruleMode: ContextRuleMode | undefined, mode: AgentRuntimeMode): boolean {
+function ruleAppliesToMode(ruleMode: ContextRuleMode | undefined, mode: WorkbenchMode): boolean {
   return !ruleMode || ruleMode === "both" || ruleMode === mode;
 }
 
@@ -115,7 +115,7 @@ function contentMatchesRegex(content: string, patterns?: string[]): boolean {
 
 function ruleMatch(input: {
   rule: RuleDocument | ContextRule;
-  mode: AgentRuntimeMode;
+  mode: WorkbenchMode;
   workspaceFiles: string[];
 }): { enabled: boolean; reason: string } {
   const rule = input.rule;

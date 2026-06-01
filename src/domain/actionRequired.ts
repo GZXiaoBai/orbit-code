@@ -1,5 +1,5 @@
-import type { ToolName, ToolParams } from "./agentLoop";
 import type { QuestionOption } from "./questionRequest";
+import type { ToolParams } from "./runtimePrimitives";
 
 export type ActionRequiredKind =
   | "question"
@@ -28,7 +28,7 @@ export interface ResumeAction {
 export interface ActionRequiredEvent {
   id: string;
   kind: ActionRequiredKind;
-  tool?: ToolName | string;
+  tool?: string;
   params?: ToolParams;
   question?: string;
   options?: QuestionOption[];

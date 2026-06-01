@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { optionsForReasoningEffort, reasoningInstruction } from "../services/llmService";
 import { defaultModelForProvider, isReasoningEffort } from "../state/useRunControls";
+import { buildEffectiveWorkspaceBuildGate } from "../state/useWorkspace";
 import type { ProviderSettings } from "../state/useSession";
 import {
   addCustomModel,
+  buildProviderBuildGate,
   buildRunModelOptions,
   inferModelCapability,
   inferReasoningEfforts,
@@ -91,18 +93,122 @@ describe("run controls", () => {
     expect(capability.buildSupported).toBe(false);
   });
 
-  it("marks compatible hosted providers as Build-supported with context metadata", () => {
+  it("keeps Ollama Build blocked with a provider-specific reason", () => {
+    const imported = setImportedModels(emptySettings, "ollama", ["qwen3-coder"]);
+    const gate = buildProviderBuildGate({
+      providerId: "ollama",
+      model: "qwen3-coder",
+      settings: imported,
+    });
+
+    expect(gate).toMatchObject({
+      canBuild: false,
+      bridgeStatus: "blocked",
+    });
+    expect(gate.blockedReason).toContain("Ollama");
+  });
+
+  it("keeps unverified hosted bridge providers discovery-only until their adapter is verified", () => {
     const settings = setImportedModels(emptySettings, "openrouter", ["openai/gpt-5.1-codex"]);
     const options = buildRunModelOptions(settings, { openrouter: "sk-test" });
 
-    expect(options[0]?.capability?.buildSupported).toBe(true);
+    expect(options[0]?.capability?.buildSupported).toBe(false);
     expect(options[0]?.capability?.maxContextTokens).toBeGreaterThanOrEqual(400_000);
   });
 
-  it("gates Build by model capability instead of a narrow provider whitelist", () => {
-    for (const providerId of ["xai", "mistral", "groq", "qwen", "kimi", "siliconflow", "zhipu"]) {
+  it("gates Build to verified Codex bridge providers", () => {
+    for (const providerId of ["deepseek", "fixture"]) {
       expect(inferModelCapability(providerId, `${providerId}-model`).buildSupported).toBe(true);
     }
+    for (const providerId of ["openai", "xai", "mistral", "groq", "qwen", "kimi", "siliconflow", "zhipu", "openrouter"]) {
+      expect(inferModelCapability(providerId, `${providerId}-model`).buildSupported).toBe(false);
+    }
+  });
+
+  it("requires a passing DeepSeek bridge smoke before Build", () => {
+    const imported = setImportedModels(emptySettings, "deepseek", ["deepseek-v4-pro"]);
+    const locked = buildProviderBuildGate({
+      providerId: "deepseek",
+      model: "deepseek-v4-pro",
+      settings: imported,
+      apiKeys: { deepseek: "sk-test" },
+    });
+    const passed = buildProviderBuildGate({
+      providerId: "deepseek",
+      model: "deepseek-v4-pro",
+      settings: {
+        ...imported,
+        smokeStatus: {
+          deepseek: { status: "smokePassed", message: "ok", checkedAt: "t1" },
+        },
+      },
+      apiKeys: { deepseek: "sk-test" },
+    });
+
+    expect(locked).toMatchObject({ canBuild: false, bridgeStatus: "smokeFailed" });
+    expect(passed).toMatchObject({ canBuild: true, bridgeStatus: "ready" });
+  });
+
+  it("blocks Build when the Codex sidecar is not ready even after DeepSeek smoke passes", () => {
+    const imported = setImportedModels(emptySettings, "deepseek", ["deepseek-v4-pro"]);
+    const gate = buildProviderBuildGate({
+      providerId: "deepseek",
+      model: "deepseek-v4-pro",
+      settings: {
+        ...imported,
+        smokeStatus: {
+          deepseek: { status: "smokePassed", message: "ok", checkedAt: "t1" },
+        },
+      },
+      apiKeys: { deepseek: "sk-test" },
+      sidecarStatus: {
+        running: false,
+        lastError: "Codex app-server stdin unavailable",
+      },
+    });
+
+    expect(gate).toMatchObject({
+      canBuild: false,
+      bridgeStatus: "blocked",
+      blockedReason: "Codex sidecar is not ready: Codex app-server stdin unavailable",
+    });
+  });
+
+  it("applies desktop sidecar readiness to the workspace Build gate without blocking fixtures", () => {
+    const readyGate = {
+      providerId: "deepseek",
+      model: "deepseek-v4-pro",
+      canBuild: true,
+      canStream: true,
+      bridgeStatus: "ready" as const,
+    };
+
+    const blocked = buildEffectiveWorkspaceBuildGate({
+      gate: readyGate,
+      providerId: "deepseek",
+      sidecarStatus: { running: false, lastError: "No active Codex app-server stdin is available" },
+      desktopRuntime: true,
+    });
+    const fixture = buildEffectiveWorkspaceBuildGate({
+      gate: { ...readyGate, providerId: "fixture", model: "fixture-coder" },
+      providerId: "fixture",
+      sidecarStatus: { running: false, lastError: "No active Codex app-server stdin is available" },
+      desktopRuntime: true,
+    });
+    const web = buildEffectiveWorkspaceBuildGate({
+      gate: readyGate,
+      providerId: "deepseek",
+      sidecarStatus: { running: false, lastError: "No active Codex app-server stdin is available" },
+      desktopRuntime: false,
+    });
+
+    expect(blocked).toMatchObject({
+      canBuild: false,
+      bridgeStatus: "blocked",
+    });
+    expect(blocked.blockedReason).toContain("No active Codex app-server stdin is available");
+    expect(fixture.canBuild).toBe(true);
+    expect(web.canBuild).toBe(true);
   });
 
   it("validates reasoning effort values", () => {

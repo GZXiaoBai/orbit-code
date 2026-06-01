@@ -1,7 +1,7 @@
-import type { ToolParams } from "../domain/agentLoop";
-import type { AgentEventPatch } from "../domain/agentEvents";
+import type { ToolParams } from "../domain/runtimePrimitives";
+import type { ThreadPatch } from "../domain/threadEvents";
 
-export type PatchItem = AgentEventPatch;
+export type PatchItem = ThreadPatch;
 
 export interface PatchEventLike {
   id: string;

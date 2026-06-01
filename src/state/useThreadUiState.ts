@@ -127,7 +127,14 @@ export function useThreadUiState(workspacePath: string, title: string) {
       delete next[targetThreadId];
       return next;
     });
-  }, []);
+    setActiveThreadByWorkspace((prev) => {
+      if (prev[workspacePath] !== targetThreadId && threadId !== targetThreadId) return prev;
+      const remaining = Object.values(threadUiStateMap)
+        .filter((thread) => thread.workspacePath === workspacePath && thread.threadId !== targetThreadId && !thread.archived)
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      return { ...prev, [workspacePath]: remaining[0]?.threadId || createThreadId(workspacePath) };
+    });
+  }, [threadId, threadUiStateMap, workspacePath]);
 
   const switchThread = useCallback((nextThreadId: string) => {
     if (!workspacePath) return;

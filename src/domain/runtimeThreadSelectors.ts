@@ -1,7 +1,7 @@
 import type { ActionRequiredEvent } from "./actionRequired";
 import type { RuntimeMessage, RuntimeMessagePart } from "./runtimeMessages";
+import type { RuntimeToolSummaryInput } from "./runtimePrimitives";
 import type { ThinkingDisplayPreference } from "./types";
-import type { ToolCallLifecycle } from "./toolCallLifecycle";
 
 export interface RuntimeToolSummary {
   id: string;
@@ -30,7 +30,7 @@ export interface RuntimeThreadViewModel {
 export function selectRuntimeThread(
   messages: RuntimeMessage[],
   actions: ActionRequiredEvent[] = [],
-  toolCalls: ToolCallLifecycle[] = [],
+  toolCalls: RuntimeToolSummaryInput[] = [],
   thinkingPreference: ThinkingDisplayPreference = "expanded",
 ): RuntimeThreadViewModel {
   const visibleMessages = messages.map((message) => {

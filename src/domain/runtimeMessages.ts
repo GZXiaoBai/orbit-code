@@ -1,4 +1,4 @@
-import type { ToolName, ToolParams } from "./agentLoop";
+import type { ToolParams } from "./runtimePrimitives";
 import { createThreadEvent, type ThreadEvent } from "./threadEvents";
 
 export type RuntimeMessageRole = "system" | "user" | "assistant" | "tool";
@@ -8,8 +8,8 @@ export type RuntimeMessagePart =
   | { type: "thinking"; text: string; collapsed?: boolean }
   | { type: "reasoning"; text: string }
   | { type: "text"; text: string }
-  | { type: "toolCall"; id: string; name: ToolName | string; argsSummary: string; params?: ToolParams; finished?: boolean }
-  | { type: "toolResult"; toolCallId: string; name?: ToolName | string; content: string; isError?: boolean; metadata?: string }
+  | { type: "toolCall"; id: string; name: string; argsSummary: string; params?: ToolParams; finished?: boolean }
+  | { type: "toolResult"; toolCallId: string; name?: string; content: string; isError?: boolean; metadata?: string }
   | { type: "finish"; reason: "stop" | "tool_use" | "cancelled" | "error" | "permission_denied"; at: string }
   | { type: "error"; message: string; code?: string; recoverable?: boolean };
 
@@ -173,15 +173,3 @@ export function runtimeMessagesToThreadEvents(messages: RuntimeMessage[]): Threa
 function serializeRuntimeMessageParts(parts: RuntimeMessagePart[]): RuntimeMessagePart[] {
   return parts.map((part) => ({ ...part }));
 }
-
-export type PiRuntimeMessageRole = RuntimeMessageRole;
-export type PiRuntimeMessageStatus = RuntimeMessageStatus;
-export type PiRuntimeMessagePart = RuntimeMessagePart;
-export type PiRuntimeMessage = RuntimeMessage;
-export type PiRuntimeMessageSnapshot = RuntimeMessageSnapshot;
-
-export const createPiRuntimeMessage = createRuntimeMessage;
-export const appendPiRuntimeMessagePart = appendRuntimeMessagePart;
-export const finishPiRuntimeMessage = finishRuntimeMessage;
-export const restorePiRuntimeMessages = restoreRuntimeMessages;
-export const piRuntimeMessagesToThreadEvents = runtimeMessagesToThreadEvents;

@@ -1,5 +1,4 @@
-import type { ToolParams } from "./agentLoop";
-import type { AgentRuntimeMode } from "./agentLoop";
+import type { ToolParams, WorkbenchMode } from "./runtimePrimitives";
 import type { PermissionAction } from "./types";
 
 export type ApprovalGrantScope = "once" | "session" | "project";
@@ -10,7 +9,7 @@ export interface PolicyGrant {
   key: string;
   workspacePath?: string;
   threadId?: string;
-  mode?: AgentRuntimeMode;
+  mode?: WorkbenchMode;
   actions?: PermissionAction[];
   cwdOrPathScope?: string;
   scope: Exclude<ApprovalGrantScope, "once">;
@@ -55,7 +54,7 @@ export function persistableApprovalGrants(grants: ApprovalGrant[]): ApprovalGran
 
 export function policyGrantMatches(input: {
   grant: PolicyGrant;
-  mode: AgentRuntimeMode;
+  mode: WorkbenchMode;
   tool: string;
   key: string;
   actions: PermissionAction[];

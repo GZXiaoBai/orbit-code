@@ -1,4 +1,5 @@
 import type { ModelCapability, ModelProviderConfig, ReasoningEffort } from "../domain/types";
+import type { CodexSidecarStatus, ProviderBuildGate } from "../domain/codex";
 import { findProvider, providerRegistry } from "../providers/providerRegistry";
 import { fallbackCapability, isOpenAICompatibleProvider } from "../providers/providerAdapters";
 import { capabilityFromOfficialCatalog, inferReasoningLevelsFromModel } from "../providers/modelCapabilityCatalog";
@@ -145,7 +146,8 @@ export function inferModelCapability(providerId: string, model: string): ModelCa
   const provider = findProvider(providerId) || providerRegistry[0];
   const official = capabilityFromOfficialCatalog(providerId, model);
   const adapterFallback = fallbackCapability(providerId, model);
-  const buildSupported = official?.buildSupported ?? adapterFallback.buildSupported;
+  const bridgeBuildSupported = providerId === "deepseek" || providerId === "fixture";
+  const buildSupported = (official?.buildSupported ?? adapterFallback.buildSupported) && bridgeBuildSupported;
   return {
     streaming: official?.streaming ?? provider.capabilities.streaming,
     reasoningLevels: official?.reasoningLevels || adapterFallback.reasoningLevels || inferReasoningEfforts(providerId, model),
@@ -215,4 +217,99 @@ export function addCustomModel(settings: ProviderSettings, providerId: string, m
 
 export function inferReasoningEfforts(providerId: string, model: string): ReasoningEffort[] {
   return inferReasoningLevelsFromModel(providerId, model);
+}
+
+export function buildProviderBuildGate(input: {
+  providerId: string;
+  model: string;
+  settings: ProviderSettings;
+  apiKeys?: Record<string, string>;
+  savedCredentialProviders?: string[];
+  sidecarStatus?: CodexSidecarStatus | null;
+}): ProviderBuildGate {
+  const provider = findProvider(input.providerId);
+  const config = provider ? getProviderConfig(input.settings, provider.id) : null;
+  const capability = input.model && provider ? inferModelCapability(provider.id, input.model) : undefined;
+  const hasUnlockedKey = Boolean(input.apiKeys?.[input.providerId]);
+  const hasSavedKey = Boolean(input.savedCredentialProviders?.includes(input.providerId));
+  const hasModel = Boolean(input.model && config && [...config.importedModels, ...config.customModels, ...config.enabledModels].includes(input.model));
+
+  if (!provider) {
+    return {
+      providerId: input.providerId,
+      model: input.model,
+      canBuild: false,
+      canStream: false,
+      bridgeStatus: "blocked",
+      blockedReason: "Unknown provider.",
+    };
+  }
+  if (!provider.capabilities.local && !hasUnlockedKey) {
+    return {
+      providerId: provider.id,
+      model: input.model,
+      canBuild: false,
+      canStream: Boolean(capability?.streaming),
+      bridgeStatus: hasSavedKey ? "vaultLocked" : "blocked",
+      blockedReason: hasSavedKey
+        ? "Credential is saved but the Orbit vault is locked."
+        : "API key is not unlocked in the Orbit credential vault.",
+    };
+  }
+  if (!hasModel) {
+    return {
+      providerId: provider.id,
+      model: input.model,
+      canBuild: false,
+      canStream: Boolean(capability?.streaming),
+      bridgeStatus: "discovery",
+      blockedReason: "Import or enable a model before using Build.",
+    };
+  }
+  if (!capability?.buildSupported) {
+    return {
+      providerId: provider.id,
+      model: input.model,
+      canBuild: false,
+      canStream: Boolean(capability?.streaming),
+      bridgeStatus: "blocked",
+      blockedReason: provider.id === "deepseek"
+        ? "This DeepSeek model is missing verified Build capabilities."
+        : provider.id === "ollama"
+          ? "Ollama 当前仅接入模型发现，Build 尚未接入 Codex Responses bridge。"
+        : "Build is blocked until this provider's Responses bridge adapter is verified.",
+    };
+  }
+  const smoke = input.settings.smokeStatus?.[provider.id];
+  if (provider.id === "deepseek" && smoke?.status !== "smokePassed") {
+    return {
+      providerId: provider.id,
+      model: input.model,
+      canBuild: false,
+      canStream: Boolean(capability.streaming),
+      bridgeStatus: "smokeFailed",
+      blockedReason: smoke?.status === "smokeFailed"
+        ? smoke.message || "DeepSeek bridge smoke failed."
+        : "Run the Codex bridge smoke before enabling Build.",
+    };
+  }
+  if (input.sidecarStatus && !input.sidecarStatus.running) {
+    return {
+      providerId: provider.id,
+      model: input.model,
+      canBuild: false,
+      canStream: capability.streaming,
+      bridgeStatus: "blocked",
+      blockedReason: input.sidecarStatus.lastError
+        ? `Codex sidecar is not ready: ${input.sidecarStatus.lastError}`
+        : "Codex sidecar is not ready. Restart the Codex runtime before using Build.",
+    };
+  }
+  return {
+    providerId: provider.id,
+    model: input.model,
+    canBuild: true,
+    canStream: capability.streaming,
+    bridgeStatus: "ready",
+  };
 }

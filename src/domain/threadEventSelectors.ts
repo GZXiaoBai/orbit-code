@@ -1,7 +1,7 @@
 import type { TerminalRun } from "./terminalRun";
 import type { ThreadEvent } from "./threadEvents";
 import type { ActionRequiredEvent } from "./actionRequired";
-import type { ToolCallLifecycle } from "./toolCallLifecycle";
+import type { RuntimeToolSummaryInput } from "./runtimePrimitives";
 import type { ContextInspectorModel } from "../runtime/contextProviders";
 
 export type PendingActionKind = "approval" | "question" | "patch" | "verification" | "checkpoint" | "rollback";
@@ -23,13 +23,13 @@ export interface InspectorModel {
   historyEvents: ThreadEvent[];
   rollbackEvents: ThreadEvent[];
   checkpointEvents: ThreadEvent[];
-  toolCalls: ToolCallLifecycle[];
+  toolCalls: RuntimeToolSummaryInput[];
 }
 
-export interface RuntimeLedgerSelectorSnapshot {
+export interface CodexProjectionSnapshot {
   threadEvents: ThreadEvent[];
   actionRequired: ActionRequiredEvent[];
-  toolCalls?: ToolCallLifecycle[];
+  toolCalls?: RuntimeToolSummaryInput[];
   terminalRuns?: TerminalRun[];
   checkpoints?: ThreadEvent[];
 }
@@ -63,11 +63,11 @@ function isPendingPatchEvent(event: ThreadEvent): boolean {
   return Boolean(event.patches?.some((patch) => !patch.applied));
 }
 
-function toEvents(input: ThreadEvent[] | RuntimeLedgerSelectorSnapshot): ThreadEvent[] {
+function toEvents(input: ThreadEvent[] | CodexProjectionSnapshot): ThreadEvent[] {
   return Array.isArray(input) ? input : input.threadEvents;
 }
 
-export function selectCenterTimeline(input: ThreadEvent[] | RuntimeLedgerSelectorSnapshot): ThreadEvent[] {
+export function selectCenterTimeline(input: ThreadEvent[] | CodexProjectionSnapshot): ThreadEvent[] {
   return toEvents(input).filter((event) => {
     if (event.kind === "toolCall" && event.toolCall?.params) return false;
     if (event.kind === "terminalRun" && event.terminalRun?.output) return false;
@@ -75,7 +75,7 @@ export function selectCenterTimeline(input: ThreadEvent[] | RuntimeLedgerSelecto
   });
 }
 
-export function selectPendingActions(input: RuntimeLedgerSelectorSnapshot): PendingAction[] {
+export function selectPendingActions(input: CodexProjectionSnapshot): PendingAction[] {
   const actions: PendingAction[] = [];
   const events = input.threadEvents;
   const actionRequired = input.actionRequired || [];
@@ -129,7 +129,7 @@ export function selectPendingActions(input: RuntimeLedgerSelectorSnapshot): Pend
   return actions.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 
-export function selectInspectorModel(input: ThreadEvent[] | RuntimeLedgerSelectorSnapshot, selectedEventId?: string, terminalRuns: TerminalRun[] = []): InspectorModel {
+export function selectInspectorModel(input: ThreadEvent[] | CodexProjectionSnapshot, selectedEventId?: string, terminalRuns: TerminalRun[] = []): InspectorModel {
   const events = toEvents(input);
   const ledgerTerminalRuns = Array.isArray(input) ? terminalRuns : input.terminalRuns || terminalRuns;
   const toolCalls = Array.isArray(input) ? [] : input.toolCalls || [];
@@ -154,7 +154,7 @@ export function selectInspectorModel(input: ThreadEvent[] | RuntimeLedgerSelecto
 }
 
 export function selectCheckpointBrowserModel(
-  input: RuntimeLedgerSelectorSnapshot,
+  input: CodexProjectionSnapshot,
   selectedCheckpointId?: string,
 ): CheckpointBrowserModel {
   const checkpoints = (input.checkpoints?.length ? input.checkpoints : input.threadEvents.filter((event) => event.kind === "checkpoint" || Boolean(event.checkpoint))).reverse();

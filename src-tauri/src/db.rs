@@ -178,19 +178,46 @@ use tauri::{AppHandle, Manager};
 数据库持久化模块 (SQLite Multi-Table Schema v2)
 ========================================================================== */
 
-pub fn get_db_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub fn get_app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Ok(raw) = std::env::var("ORBIT_APP_DATA_DIR") {
+        let path = normalize_app_data_override(&raw)?;
+        std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+        return Ok(path);
+    }
+
     let path = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+pub fn get_db_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let path = get_app_data_dir(app)?;
     let target = path.join("orbit_code.db");
     migrate_legacy_db_if_needed(&target, &path)?;
     Ok(target)
+}
+
+fn normalize_app_data_override(raw: &str) -> Result<PathBuf, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("ORBIT_APP_DATA_DIR cannot be empty".to_string());
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(std::env::current_dir()
+            .map_err(|e| e.to_string())?
+            .join(path))
+    }
 }
 
 fn legacy_db_candidates(current_app_data_dir: &Path) -> Vec<PathBuf> {
     let mut candidates = vec![current_app_data_dir.join("agent_gui.db")];
     if let Some(home) = std::env::var_os("HOME") {
         let home = PathBuf::from(home);
-        candidates.push(home.join("Library/Application Support/com.zhoujunjie.agentgui/agent_gui.db"));
+        candidates
+            .push(home.join("Library/Application Support/com.zhoujunjie.agentgui/agent_gui.db"));
         candidates.push(home.join("Library/Application Support/Agent GUI/agent_gui.db"));
         candidates.push(home.join("Library/Application Support/agent-gui/agent_gui.db"));
     }
@@ -793,10 +820,8 @@ mod tests {
 
     #[test]
     fn migrates_current_legacy_database_to_orbit_database() {
-        let root = std::env::temp_dir().join(format!(
-            "orbit-code-db-migration-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("orbit-code-db-migration-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let legacy = root.join("agent_gui.db");
@@ -807,5 +832,20 @@ mod tests {
 
         assert_eq!(std::fs::read(&target).unwrap(), b"legacy-db");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn app_data_override_normalizes_relative_paths_and_rejects_empty_values() {
+        assert!(normalize_app_data_override("  ").is_err());
+
+        let relative = normalize_app_data_override("target/orbit-live-app-data").unwrap();
+        assert!(relative.is_absolute());
+        assert!(relative.ends_with("target/orbit-live-app-data"));
+
+        let absolute = std::env::temp_dir().join("orbit-live-app-data");
+        assert_eq!(
+            normalize_app_data_override(&absolute.to_string_lossy()).unwrap(),
+            absolute
+        );
     }
 }

@@ -99,7 +99,16 @@ pub fn run() {
             commands::build_code_graph,
             commands::build_embeddings,
             commands::semantic_search_cmd,
-            commands::resolve_patch_conflict
+            commands::resolve_patch_conflict,
+            commands::codex::codex_sidecar_status,
+            commands::codex::codex_sidecar_version_info,
+            commands::codex::codex_runtime_restart,
+            commands::codex::orbit_bridge_provider_catalog,
+            commands::codex::codex_desktop_build_smoke_report,
+            commands::codex::codex_thread_start,
+            commands::codex::codex_turn_start,
+            commands::codex::codex_turn_interrupt,
+            commands::codex::codex_approval_submit
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -243,24 +252,36 @@ mod tests {
     fn test_search_workspace_files_requires_explicit_root_and_finds_text() {
         let root = std::env::temp_dir().join(format!("orbit-search-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src").join("main.ts"), "export const ThreadEvent = true;\n").unwrap();
+        fs::write(
+            root.join("src").join("main.ts"),
+            "export const ThreadEvent = true;\n",
+        )
+        .unwrap();
 
-        let missing_root = search_workspace_files("ThreadEvent".to_string(), "".to_string(), Some(10));
+        let missing_root =
+            search_workspace_files("ThreadEvent".to_string(), "".to_string(), Some(10));
         assert!(missing_root.is_err());
 
         let results = search_workspace_files(
             "ThreadEvent".to_string(),
             root.to_string_lossy().to_string(),
             Some(10),
-        ).unwrap();
+        )
+        .unwrap();
 
         let _ = fs::remove_dir_all(&root);
-        assert!(results.iter().any(|line| line.contains("src/main.ts") && line.contains("ThreadEvent")));
+        assert!(results
+            .iter()
+            .any(|line| line.contains("src/main.ts") && line.contains("ThreadEvent")));
     }
 
     #[test]
     fn test_git_shadow_checkpoint_restores_existing_and_deletes_created() {
-        if std::process::Command::new("git").arg("--version").output().is_err() {
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let root = std::env::temp_dir().join(format!("orbit-shadow-test-{}", uuid::Uuid::new_v4()));
@@ -284,7 +305,8 @@ mod tests {
                     existed: false,
                 },
             ],
-        ).unwrap();
+        )
+        .unwrap();
 
         fs::write(root.join("src").join("existing.txt"), "after").unwrap();
         fs::write(root.join("src").join("created.txt"), "created").unwrap();
@@ -303,9 +325,13 @@ mod tests {
                     existed: false,
                 },
             ],
-        ).unwrap();
+        )
+        .unwrap();
 
-        assert_eq!(fs::read_to_string(root.join("src").join("existing.txt")).unwrap(), "before");
+        assert_eq!(
+            fs::read_to_string(root.join("src").join("existing.txt")).unwrap(),
+            "before"
+        );
         assert!(!root.join("src").join("created.txt").exists());
         let _ = fs::remove_dir_all(&root);
     }
@@ -537,7 +563,8 @@ mod tests {
 
     #[test]
     fn test_open_workspace_path_rejects_traversal() {
-        let root = std::env::temp_dir().join(format!("orbit-file-action-test-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("orbit-file-action-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let res = open_workspace_path(
             "../outside.txt".to_string(),
@@ -551,7 +578,8 @@ mod tests {
 
     #[test]
     fn test_open_workspace_path_validates_target_before_action() {
-        let root = std::env::temp_dir().join(format!("orbit-file-action-test-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("orbit-file-action-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src").join("main.ts"), "export const ok = true;").unwrap();
 
@@ -567,7 +595,8 @@ mod tests {
 
     #[test]
     fn test_write_workspace_context_file_allows_orbit_paths() {
-        let root = std::env::temp_dir().join(format!("orbit-context-test-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("orbit-context-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
 
         let res = write_workspace_context_file(
@@ -576,7 +605,13 @@ mod tests {
             "---\nname: review\ndescription: Review patches\n---\n\n# Review\n".to_string(),
         );
 
-        let content = fs::read_to_string(root.join(".orbit").join("skills").join("review").join("SKILL.md")).unwrap();
+        let content = fs::read_to_string(
+            root.join(".orbit")
+                .join("skills")
+                .join("review")
+                .join("SKILL.md"),
+        )
+        .unwrap();
         let _ = fs::remove_dir_all(&root);
         assert!(res.is_ok());
         assert!(content.contains("Review patches"));
@@ -584,7 +619,8 @@ mod tests {
 
     #[test]
     fn test_write_workspace_context_file_rejects_unsafe_paths() {
-        let root = std::env::temp_dir().join(format!("orbit-context-test-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("orbit-context-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
 
         let traversal = write_workspace_context_file(

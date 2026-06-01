@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ProviderBuildGate } from "../domain/codex";
 import type { ReasoningEffort, RunModelSelection, WorkbenchMode } from "../domain/types";
 import type { ProviderSettings } from "./useSession";
-import { buildRunModelOptions, inferReasoningEfforts, resolveModelSelection, type RunModelOption } from "./modelSettings";
+import { buildProviderBuildGate, buildRunModelOptions, inferReasoningEfforts, resolveModelSelection, type RunModelOption } from "./modelSettings";
 import { findProvider } from "../providers/providerRegistry";
 
 const STORAGE_KEY = "agent-gui.run-controls.v1";
@@ -17,6 +18,7 @@ export interface RunControlsState {
   hasModelAccess: boolean;
   missingCredential: boolean;
   buildSupported: boolean;
+  buildGate: ProviderBuildGate;
   selectedCapability: RunModelOption["capability"] | null;
   setMode: (mode: WorkbenchMode) => void;
   setModelId: (modelId: string) => void;
@@ -109,7 +111,14 @@ export function useRunControls(
   const hasSavedCredential = Boolean(provider && savedCredentialProviders.includes(provider.id));
   const missingCredential = Boolean(provider && !provider.capabilities.local && !apiKeys[provider.id]);
   const hasModelAccess = Boolean(provider && (provider.capabilities.local || apiKeys[provider.id] || hasSavedCredential));
-  const buildSupported = selectedOption?.capability?.buildSupported ?? Boolean(selectedOption);
+  const buildGate = useMemo(() => buildProviderBuildGate({
+    providerId: selectedOption?.providerId || selection.providerId,
+    model: selectedOption?.model || selection.model,
+    settings,
+    apiKeys,
+    savedCredentialProviders,
+  }), [apiKeys, savedCredentialProviders, selectedOption?.model, selectedOption?.providerId, selection.model, selection.providerId, settings]);
+  const buildSupported = buildGate.canBuild;
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ mode, selection }));
@@ -166,6 +175,7 @@ export function useRunControls(
     hasModelAccess,
     missingCredential,
     buildSupported,
+    buildGate,
     setMode,
     setModelId,
     setReasoningEffort,

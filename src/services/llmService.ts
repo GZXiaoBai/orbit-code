@@ -178,7 +178,7 @@ function getFixtureResponse(userPrompt: string): string {
           id: "fixture-plan-task-1",
           title: "整理主流程差距",
           description: "阅读关键工作台和 Agent runtime 文件，列出 Plan/Build 隔离、审批和补丁流的改进项。",
-          filesHint: ["src/state/useWorkspace.ts", "src/state/agentLoopEngine.ts"],
+          filesHint: ["src/state/useWorkspace.ts", "src/state/useCodexSession.ts"],
           verification: ["npm test -- --run"],
         },
       ],

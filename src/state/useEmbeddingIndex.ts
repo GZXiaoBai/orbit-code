@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentEvent } from "./useWorkspace";
+import type { ThreadEvent } from "../domain/threadEvents";
 
 export interface EmbeddingBuildProgress {
   phase: string;
@@ -10,7 +10,7 @@ export interface EmbeddingBuildProgress {
 }
 
 interface UseEmbeddingIndexOptions {
-  onEvent: (event: AgentEvent) => void;
+  onEvent: (event: ThreadEvent) => void;
 }
 
 export function useEmbeddingIndex({ onEvent }: UseEmbeddingIndexOptions) {
@@ -28,8 +28,9 @@ export function useEmbeddingIndex({ onEvent }: UseEmbeddingIndexOptions) {
       setEmbeddingBuildProgress(null);
       onEvent({
         id: `embed-${Date.now()}`,
+        kind: "agentMessage",
         role: "planner",
-        name: "Index Builder",
+        title: "Index Builder",
         status: "done",
         message: `Code index built: ${stats.total_chunks} chunks, ${stats.new_embeddings} new, ${stats.updated_embeddings} updated, ${stats.deleted_chunks} deleted (${stats.duration_secs.toFixed(1)}s) -- semantic search now available.`,
         timestamp: new Date().toLocaleTimeString(),

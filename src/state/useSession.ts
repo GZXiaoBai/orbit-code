@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AdvancedSettings,
@@ -7,32 +7,18 @@ import type {
   ContextSettings,
   GeneralSettings,
   ModelCapability,
-  ProviderSmokeRecord,
   PlanTask,
   ProjectSecurityOverride,
+  ProviderSmokeRecord,
   SandboxMode,
   SecuritySettings,
 } from "../domain/types";
 import type { LLMProvider } from "../services/llmService";
-import type { AgentRunSession } from "../domain/agentRunSession";
-import type { QuestionRequest } from "../domain/questionRequest";
-import type { ActionRequiredEvent } from "../domain/actionRequired";
-import type { TerminalRun } from "../domain/terminalRun";
-import type { ToolCallLifecycle } from "../domain/toolCallLifecycle";
-import type { ThreadEvent } from "../domain/threadEvents";
-import type { ApprovalGrant } from "../domain/approvalGrant";
-import type { ApprovalRequest } from "./useApprovalQueue";
-import type { ThreadRuntimeSnapshot } from "./threadRuntimeStore";
 import { parseCodingPlan } from "../domain/planSchema";
-import { tauriWorkspaceStorage } from "../storage/tauriStorage";
-import { keychainStorage } from "../storage/keychain";
+import { findProvider } from "../providers/providerRegistry";
 import { sessionStore } from "../storage/sessionStore";
-import { callLLMApi, PLANNER_SYSTEM_PROMPT, cleanJsonOutput } from "../services/llmService";
 import { isTauri } from "../utils/tauri";
 import { resolveModelSelection } from "./modelSettings";
-import { findProvider } from "../providers/providerRegistry";
-
-type NormalizedDecisionQuestion = NonNullable<CodingPlan["decisionQuestions"]>[number];
 
 export interface ImportedPlanState {
   plan: CodingPlan;
@@ -79,17 +65,6 @@ export interface SessionState {
   activeLLMConfig: { provider: LLMProvider; model: string; url?: string } | null;
   activeTitle: string | null;
   outputFiles: string[];
-  loadedAgentEvents: any[] | null;
-  loadedThreadEvents: ThreadEvent[] | null;
-  loadedAgentRunSession: AgentRunSession | null;
-  loadedApprovalRequests: ApprovalRequest[] | null;
-  loadedApprovalGrants: ApprovalGrant[] | null;
-  loadedQuestionRequests: QuestionRequest[] | null;
-  loadedActionRequired: ActionRequiredEvent[] | null;
-  loadedToolCalls: ToolCallLifecycle[] | null;
-  loadedTerminalRuns: TerminalRun[] | null;
-  loadedRuntimeLedgerSnapshot: ThreadRuntimeSnapshot | null;
-
   importPlan: (source: string, fileName?: string) => Promise<boolean>;
   restoreImportedPlan: (plan: ImportedPlanState | null) => void;
   clearImportedPlan: () => void;
@@ -117,9 +92,9 @@ const defaultProviderSettings: ProviderSettings = {
     maxIterations: 15,
     contextBudget: "balanced",
     autoCompact: true,
-    autoSelfHeal: true,
+    autoSelfHeal: false,
     verificationApproval: true,
-    fixtureProviderEnabled: true,
+    fixtureProviderEnabled: false,
   },
   general: {
     startMode: "plan",
@@ -134,18 +109,8 @@ const defaultProviderSettings: ProviderSettings = {
   smokeStatus: {},
 };
 
-const WEB_PROVIDER_SETTINGS_KEYS = [
-  "orbit-code.provider_settings",
-  "agent-gui.provider_settings",
-];
-
 export function normalizeProviderSettings(settings: ProviderSettings | null | undefined): ProviderSettings {
-  const security = settings?.security || {
-    preset: "askBeforeAction",
-    advancedRules: {},
-    sandboxMode: settings?.sandboxMode || "none",
-  };
-
+  const security = settings?.security || defaultProviderSettings.security!;
   return {
     ...defaultProviderSettings,
     ...settings,
@@ -157,18 +122,9 @@ export function normalizeProviderSettings(settings: ProviderSettings | null | un
       sandboxMode: security.sandboxMode || settings?.sandboxMode || "none",
     },
     projectSecurityOverrides: settings?.projectSecurityOverrides || {},
-    agent: {
-      ...defaultProviderSettings.agent!,
-      ...(settings?.agent || {}),
-    },
-    general: {
-      ...defaultProviderSettings.general!,
-      ...(settings?.general || {}),
-    },
-    advanced: {
-      ...defaultProviderSettings.advanced!,
-      ...(settings?.advanced || {}),
-    },
+    agent: { ...defaultProviderSettings.agent!, ...(settings?.agent || {}) },
+    general: { ...defaultProviderSettings.general!, ...(settings?.general || {}) },
+    advanced: { ...defaultProviderSettings.advanced!, ...(settings?.advanced || {}) },
     context: {
       ...defaultProviderSettings.context!,
       ...(settings?.context || {}),
@@ -179,6 +135,9 @@ export function normalizeProviderSettings(settings: ProviderSettings | null | un
         enabled: rule.enabled !== false,
         mode: rule.mode === "plan" || rule.mode === "build" || rule.mode === "both" ? rule.mode : "both",
         source: "user" as const,
+        globs: rule.globs,
+        regex: rule.regex,
+        policy: rule.policy,
       })),
     },
     smokeStatus: settings?.smokeStatus || {},
@@ -186,393 +145,157 @@ export function normalizeProviderSettings(settings: ProviderSettings | null | un
 }
 
 export function useSession(): SessionState {
+  const [isLoading, setIsLoading] = useState(true);
   const [importedPlan, setImportedPlan] = useState<ImportedPlanState | null>(null);
   const [importError, setImportError] = useState<ImportErrorState | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [providerSettings, setProviderSettings] = useState<ProviderSettings>(normalizeProviderSettings(defaultProviderSettings));
+  const [providerSettings, setProviderSettings] = useState<ProviderSettings>(() => normalizeProviderSettings(defaultProviderSettings));
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [credentialVaultProviders, setCredentialVaultProviders] = useState<string[]>([]);
   const [credentialVaultAutoUnlock, setCredentialVaultAutoUnlock] = useState(false);
-  const [isRealLLMActive, setIsRealLLMActive] = useState(false);
-  const [activeLLMConfig, setActiveLLMConfig] = useState<{ provider: LLMProvider; model: string; url?: string } | null>(null);
-  const [loadedAgentEvents, setLoadedAgentEvents] = useState<any[] | null>(null);
-  const [loadedThreadEvents, setLoadedThreadEvents] = useState<ThreadEvent[] | null>(null);
-  const [loadedAgentRunSession, setLoadedAgentRunSession] = useState<AgentRunSession | null>(null);
-  const [loadedApprovalRequests, setLoadedApprovalRequests] = useState<ApprovalRequest[] | null>(null);
-  const [loadedApprovalGrants, setLoadedApprovalGrants] = useState<ApprovalGrant[] | null>(null);
-  const [loadedQuestionRequests, setLoadedQuestionRequests] = useState<QuestionRequest[] | null>(null);
-  const [loadedActionRequired, setLoadedActionRequired] = useState<ActionRequiredEvent[] | null>(null);
-  const [loadedToolCalls, setLoadedToolCalls] = useState<ToolCallLifecycle[] | null>(null);
-  const [loadedTerminalRuns, setLoadedTerminalRuns] = useState<TerminalRun[] | null>(null);
-  const [loadedRuntimeLedgerSnapshot, setLoadedRuntimeLedgerSnapshot] = useState<ThreadRuntimeSnapshot | null>(null);
-  const importRequestSeqRef = useRef(0);
 
   useEffect(() => {
-    const activeSelection = resolveModelSelection(providerSettings, {
-      ...apiKeys,
-    }, {
-      providerId: providerSettings.activeProviderId,
-    }, credentialVaultProviders);
-    const activeProv = activeSelection?.providerId as LLMProvider | undefined;
-    const provider = activeProv ? findProvider(activeProv) : null;
-    if (!activeProv) {
-      setIsRealLLMActive(false);
-      setActiveLLMConfig(null);
-      return;
-    }
-    const activeKey = apiKeys[activeProv];
-    if (activeKey || provider?.capabilities.local) {
-      setIsRealLLMActive(true);
-      const config = providerSettings.configs[activeProv] || {};
-      setActiveLLMConfig({
-        provider: activeProv,
-        model: activeSelection?.model || config.defaultModel || "",
-        url: config.baseUrl || ""
-      });
-    } else {
-      setIsRealLLMActive(false);
-      setActiveLLMConfig(null);
-    }
-  }, [providerSettings, apiKeys, credentialVaultProviders]);
-
-  useEffect(() => {
-    async function initWorkspace() {
+    async function load() {
       try {
-        const session = await sessionStore.loadSession();
-        if (session) {
-          if (session.importedPlan) {
-            setImportedPlan(session.importedPlan);
-          }
-          if (session.providerSettings) {
-            setProviderSettings(normalizeProviderSettings(session.providerSettings as ProviderSettings));
-          }
-          if (session.threadEvents && session.threadEvents.length > 0) {
-            setLoadedThreadEvents(session.threadEvents);
-          }
-          if (session.runtimeLedgerSnapshot) {
-            setLoadedRuntimeLedgerSnapshot(session.runtimeLedgerSnapshot);
-            if (session.runtimeLedgerSnapshot.threadEvents) {
-              setLoadedThreadEvents(session.runtimeLedgerSnapshot.threadEvents);
-            }
-            if (session.runtimeLedgerSnapshot.actionRequired) {
-              setLoadedActionRequired(session.runtimeLedgerSnapshot.actionRequired);
-            }
-            if (session.runtimeLedgerSnapshot.toolCalls) {
-              setLoadedToolCalls(session.runtimeLedgerSnapshot.toolCalls);
-            }
-            if (session.runtimeLedgerSnapshot.terminalRuns) {
-              setLoadedTerminalRuns(session.runtimeLedgerSnapshot.terminalRuns);
-            }
-          }
-          if (session.agentEvents && session.agentEvents.length > 0) {
-            setLoadedAgentEvents(session.agentEvents);
-          }
-          if (session.agentRunSession) {
-            setLoadedAgentRunSession(session.agentRunSession);
-          }
-          if (session.approvalRequests) {
-            setLoadedApprovalRequests(session.approvalRequests);
-          }
-          if (session.approvalGrants) {
-            setLoadedApprovalGrants(session.approvalGrants);
-          }
-          if (session.questionRequests) {
-            setLoadedQuestionRequests(session.questionRequests);
-          }
-          if (session.actionRequired) {
-            setLoadedActionRequired(session.actionRequired);
-          }
-          if (session.toolCalls) {
-            setLoadedToolCalls(session.toolCalls);
-          }
-          if (session.terminalRuns) {
-            setLoadedTerminalRuns(session.terminalRuns);
-          }
-        } else {
-          const stored = await tauriWorkspaceStorage.load();
-          if (stored.importedPlan) {
-            setImportedPlan(stored.importedPlan);
-          }
-        }
-
-        let loadedSettings = normalizeProviderSettings(session?.providerSettings as ProviderSettings || defaultProviderSettings);
-
+        sessionStore.clearLegacySession();
+        const [session, storedConfigs] = await Promise.all([
+          sessionStore.loadSession(),
+          sessionStore.loadProviderConfigs(),
+        ]);
+        if (session?.importedPlan) setImportedPlan(session.importedPlan);
+        const storedSettings = session?.providerSettings as ProviderSettings | undefined;
+        setProviderSettings(normalizeProviderSettings({
+          activeProviderId: storedSettings?.activeProviderId || defaultProviderSettings.activeProviderId,
+          ...storedSettings,
+          configs: {
+            ...(storedSettings?.configs || {}),
+            ...storedConfigs,
+          },
+        }));
         if (isTauri()) {
-          const rawSettings = await invoke<string | null>("db_get", { key: "provider_settings" });
-          if (rawSettings) {
-            loadedSettings = normalizeProviderSettings(JSON.parse(rawSettings) as ProviderSettings);
-            setProviderSettings(loadedSettings);
-          }
-        } else {
-          const rawSettings = WEB_PROVIDER_SETTINGS_KEYS.map((key) => localStorage.getItem(key)).find(Boolean);
-          if (rawSettings) {
-            loadedSettings = normalizeProviderSettings(JSON.parse(rawSettings) as ProviderSettings);
-            setProviderSettings(loadedSettings);
-            localStorage.setItem("orbit-code.provider_settings", JSON.stringify(loadedSettings));
+          const providers = await invoke<string[]>("list_vault_credential_providers").catch(() => []);
+          setCredentialVaultProviders(providers);
+          const autoUnlock = await invoke<boolean>("is_vault_auto_unlock_enabled").catch(() => false);
+          setCredentialVaultAutoUnlock(Boolean(autoUnlock));
+          if (autoUnlock) {
+            const unlockedProviders = await invoke<string[]>("try_vault_auto_unlock").catch(() => []);
+            setApiKeys(Object.fromEntries(unlockedProviders.map((provider) => [provider, "vault"])));
+          } else {
+            setApiKeys({});
           }
         }
-
-        const autoUnlockEnabled = await keychainStorage.isAutoUnlockEnabled().catch(() => false);
-        setCredentialVaultAutoUnlock(autoUnlockEnabled);
-        const autoUnlockedProviders = autoUnlockEnabled
-          ? await keychainStorage.tryAutoUnlock().catch((err) => {
-            console.warn("Credential vault auto-unlock failed:", err);
-            return [] as string[];
-          })
-          : [];
-        if (autoUnlockedProviders.length > 0) {
-          setApiKeys(Object.fromEntries(autoUnlockedProviders.map((provider) => [provider, "__vault_unlocked__"])));
-        } else {
-          setApiKeys({});
-        }
-        const savedProviders = await keychainStorage.listSavedProviders();
-        setCredentialVaultProviders(savedProviders);
-      } catch (err) {
-        console.error("Failed to load workspace data:", err);
       } finally {
         setIsLoading(false);
       }
     }
-    initWorkspace();
+    void load();
   }, []);
 
-  const updateTask = useCallback((taskId: string, updates: Partial<PlanTask>) => {
-    setImportedPlan((prev) => {
-      if (!prev) return null;
-      const updatedTasks = prev.plan.tasks.map((t) => {
-        if (t.id === taskId) {
-          return { ...t, ...updates };
-        }
-        return t;
-      });
-      const next = {
-        ...prev,
-        plan: {
-          ...prev.plan,
-          tasks: updatedTasks,
-        },
-      };
-      tauriWorkspaceStorage.save({ importedPlan: next }).catch(console.error);
-      return next;
+  useEffect(() => {
+    if (isLoading) return;
+    void sessionStore.saveSession({
+      schemaVersion: "codex-sidecar.v1",
+      importedPlan,
+      providerSettings: providerSettings as any,
+      lastActiveAt: new Date().toISOString(),
     });
-  }, []);
+  }, [importedPlan, isLoading, providerSettings]);
 
-  const addTask = useCallback((task: PlanTask) => {
-    setImportedPlan((prev) => {
-      if (!prev) return null;
-      const next = {
-        ...prev,
-        plan: {
-          ...prev.plan,
-          tasks: [...prev.plan.tasks, task],
-        },
-      };
-      tauriWorkspaceStorage.save({ importedPlan: next }).catch(console.error);
-      return next;
-    });
-  }, []);
+  const activeSelection = useMemo(() => resolveModelSelection(providerSettings, apiKeys, {
+    providerId: providerSettings.activeProviderId,
+  }, credentialVaultProviders), [apiKeys, credentialVaultProviders, providerSettings]);
+  const activeProvider = activeSelection?.providerId ? findProvider(activeSelection.providerId) : null;
+  const isRealLLMActive = Boolean(activeProvider && (activeProvider.capabilities.local || apiKeys[activeProvider.id] || credentialVaultProviders.includes(activeProvider.id)));
+  const activeLLMConfig = activeProvider && activeSelection ? {
+    provider: activeProvider.id as LLMProvider,
+    model: activeSelection.model,
+    url: providerSettings.configs[activeProvider.id]?.baseUrl,
+  } : null;
 
-  const deleteTask = useCallback((taskId: string) => {
-    setImportedPlan((prev) => {
-      if (!prev) return null;
-      const next = {
-        ...prev,
-        plan: {
-          ...prev.plan,
-          tasks: prev.plan.tasks.filter((t) => t.id !== taskId),
-        },
-      };
-      tauriWorkspaceStorage.save({ importedPlan: next }).catch(console.error);
-      return next;
-    });
-  }, []);
-
-  const moveTask = useCallback((taskId: string, direction: "up" | "down") => {
-    setImportedPlan((prev) => {
-      if (!prev) return null;
-      const tasks = [...prev.plan.tasks];
-      const index = tasks.findIndex((t) => t.id === taskId);
-      if (index === -1) return prev;
-
-      const targetIndex = direction === "up" ? index - 1 : index + 1;
-      if (targetIndex < 0 || targetIndex >= tasks.length) return prev;
-
-      const temp = tasks[index];
-      tasks[index] = tasks[targetIndex];
-      tasks[targetIndex] = temp;
-
-      const next = {
-        ...prev,
-        plan: {
-          ...prev.plan,
-          tasks,
-        },
-      };
-      tauriWorkspaceStorage.save({ importedPlan: next }).catch(console.error);
-      return next;
-    });
-  }, []);
-
-  const importPlan = useCallback(async (source: string, fileName = "pasted-plan") => {
-    const requestSeq = importRequestSeqRef.current + 1;
-    importRequestSeqRef.current = requestSeq;
-    const isCurrentImport = () => importRequestSeqRef.current === requestSeq;
+  const importPlan = useCallback(async (source: string, fileName = "coding-plan.yaml") => {
     const result = parseCodingPlan(source);
-
     if (!result.ok) {
-      if (isRealLLMActive && activeLLMConfig) {
-        try {
-          const llmPlanOutput = await callLLMApi(
-            activeLLMConfig.provider,
-            activeLLMConfig.model,
-            PLANNER_SYSTEM_PROMPT,
-            [
-              "Analyze the following coding request and generate a detailed Orbit Code plan.",
-              "Use the same language as the user's request for all user-facing plan content.",
-              "The plan must be detailed enough for a coding agent to execute with Review Dock approvals and verification.",
-              "Include a Summary, deliverables, decision questions, recommended choices, alternative choices, implementation tasks, UI/UX notes when relevant, public interfaces/state changes, test plan, and risks.",
-              "If information is missing, do not produce a tiny plan. Put targeted questions in constraints/risks, include a recommended default, and explain how the plan proceeds if the user accepts that default.",
-              "For each meaningful choice, include 2-3 options, mark the recommended one first, and describe the tradeoff in practical product or engineering terms.",
-              "",
-              source,
-            ].join("\n"),
-            activeLLMConfig.url
-          );
-
-          const cleanedJson = cleanJsonOutput(llmPlanOutput);
-          const parsedPlan = JSON.parse(cleanedJson);
-
-          const planData: CodingPlan = {
-            version: "1",
-            title: parsedPlan.title || "LLM 智能开发计划",
-            goals: parsedPlan.goals || [],
-            constraints: parsedPlan.constraints || [],
-            tasks: (parsedPlan.tasks || []).map((t: any, index: number) => ({
-              id: t.id || `llm-task-${index}-${Date.now()}`,
-              title: t.title || "开发步骤",
-              description: t.description || t.details || t.detail || "修改对应文件，并说明具体变更、影响范围和验证方式",
-              status: "queued" as const,
-              dependsOn: t.dependsOn || [],
-              filesHint: t.filesHint || [],
-              verification: t.verification || ["npm test"]
-            })),
-            decisionQuestions: normalizeGeneratedDecisionQuestions(
-              parsedPlan.decisionQuestions || parsedPlan.decision_questions || parsedPlan.questions,
-            ),
-            acceptanceCriteria: parsedPlan.acceptanceCriteria || [],
-            risks: parsedPlan.risks || [],
-            references: parsedPlan.references || []
-          };
-
-          if (!isCurrentImport()) return false;
-          const nextPlan = {
-            plan: planData,
-            fileName,
-            importedAt: new Date().toISOString(),
-          };
-
-          setImportedPlan(nextPlan);
-          await tauriWorkspaceStorage.save({ importedPlan: nextPlan }).catch(console.error);
-          sessionStore.savePlan(planData, fileName).catch(console.error);
-          setImportError(null);
-
-          setIsLoading(false);
-          return true;
-        } catch (e: any) {
-          if (!isCurrentImport()) return false;
-          setImportError({ fileName, errors: [`智能大模型解析计划失败: ${e?.message || String(e)}`] });
-          setIsLoading(false);
-          return false;
-        }
-      } else {
-        if (!isCurrentImport()) return false;
-        const activeSelection = resolveModelSelection(providerSettings, apiKeys, { providerId: providerSettings.activeProviderId }, credentialVaultProviders);
-        const provider = activeSelection ? findProvider(activeSelection.providerId) : null;
-        const lockedProvider = provider && !provider.capabilities.local && credentialVaultProviders.includes(provider.id) && !apiKeys[provider.id];
-        const missingProviderAccess = provider && !provider.capabilities.local && !apiKeys[provider.id];
-        const accessError = lockedProvider
-          ? `已保存 ${provider.label} API Key，但当前凭据库未解锁。请在“设置 > 模型”解锁后再发送需求生成计划。`
-          : missingProviderAccess
-            ? `${provider.label} API Key 未配置或未解锁。请先在“设置 > 模型”配置后再发送需求生成计划。`
-            : !activeSelection
-              ? "请先导入或配置一个模型，再发送自然语言需求生成计划。"
-              : "";
-        setImportError({ fileName, errors: accessError ? [accessError] : result.errors });
-        setIsLoading(false);
-        return false;
-      }
+      setImportError({ fileName, errors: result.errors });
+      return false;
     }
-
-    if (!isCurrentImport()) return false;
-    const nextPlan = {
-      plan: result.plan,
-      fileName,
-      importedAt: new Date().toISOString(),
-    };
-
-    setImportedPlan(nextPlan);
-    await tauriWorkspaceStorage.save({ importedPlan: nextPlan }).catch(console.error);
-    sessionStore.savePlan(result.plan, fileName).catch(console.error);
+    const planState = { plan: result.plan, fileName, importedAt: new Date().toISOString() };
+    setImportedPlan(planState);
     setImportError(null);
-    setIsLoading(false);
+    await sessionStore.savePlan(result.plan, fileName);
     return true;
-  }, [isRealLLMActive, activeLLMConfig, apiKeys, credentialVaultProviders, providerSettings]);
-
-  const clearImportedPlan = useCallback(() => {
-    setImportedPlan(null);
-    tauriWorkspaceStorage.clear().catch(console.error);
   }, []);
 
   const restoreImportedPlan = useCallback((plan: ImportedPlanState | null) => {
     setImportedPlan(plan);
     setImportError(null);
-    tauriWorkspaceStorage.save({ importedPlan: plan }).catch(console.error);
+  }, []);
+
+  const clearImportedPlan = useCallback(() => {
+    setImportedPlan(null);
+    setImportError(null);
+  }, []);
+
+  const updateTask = useCallback((taskId: string, updates: Partial<PlanTask>) => {
+    setImportedPlan((prev) => prev ? {
+      ...prev,
+      plan: {
+        ...prev.plan,
+        tasks: prev.plan.tasks.map((task) => task.id === taskId ? { ...task, ...updates } : task),
+      },
+    } : prev);
+  }, []);
+
+  const addTask = useCallback((task: PlanTask) => {
+    setImportedPlan((prev) => prev ? { ...prev, plan: { ...prev.plan, tasks: [...prev.plan.tasks, task] } } : prev);
+  }, []);
+
+  const deleteTask = useCallback((taskId: string) => {
+    setImportedPlan((prev) => prev ? { ...prev, plan: { ...prev.plan, tasks: prev.plan.tasks.filter((task) => task.id !== taskId) } } : prev);
+  }, []);
+
+  const moveTask = useCallback((taskId: string, direction: "up" | "down") => {
+    setImportedPlan((prev) => {
+      if (!prev) return prev;
+      const tasks = [...prev.plan.tasks];
+      const index = tasks.findIndex((task) => task.id === taskId);
+      const nextIndex = direction === "up" ? index - 1 : index + 1;
+      if (index < 0 || nextIndex < 0 || nextIndex >= tasks.length) return prev;
+      [tasks[index], tasks[nextIndex]] = [tasks[nextIndex], tasks[index]];
+      return { ...prev, plan: { ...prev.plan, tasks } };
+    });
   }, []);
 
   const updateProviderSettings = useCallback(async (newSettings: ProviderSettings) => {
     const normalized = normalizeProviderSettings(newSettings);
     setProviderSettings(normalized);
-    const raw = JSON.stringify(normalized);
-    if (isTauri()) {
-      await invoke("db_set", { key: "provider_settings", value: raw }).catch(console.error);
-    } else {
-      localStorage.setItem("orbit-code.provider_settings", raw);
-      localStorage.setItem("agent-gui.provider_settings", raw);
-    }
-  }, []);
-
-  const unlockCredentialVault = useCallback(async (passphrase: string, rememberDevice = false) => {
-    const providers = rememberDevice
-      ? await keychainStorage.enableAutoUnlock(passphrase)
-      : await keychainStorage.unlock(passphrase);
-    setCredentialVaultProviders(providers);
-    setApiKeys(Object.fromEntries(providers.map((provider) => [provider, "__vault_unlocked__"])));
-    if (rememberDevice) setCredentialVaultAutoUnlock(true);
-    return providers;
+    await sessionStore.saveProviderConfigs(normalized.configs);
   }, []);
 
   const updateApiKey = useCallback(async (providerId: string, key: string, passphrase: string, rememberDevice = false) => {
-    await keychainStorage.saveApiKey(providerId, key, passphrase, rememberDevice);
-    setCredentialVaultProviders((prev) => [...new Set([...prev, providerId])]);
-    setApiKeys((prev) => ({ ...prev, [providerId]: "__vault_unlocked__" }));
-    if (rememberDevice) setCredentialVaultAutoUnlock(true);
+    if (isTauri()) {
+      await invoke("store_vault_credential", { provider: providerId, secret: key, passphrase, rememberDevice });
+      const providers = await invoke<string[]>("list_vault_credential_providers").catch(() => [providerId]);
+      setCredentialVaultProviders(providers);
+      setApiKeys(Object.fromEntries(providers.map((provider) => [provider, "vault"])));
+      return;
+    }
+    setApiKeys((prev) => ({ ...prev, [providerId]: key }));
   }, []);
+
+  const unlockCredentialVault = useCallback(async (passphrase: string, rememberDevice = false) => {
+    if (!isTauri()) return Object.keys(apiKeys);
+    const providers = rememberDevice
+      ? await invoke<string[]>("enable_vault_auto_unlock", { passphrase })
+      : await invoke<string[]>("unlock_credential_vault", { passphrase });
+    setCredentialVaultProviders(providers);
+    setCredentialVaultAutoUnlock(rememberDevice);
+    setApiKeys(Object.fromEntries(providers.map((provider) => [provider, "vault"])));
+    return providers;
+  }, [apiKeys]);
 
   const disableCredentialVaultAutoUnlock = useCallback(async () => {
-    await keychainStorage.disableAutoUnlock();
+    if (isTauri()) await invoke("disable_vault_auto_unlock");
     setCredentialVaultAutoUnlock(false);
   }, []);
-
-  const activeTitle = importedPlan?.plan.title ?? null;
-
-  const outputFiles = useMemo(() => {
-    if (!importedPlan) return [];
-    return [
-      importedPlan.fileName,
-      ...importedPlan.plan.references,
-      ...new Set(importedPlan.plan.tasks.flatMap((task) => task.filesHint)),
-    ].slice(0, 7);
-  }, [importedPlan]);
 
   return {
     isLoading,
@@ -584,18 +307,8 @@ export function useSession(): SessionState {
     credentialVaultAutoUnlock,
     isRealLLMActive,
     activeLLMConfig,
-    activeTitle,
-    outputFiles,
-    loadedAgentEvents,
-    loadedThreadEvents,
-    loadedAgentRunSession,
-    loadedApprovalRequests,
-    loadedApprovalGrants,
-    loadedQuestionRequests,
-    loadedActionRequired,
-    loadedToolCalls,
-    loadedTerminalRuns,
-    loadedRuntimeLedgerSnapshot,
+    activeTitle: importedPlan?.plan.title || null,
+    outputFiles: [],
     importPlan,
     restoreImportedPlan,
     clearImportedPlan,
@@ -608,25 +321,4 @@ export function useSession(): SessionState {
     unlockCredentialVault,
     disableCredentialVaultAutoUnlock,
   };
-}
-
-function normalizeGeneratedDecisionQuestions(input: unknown): CodingPlan["decisionQuestions"] {
-  if (!Array.isArray(input)) return [];
-  return input
-    .map((item): NormalizedDecisionQuestion | null => {
-      if (typeof item === "string") {
-        const question = item.trim();
-        return question ? { question, options: [] } : null;
-      }
-      if (!item || typeof item !== "object") return null;
-      const record = item as Record<string, unknown>;
-      const question = typeof record.question === "string" ? record.question.trim() : "";
-      if (!question) return null;
-      const recommended = typeof record.recommended === "string" ? record.recommended.trim() : "";
-      const options = Array.isArray(record.options)
-        ? record.options.filter((option): option is string => typeof option === "string" && Boolean(option.trim())).map((option) => option.trim())
-        : [];
-      return { question, recommended: recommended || undefined, options };
-    })
-    .filter((item): item is NormalizedDecisionQuestion => Boolean(item));
 }

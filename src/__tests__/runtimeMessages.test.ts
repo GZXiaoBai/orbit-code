@@ -33,7 +33,7 @@ describe("RuntimeMessage protocol", () => {
     ]);
   });
 
-  it("serializes Pi-style thinking and error parts", () => {
+  it("serializes reasoning and error parts", () => {
     const message = createRuntimeMessage({
       id: "m-pi",
       threadId: "thread-1",

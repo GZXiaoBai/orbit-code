@@ -1,7 +1,7 @@
 import type { ThreadEvent } from "./threadEvents";
 import type { ActionRequiredEvent } from "./actionRequired";
-import type { ToolCallLifecycle } from "./toolCallLifecycle";
-import type { RuntimeLedgerSelectorSnapshot } from "./threadEventSelectors";
+import type { RuntimeToolSummaryInput } from "./runtimePrimitives";
+import type { CodexProjectionSnapshot } from "./threadEventSelectors";
 
 export type RunStepKind = "agent" | "approval" | "command" | "patch" | "terminal";
 export type RunStepStatus = "waiting" | "running" | "done" | "failed" | "denied" | "cancelled";
@@ -72,7 +72,7 @@ export function runStepsFromActionRequired(actions: ActionRequiredEvent[]): RunS
   }));
 }
 
-export function runStepsFromToolLifecycle(toolCalls: ToolCallLifecycle[]): RunStep[] {
+export function runStepsFromToolSummaries(toolCalls: RuntimeToolSummaryInput[]): RunStep[] {
   return toolCalls.map((call) => ({
     id: `tool:${call.id}`,
     kind: call.tool === "run_command" ? "command" : "agent",
@@ -88,7 +88,7 @@ export function runStepsFromToolLifecycle(toolCalls: ToolCallLifecycle[]): RunSt
               ? "running"
               : "waiting",
     title: String(call.tool),
-    detail: call.resultText || call.error || call.policyDecision?.reason || call.argsSummary || String(call.tool),
+    detail: call.resultText || call.error || call.argsSummary || String(call.tool),
     approvalId: call.actionRequiredId,
     eventId: call.threadEventId,
     createdAt: call.createdAt,
@@ -107,11 +107,11 @@ export function runStepsFromEvents(events: ThreadEvent[]): RunStep[] {
   }));
 }
 
-export function selectRunSteps(input: RuntimeLedgerSelectorSnapshot): RunStep[] {
+export function selectRunSteps(input: CodexProjectionSnapshot): RunStep[] {
   return [
     ...runStepsFromEvents(input.threadEvents),
     ...runStepsFromActionRequired(input.actionRequired),
-    ...runStepsFromToolLifecycle(input.toolCalls || []),
+    ...runStepsFromToolSummaries(input.toolCalls || []),
   ].sort((a, b) => {
     const aTime = Date.parse(a.createdAt);
     const bTime = Date.parse(b.createdAt);

@@ -78,8 +78,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
+pub mod codex;
 pub mod command;
 pub mod context;
 pub mod file;
@@ -149,7 +150,11 @@ fn derive_vault_key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32], String> {
     Ok(key)
 }
 
-fn encrypt_secret(provider: &str, secret: &str, passphrase: &str) -> Result<EncryptedCredentialEnvelope, String> {
+fn encrypt_secret(
+    provider: &str,
+    secret: &str,
+    passphrase: &str,
+) -> Result<EncryptedCredentialEnvelope, String> {
     let mut salt = [0u8; 16];
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut salt);
@@ -171,10 +176,15 @@ fn encrypt_secret(provider: &str, secret: &str, passphrase: &str) -> Result<Encr
     })
 }
 
-fn decrypt_secret(envelope: &EncryptedCredentialEnvelope, passphrase: &str) -> Result<String, String> {
+fn decrypt_secret(
+    envelope: &EncryptedCredentialEnvelope,
+    passphrase: &str,
+) -> Result<String, String> {
     let salt = BASE64.decode(&envelope.salt).map_err(|e| e.to_string())?;
     let nonce = BASE64.decode(&envelope.nonce).map_err(|e| e.to_string())?;
-    let ciphertext = BASE64.decode(&envelope.ciphertext).map_err(|e| e.to_string())?;
+    let ciphertext = BASE64
+        .decode(&envelope.ciphertext)
+        .map_err(|e| e.to_string())?;
     let key = derive_vault_key(passphrase, &salt)?;
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| e.to_string())?;
     let plaintext = cipher
@@ -183,7 +193,10 @@ fn decrypt_secret(envelope: &EncryptedCredentialEnvelope, passphrase: &str) -> R
     String::from_utf8(plaintext).map_err(|e| e.to_string())
 }
 
-fn load_credentials_with_passphrase(app: &AppHandle, passphrase: &str) -> Result<HashMap<String, String>, String> {
+fn load_credentials_with_passphrase(
+    app: &AppHandle,
+    passphrase: &str,
+) -> Result<HashMap<String, String>, String> {
     let conn = db::get_connection(app)?;
     let mut stmt = conn
         .prepare("SELECT key, value FROM kv_store WHERE key LIKE ?1")
@@ -201,14 +214,15 @@ fn load_credentials_with_passphrase(app: &AppHandle, passphrase: &str) -> Result
             continue;
         }
         let provider = key.trim_start_matches(VAULT_KEY_PREFIX).to_string();
-        let envelope = serde_json::from_str::<EncryptedCredentialEnvelope>(&value).map_err(|e| e.to_string())?;
+        let envelope = serde_json::from_str::<EncryptedCredentialEnvelope>(&value)
+            .map_err(|e| e.to_string())?;
         providers.insert(provider, decrypt_secret(&envelope, passphrase)?);
     }
     Ok(providers)
 }
 
 fn trusted_device_key_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = db::get_app_data_dir(app)?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join(VAULT_AUTO_UNLOCK_DEVICE_KEY_FILE))
 }
@@ -238,7 +252,10 @@ fn load_or_create_trusted_device_key(app: &AppHandle) -> Result<[u8; 32], String
     Ok(key)
 }
 
-fn encrypt_trusted_device_payload(app: &AppHandle, providers: &HashMap<String, String>) -> Result<TrustedDeviceEnvelope, String> {
+fn encrypt_trusted_device_payload(
+    app: &AppHandle,
+    providers: &HashMap<String, String>,
+) -> Result<TrustedDeviceEnvelope, String> {
     let key = load_or_create_trusted_device_key(app)?;
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -257,11 +274,17 @@ fn encrypt_trusted_device_payload(app: &AppHandle, providers: &HashMap<String, S
     })
 }
 
-fn decrypt_trusted_device_payload(app: &AppHandle, raw_envelope: &str) -> Result<TrustedDevicePayload, String> {
+fn decrypt_trusted_device_payload(
+    app: &AppHandle,
+    raw_envelope: &str,
+) -> Result<TrustedDevicePayload, String> {
     let key = load_or_create_trusted_device_key(app)?;
-    let envelope = serde_json::from_str::<TrustedDeviceEnvelope>(raw_envelope).map_err(|e| e.to_string())?;
+    let envelope =
+        serde_json::from_str::<TrustedDeviceEnvelope>(raw_envelope).map_err(|e| e.to_string())?;
     let nonce = BASE64.decode(&envelope.nonce).map_err(|e| e.to_string())?;
-    let ciphertext = BASE64.decode(&envelope.ciphertext).map_err(|e| e.to_string())?;
+    let ciphertext = BASE64
+        .decode(&envelope.ciphertext)
+        .map_err(|e| e.to_string())?;
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| e.to_string())?;
     let plaintext = cipher
         .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
@@ -269,7 +292,10 @@ fn decrypt_trusted_device_payload(app: &AppHandle, raw_envelope: &str) -> Result
     serde_json::from_slice::<TrustedDevicePayload>(&plaintext).map_err(|e| e.to_string())
 }
 
-fn save_trusted_device_cache(app: &AppHandle, providers: &HashMap<String, String>) -> Result<(), String> {
+fn save_trusted_device_cache(
+    app: &AppHandle,
+    providers: &HashMap<String, String>,
+) -> Result<(), String> {
     let envelope = encrypt_trusted_device_payload(app, providers)?;
     let raw = serde_json::to_string(&envelope).map_err(|e| e.to_string())?;
     db::db_set(app.clone(), VAULT_AUTO_UNLOCK_KEY.to_string(), raw)
@@ -372,7 +398,9 @@ pub fn list_vault_credential_providers(app: AppHandle) -> Result<Vec<String>, St
         .prepare("SELECT key FROM kv_store WHERE key LIKE ?1 ORDER BY key")
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([format!("{}%", VAULT_KEY_PREFIX)], |row| row.get::<_, String>(0))
+        .query_map([format!("{}%", VAULT_KEY_PREFIX)], |row| {
+            row.get::<_, String>(0)
+        })
         .map_err(|e| e.to_string())?;
     let mut providers = Vec::new();
     for row in rows {
@@ -513,7 +541,10 @@ fn reject_unsafe_relative_path(path: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_workspace_file_target(workspace_path: Option<String>, path: String) -> Result<(PathBuf, PathBuf), String> {
+fn resolve_workspace_file_target(
+    workspace_path: Option<String>,
+    path: String,
+) -> Result<(PathBuf, PathBuf), String> {
     reject_unsafe_relative_path(&path, "File action")?;
     let workspace_root = resolve_workspace_root(workspace_path)?;
     let target = workspace_root.join(path.trim());
@@ -715,7 +746,10 @@ pub fn search_workspace_files(
                 if results.len() >= limit {
                     break;
                 }
-                let content = match read_workspace_file(file.clone(), Some(workspace_root.to_string_lossy().to_string())) {
+                let content = match read_workspace_file(
+                    file.clone(),
+                    Some(workspace_root.to_string_lossy().to_string()),
+                ) {
                     Ok(content) => content,
                     Err(_) => continue,
                 };
@@ -759,7 +793,11 @@ pub fn open_workspace_path(
             }
             #[cfg(all(unix, not(target_os = "macos")))]
             {
-                let parent = target.parent().unwrap_or_else(|| Path::new(".")).to_string_lossy().to_string();
+                let parent = target
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_string_lossy()
+                    .to_string();
                 let mut cmd = Command::new("xdg-open");
                 cmd.arg(parent);
                 run_open_command(cmd, "Reveal in file manager")
@@ -1525,7 +1563,10 @@ pub fn restore_workspace_file_snapshot(
                     }
                 }
             }
-            return Err(format!("Snapshot restore failed for {}: {}. Rolled back.", file.path, e));
+            return Err(format!(
+                "Snapshot restore failed for {}: {}. Rolled back.",
+                file.path, e
+            ));
         }
     }
 
@@ -1588,10 +1629,16 @@ pub fn create_workspace_git_shadow_checkpoint(
     }
 
     run_git_command(&canonical_shadow, &["init"])?;
-    run_git_command(&canonical_shadow, &["config", "user.email", "orbit-code@example.local"])?;
+    run_git_command(
+        &canonical_shadow,
+        &["config", "user.email", "orbit-code@example.local"],
+    )?;
     run_git_command(&canonical_shadow, &["config", "user.name", "Orbit Code"])?;
     run_git_command(&canonical_shadow, &["add", "-A"])?;
-    run_git_command(&canonical_shadow, &["commit", "--allow-empty", "-m", "orbit shadow checkpoint"])?;
+    run_git_command(
+        &canonical_shadow,
+        &["commit", "--allow-empty", "-m", "orbit shadow checkpoint"],
+    )?;
 
     Ok(GitShadowCheckpointResult {
         checkpoint_id,
@@ -1605,8 +1652,12 @@ pub fn restore_workspace_git_shadow_checkpoint(
     shadow_path: String,
     files: Vec<FileSnapshot>,
 ) -> Result<(), String> {
-    let shadow_root = orbit_git_shadow_root().canonicalize().map_err(|e| e.to_string())?;
-    let canonical_shadow = PathBuf::from(shadow_path).canonicalize().map_err(|e| e.to_string())?;
+    let shadow_root = orbit_git_shadow_root()
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let canonical_shadow = PathBuf::from(shadow_path)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
     if !canonical_shadow.starts_with(&shadow_root) {
         return Err("Access Denied: git shadow path escapes shadow root".to_string());
     }
@@ -1618,7 +1669,10 @@ pub fn restore_workspace_git_shadow_checkpoint(
             let shadow_file = canonical_shadow.join(&file.path);
             let canonical_shadow_file = shadow_file.canonicalize().map_err(|e| e.to_string())?;
             if !canonical_shadow_file.starts_with(&canonical_shadow) {
-                return Err(format!("Access Denied: git shadow file escapes checkpoint for {}", file.path));
+                return Err(format!(
+                    "Access Denied: git shadow file escapes checkpoint for {}",
+                    file.path
+                ));
             }
             let content = fs::read_to_string(&canonical_shadow_file).map_err(|e| e.to_string())?;
             restored.push(FileSnapshot {
@@ -1696,8 +1750,8 @@ Embeddings
 pub async fn build_embeddings(app: AppHandle) -> Result<embedding::BuildStats, String> {
     let conn = db::get_connection(&app)?;
     let current_dir = get_active_workspace_root()?;
-    let api_key = get_provider_credential("openai")?
-        .ok_or("OpenAI API Key not configured for embeddings")?;
+    let api_key =
+        get_provider_credential("openai")?.ok_or("OpenAI API Key not configured for embeddings")?;
 
     embedding::build_all_embeddings(&conn, &current_dir, &api_key)
 }
@@ -1785,8 +1839,12 @@ pub async fn call_llm_api(
     api_url: String,
     payload: serde_json::Value,
 ) -> Result<String, String> {
-    let api_key = get_provider_credential(&provider)?
-        .ok_or_else(|| format!("API Key for {} is not unlocked in Orbit credential vault", provider))?;
+    let api_key = get_provider_credential(&provider)?.ok_or_else(|| {
+        format!(
+            "API Key for {} is not unlocked in Orbit credential vault",
+            provider
+        )
+    })?;
 
     let final_url = if provider == "google" && !api_url.contains("key=") {
         let separator = if api_url.contains('?') { "&" } else { "?" };
@@ -1869,8 +1927,8 @@ fn model_list_url(
         .map(|value| value.trim_end_matches('/').to_string());
 
     let url = match provider {
-        "openai" | "openrouter" | "xai" | "mistral" | "groq" | "qwen" | "kimi"
-        | "siliconflow" | "zhipu" => clean_base
+        "openai" | "openrouter" | "xai" | "mistral" | "groq" | "qwen" | "kimi" | "siliconflow"
+        | "zhipu" => clean_base
             .map(|base| {
                 if base.ends_with("/models") {
                     base
@@ -1997,10 +2055,12 @@ pub async fn list_llm_models(
     let api_key = if provider == "ollama" {
         None
     } else {
-        Some(
-            get_provider_credential(&provider)?
-                .ok_or_else(|| format!("API Key for {} is not unlocked in Orbit credential vault", provider))?,
-        )
+        Some(get_provider_credential(&provider)?.ok_or_else(|| {
+            format!(
+                "API Key for {} is not unlocked in Orbit credential vault",
+                provider
+            )
+        })?)
     };
 
     let url = model_list_url(&provider, base_url, api_key.as_deref())?;
@@ -2047,8 +2107,12 @@ pub async fn call_llm_api_streaming(
     api_url: String,
     payload: serde_json::Value,
 ) -> Result<(), String> {
-    let api_key = get_provider_credential(&provider)?
-        .ok_or_else(|| format!("API Key for {} is not unlocked in Orbit credential vault", provider))?;
+    let api_key = get_provider_credential(&provider)?.ok_or_else(|| {
+        format!(
+            "API Key for {} is not unlocked in Orbit credential vault",
+            provider
+        )
+    })?;
 
     let final_url = if provider == "google" && !api_url.contains("key=") {
         let separator = if api_url.contains('?') { "&" } else { "?" };
@@ -2197,15 +2261,24 @@ mod provider_tests {
     fn credential_vault_encrypts_and_rejects_wrong_passphrase() {
         let envelope = encrypt_secret("deepseek", "sk-test", "correct horse").unwrap();
         assert_ne!(envelope.ciphertext, "sk-test");
-        assert_eq!(decrypt_secret(&envelope, "correct horse").unwrap(), "sk-test");
+        assert_eq!(
+            decrypt_secret(&envelope, "correct horse").unwrap(),
+            "sk-test"
+        );
         assert!(decrypt_secret(&envelope, "wrong horse").is_err());
     }
 
     #[test]
     fn allows_new_provider_hosts() {
-        assert!(provider_allowed_hosts("openrouter").unwrap().contains(&"openrouter.ai"));
-        assert!(provider_allowed_hosts("siliconflow").unwrap().contains(&"api.siliconflow.cn"));
-        assert!(provider_allowed_hosts("qwen").unwrap().contains(&"dashscope.aliyuncs.com"));
+        assert!(provider_allowed_hosts("openrouter")
+            .unwrap()
+            .contains(&"openrouter.ai"));
+        assert!(provider_allowed_hosts("siliconflow")
+            .unwrap()
+            .contains(&"api.siliconflow.cn"));
+        assert!(provider_allowed_hosts("qwen")
+            .unwrap()
+            .contains(&"dashscope.aliyuncs.com"));
     }
 
     #[test]

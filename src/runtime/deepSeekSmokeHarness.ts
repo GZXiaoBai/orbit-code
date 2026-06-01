@@ -104,7 +104,7 @@ function nextFixForStage(stage: SmokeStage): string {
   const fixes: Record<SmokeStage, string> = {
     planDraft: "Fix PlannerEngine or provider credentials until Plan mode produces a typed planDraft event.",
     modeSwitch: "Fix plan adoption so accepting the draft writes a modeSwitch event to Build.",
-    approval: "Fix PermissionScheduler/ActionRequired wiring so Build command requests create a blocking approval.",
+    approval: "Fix Codex sidecar approval mapping so Build command requests create a blocking approval item.",
     question: "Fix ask_user handling so structured questions become ActionRequired question events.",
     patchProposal: "Fix Build tool execution so propose_patch creates a typed patchProposal with file summaries.",
     checkpoint: "Fix patch apply preflight so checkpoint events are recorded before writing files.",
