@@ -1,0 +1,54 @@
+{
+  "id": "codex-live-readiness-2026-05-31T10-13-57-143Z",
+  "runtime": "codex-sidecar.v1",
+  "provider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "scope": "Noninteractive readiness for a future live Codex app-server Build smoke. This verifies trusted-device vault availability, prepared sidecar presence, and DeepSeek network reachability without logging or persisting the API key.",
+  "startedAt": "2026-05-31T10:13:56.767Z",
+  "completedAt": "2026-05-31T10:13:57.143Z",
+  "result": "verified",
+  "criteria": [
+    {
+      "id": "trusted-device-vault",
+      "label": "Trusted-device auto-unlock vault can be decrypted without exposing plaintext.",
+      "status": "verified",
+      "message": "Vault decrypted in process memory.",
+      "evidence": {
+        "providers": [
+          "deepseek"
+        ]
+      }
+    },
+    {
+      "id": "deepseek-credential",
+      "label": "DeepSeek credential is present in the unlocked vault payload.",
+      "status": "verified",
+      "message": "DeepSeek credential present.",
+      "evidence": {}
+    },
+    {
+      "id": "prepared-sidecar",
+      "label": "Prepared Codex sidecar binary exists for this host.",
+      "status": "verified",
+      "message": "Prepared sidecar found.",
+      "evidence": {
+        "path": "/Users/zhoujunjie/PersonalProjects/Agent GUI/src-tauri/binaries/codex-aarch64-apple-darwin",
+        "version": "codex-cli 0.135.0-alpha.1"
+      }
+    },
+    {
+      "id": "deepseek-network",
+      "label": "DeepSeek API is reachable with the vault credential.",
+      "status": "verified",
+      "message": "DeepSeek /models returned successfully.",
+      "evidence": {
+        "count": 2,
+        "requestedModelListed": true,
+        "sample": [
+          "deepseek-v4-flash",
+          "deepseek-v4-pro"
+        ]
+      }
+    }
+  ]
+}

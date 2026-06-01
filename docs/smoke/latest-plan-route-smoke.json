@@ -1,0 +1,51 @@
+{
+  "id": "plan-route-smoke-2026-06-01T07-51-22-039Z",
+  "runtime": "codex-sidecar.v1",
+  "provider": "deepseek",
+  "scope": "Focused workbench smoke for ordinary Plan/chat submissions. It verifies the desktop invoke route sends direct-deepseek-plan to codex_turn_start and does not preflight or restart Codex app-server after submit.",
+  "startedAt": "2026-06-01T07:51:12.066Z",
+  "completedAt": "2026-06-01T07:51:22.039Z",
+  "result": "verified",
+  "acceptanceCriteria": [
+    {
+      "id": "focused-e2e-ran",
+      "label": "Focused Playwright route test executed.",
+      "status": "verified",
+      "evidence": {
+        "testFile": "e2e/run-controls.spec.ts:403",
+        "testName": "desktop Plan submission uses direct DeepSeek route without app-server preflight"
+      }
+    },
+    {
+      "id": "direct-plan-route",
+      "label": "Desktop Plan submit uses codex_turn_start with runtimeMode direct-deepseek-plan.",
+      "status": "verified",
+      "evidence": {
+        "command": "codex_turn_start",
+        "runtimeMode": "direct-deepseek-plan"
+      }
+    },
+    {
+      "id": "no-app-server-preflight",
+      "label": "Desktop Plan submit does not call codex_sidecar_status or codex_runtime_restart after send.",
+      "status": "verified",
+      "evidence": {
+        "blockedCommands": [
+          "codex_sidecar_status",
+          "codex_runtime_restart"
+        ]
+      }
+    }
+  ],
+  "step": {
+    "command": "npx",
+    "args": [
+      "playwright",
+      "test",
+      "e2e/run-controls.spec.ts:403"
+    ],
+    "status": 0,
+    "stdoutTail": "\nRunning 1 test using 1 worker\n\n  ✓  1 e2e/run-controls.spec.ts:403:3 › Orbit Code — Run Controls › desktop Plan submission uses direct DeepSeek route without app-server preflight (4.2s)\n\n  1 passed (9.0s)\n",
+    "stderrTail": "(node:20111) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n(node:20111) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n"
+  }
+}

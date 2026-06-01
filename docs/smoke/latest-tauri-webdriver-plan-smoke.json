@@ -1,0 +1,20 @@
+{
+  "id": "tauri-webdriver-plan-smoke-2026-05-31T13-12-59-615Z",
+  "scope": "Packaged-window smoke for Orbit Code through tauri-driver/WebDriver. Default mode verifies launch and workbench render; live Plan submit requires ORBIT_DESKTOP_PLAN_LIVE=1.",
+  "startedAt": "2026-05-31T13:12:59.614Z",
+  "completedAt": "2026-05-31T13:12:59.615Z",
+  "result": "blocked",
+  "livePlanEnabled": false,
+  "criteria": [
+    {
+      "id": "desktop-webdriver-platform",
+      "label": "Host platform can drive the packaged Tauri window.",
+      "status": "blocked",
+      "message": "macOS cannot run Tauri WebDriver automation because WKWebView has no WebDriver implementation. Run this smoke on Linux/Windows CI.",
+      "evidence": {
+        "platform": "darwin",
+        "docs": "https://v2.tauri.app/develop/tests/webdriver/"
+      }
+    }
+  ]
+}

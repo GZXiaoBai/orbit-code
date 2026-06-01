@@ -1,0 +1,51 @@
+{
+  "id": "plan-live-streaming-2026-06-01T07-51-28-551Z",
+  "runtime": "direct-deepseek-plan",
+  "provider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "scope": "Live noninteractive smoke for the ordinary Plan/chat path. It decrypts the Orbit trusted-device vault in memory, calls DeepSeek chat streaming directly, verifies SSE deltas, and never logs or persists the API key.",
+  "startedAt": "2026-06-01T07:51:24.419Z",
+  "completedAt": "2026-06-01T07:51:28.549Z",
+  "result": "verified",
+  "criteria": [
+    {
+      "id": "trusted-device-vault",
+      "label": "Trusted-device vault decrypts locally without logging plaintext credentials.",
+      "status": "verified",
+      "message": "Vault decrypted in process memory.",
+      "evidence": {
+        "providers": [
+          "deepseek"
+        ]
+      }
+    },
+    {
+      "id": "deepseek-credential",
+      "label": "DeepSeek credential exists in the unlocked vault.",
+      "status": "verified",
+      "message": "DeepSeek credential present.",
+      "evidence": {}
+    },
+    {
+      "id": "deepseek-plan-stream",
+      "label": "DeepSeek direct Plan chat returns SSE deltas for a simple greeting.",
+      "status": "verified",
+      "message": "Received incremental assistant content from DeepSeek.",
+      "evidence": {
+        "status": 200,
+        "frames": 136,
+        "assistantDeltas": 19,
+        "reasoningDeltas": 115,
+        "assistantChars": 40,
+        "reasoningChars": 214,
+        "completed": true,
+        "usage": {
+          "prompt_tokens": 18,
+          "completion_tokens": 135,
+          "total_tokens": 153
+        },
+        "assistantPreview": "你好！我是Orbit Code的规划助手，很高兴为你服务。有什么可以帮助你的吗？"
+      }
+    }
+  ]
+}

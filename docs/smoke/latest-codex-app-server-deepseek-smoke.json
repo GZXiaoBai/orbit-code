@@ -1,0 +1,116 @@
+{
+  "id": "codex-app-server-deepseek-smoke-2026-06-01T07-52-22-714Z",
+  "runtime": "codex-sidecar.v1",
+  "provider": "deepseek",
+  "scope": "Prepared Codex sidecar plus persistent Codex app-server routing, bridge approval/tool-call mapping, terminal/fileEdit projection, and final-summary smoke harness evidence. Live DeepSeek Build still requires an unlocked Orbit vault in the desktop runtime.",
+  "startedAt": "2026-06-01T07:51:11.830Z",
+  "completedAt": "2026-06-01T07:52:22.714Z",
+  "result": "verified",
+  "acceptanceCriteria": [
+    {
+      "id": "sidecar-prepared",
+      "label": "Pinned Codex sidecar is prepared before smoke assertions run.",
+      "status": "verified",
+      "evidence": [
+        "Prepared Codex sidecar"
+      ],
+      "missing": []
+    },
+    {
+      "id": "persistent-app-server-routing",
+      "label": "Persistent app-server routing, request multiplexing, stale pending cleanup, and stderr diagnostics are covered.",
+      "status": "verified",
+      "evidence": [
+        "json_rpc_client_multiplexes_responses_and_notifications",
+        "persistent_request_without_stdin_cleans_pending_state",
+        "persistent_response_timeout_cleans_runtime_state",
+        "sidecar_stderr_tail_is_trimmed_and_attached_to_failures"
+      ],
+      "missing": []
+    },
+    {
+      "id": "approval-and-tool-call-bridge",
+      "label": "DeepSeek Responses bridge can surface Codex approval/tool-call items.",
+      "status": "verified",
+      "evidence": [
+        "responses_bridge_translates_deepseek_payload_and_items",
+        "app_server_items_map_to_codex_events_and_review_patches"
+      ],
+      "missing": []
+    },
+    {
+      "id": "terminal-and-file-edit-inspector",
+      "label": "Frontend Codex projection exposes terminal output and file edits to the workbench inspector.",
+      "status": "verified",
+      "evidence": [
+        "maps Codex approval and terminal items into action and run-step models",
+        "builds Codex inspector sections for denied approvals, answered questions, edits, and usage"
+      ],
+      "missing": []
+    },
+    {
+      "id": "final-summary-smoke-stage",
+      "label": "DeepSeek smoke harness requires the full typed Build loop including final summary.",
+      "status": "verified",
+      "evidence": [
+        "passes when the full typed DeepSeek loop is present",
+        "returns a failure ledger record for the first missing stage"
+      ],
+      "missing": []
+    },
+    {
+      "id": "build-runtime-preflight",
+      "label": "Workbench blocks Build before turn/start when the Codex app-server runtime is not ready.",
+      "status": "verified",
+      "evidence": [
+        "blocks Build before turn/start when the app-server runtime is not ready",
+        "treats a running app-server as ready even when Build will later emit turn items"
+      ],
+      "missing": []
+    }
+  ],
+  "steps": [
+    {
+      "name": "prepare-sidecar",
+      "command": "npm",
+      "args": [
+        "run",
+        "prepare:codex-sidecar"
+      ],
+      "status": 0,
+      "stdoutTail": "\n> orbit-code@1.0.0 prepare:codex-sidecar\n> node scripts/prepare-codex-sidecar.mjs\n\nPrepared Codex sidecar: /Users/zhoujunjie/PersonalProjects/Agent GUI/src-tauri/binaries/codex-aarch64-apple-darwin\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "codex-runtime-tests",
+      "command": "cargo",
+      "args": [
+        "test",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "commands::codex::tests::",
+        "--",
+        "--nocapture"
+      ],
+      "status": 0,
+      "stdoutTail": "\nrunning 30 tests\ntest commands::codex::tests::app_server_context_uses_orbit_turn_until_app_turn_is_known ... ok\ntest commands::codex::tests::app_server_error_items_use_stable_ids_per_turn ... ok\ntest commands::codex::tests::build_preflight_failure_returns_failed_turn_without_running_result ... ok\ntest commands::codex::tests::bridge_models_route_is_loopback_catalog_compatible ... ok\ntest commands::codex::tests::app_server_items_map_to_codex_events_and_review_patches ... ok\ntest commands::codex::tests::bridge_binds_loopback_only ... ok\ntest commands::codex::tests::app_server_error_notifications_preserve_nested_message_details ... ok\ntest commands::codex::tests::build_turns_use_untrusted_codex_approval_policy ... ok\ntest commands::codex::tests::app_server_failure_cleanup_clears_thread_cache_active_context_and_pending_requests ... ok\ntest commands::codex::tests::direct_plan_routes_protocol_specific_providers ... ok\ntest commands::codex::tests::direct_plan_supports_openai_compatible_provider_urls ... ok\ntest commands::codex::tests::direct_plan_builds_protocol_specific_payloads ... ok\ntest commands::codex::tests::codex_binary_lookup_prefers_bundled_sidecar_paths ... ok\ntest commands::codex::tests::generated_config_contains_bridge_without_secret ... ok\ntest commands::codex::tests::deepseek_sse_parser_merges_reasoning_content_tool_calls_and_usage ... ok\ntest commands::codex::tests::orbit_reasoning_effort_maps_to_codex_app_server_enum ... ok\ntest commands::codex::tests::missing_credential_error_is_structured_without_secret ... ok\ntest commands::codex::tests::permissions_approval_response_grants_requested_turn_permissions ... ok\ntest commands::codex::tests::json_rpc_client_multiplexes_responses_and_notifications ... ok\ntest commands::codex::tests::persistent_request_without_stdin_cleans_pending_state ... ok\ntest commands::codex::tests::plan_turns_route_to_direct_provider_even_without_explicit_runtime_mode ... ok\ntest commands::codex::tests::provider_catalog_supports_required_openai_compatible_providers ... ok\ntest commands::codex::tests::runtime_error_diagnostics_include_exit_code_and_stderr_tail ... ok\ntest commands::codex::tests::turn_start_input_accepts_explicit_runtime_route ... ok\ntest commands::codex::tests::unsupported_bridge_provider_returns_blocked_reason ... ok\ntest commands::codex::tests::responses_bridge_translates_deepseek_payload_and_items ... ok\ntest commands::codex::tests::persistent_response_timeout_cleans_runtime_state ... ok\ntest commands::codex::tests::sidecar_stderr_tail_is_trimmed_and_attached_to_failures ... ok\ntest commands::codex::tests::sidecar_status_exposes_runtime_diagnostics ... ok\ntest commands::codex::tests::workspace_snapshot_lists_real_files_and_selected_content ... ok\n\ntest result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 29 filtered out; finished in 0.01s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s\n\n",
+      "stderrTail": "   Compiling objc2-exception-helper v0.1.1\n   Compiling tree-sitter v0.23.2\n   Compiling libsqlite3-sys v0.28.0\n   Compiling tree-sitter-python v0.23.6\n   Compiling tree-sitter-typescript v0.23.2\n   Compiling tree-sitter-rust v0.23.3\n   Compiling objc2 v0.6.4\n   Compiling orbit-code v1.0.0 (/Users/zhoujunjie/PersonalProjects/Agent GUI/src-tauri)\n   Compiling objc2-core-foundation v0.3.2\n   Compiling block2 v0.6.2\n   Compiling dispatch2 v0.3.1\n   Compiling objc2-foundation v0.3.2\n   Compiling rusqlite v0.31.0\n   Compiling objc2-app-kit v0.3.2\n   Compiling objc2-web-kit v0.3.2\n   Compiling tao v0.35.3\n   Compiling muda v0.19.2\n   Compiling window-vibrancy v0.6.0\n   Compiling rfd v0.16.0\n   Compiling wry v0.55.1\n   Compiling tauri-runtime v2.11.2\n   Compiling tauri-runtime-wry v2.11.2\n   Compiling tauri v2.11.2\n   Compiling tauri-plugin-fs v2.5.1\n   Compiling tauri-plugin-opener v2.5.4\n   Compiling tauri-plugin-dialog v2.7.1\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 01s\n     Running unittests src/lib.rs (src-tauri/target/debug/deps/agent_gui_lib-9dbba80e3850a077)\n     Running unittests src/main.rs (src-tauri/target/debug/deps/orbit_code-ed0253873fea26ff)\n     Running tests/ast_parser_test.rs (src-tauri/target/debug/deps/ast_parser_test-fd553c88fdede7ce)\n     Running tests/code_graph_test.rs (src-tauri/target/debug/deps/code_graph_test-e799f139952296b0)\n     Running tests/embedding_test.rs (src-tauri/target/debug/deps/embedding_test-01fcc69bc9a3ad70)\n"
+    },
+    {
+      "name": "frontend-codex-evidence",
+      "command": "npx",
+      "args": [
+        "vitest",
+        "run",
+        "--reporter",
+        "verbose",
+        "src/__tests__/codexSessionRouting.test.ts",
+        "src/__tests__/codexItemProjection.test.ts",
+        "src/__tests__/deepSeekSmokeHarness.test.ts"
+      ],
+      "status": 0,
+      "stdoutTail": "\n RUN  v4.1.7 /Users/zhoujunjie/PersonalProjects/Agent GUI\n\n ✓ src/__tests__/deepSeekSmokeHarness.test.ts > deepSeekSmokeHarness > returns a failure ledger record for the first missing stage 2ms\n ✓ src/__tests__/deepSeekSmokeHarness.test.ts > deepSeekSmokeHarness > passes when the full typed DeepSeek loop is present 3ms\n ✓ src/__tests__/deepSeekSmokeHarness.test.ts > deepSeekSmokeHarness > creates a durable smoke run record with terminal and failure details 0ms\n ✓ src/__tests__/codexSessionRouting.test.ts > Codex session runtime routing > keeps Plan on the direct provider streaming path 1ms\n ✓ src/__tests__/codexSessionRouting.test.ts > Codex session runtime routing > routes Build through the Codex app-server path 0ms\n ✓ src/__tests__/codexSessionRouting.test.ts > Codex session runtime routing > does not preflight or restart Codex app-server for desktop Plan submissions 0ms\n ✓ src/__tests__/codexSessionRouting.test.ts > Codex session runtime routing > preflights Codex app-server only for unblocked desktop Build submissions 0ms\n ✓ src/__tests__/codexSessionRouting.test.ts > Codex session runtime routing > blocks Build before turn/start when the app-server runtime is not ready 0ms\n ✓ src/__tests__/codexSessionRouting.test.ts > Codex session runtime routing > includes exit code and stderr diagnostics in blocked Build messages 0ms\n ✓ src/__tests__/codexSessionRouting.test.ts > Codex session runtime routing > treats a running app-server as ready even when Build will later emit turn items 0ms\n ✓ src/__tests__/codexSessionRouting.test.ts > Codex session runtime routing > marks a running turn failed when a runtime error arrives asynchronously 1ms\n ✓ src/__tests__/codexSessionRouting.test.ts > Codex session runtime routing > locks submit only while the active Codex turn is genuinely running 0ms\n ✓ src/__tests__/codexSessionRouting.test.ts > Codex session runtime routing > upserts one runtime error item per turn/source instead of duplicating cards 1ms\n ✓ src/__tests__/codexSessionRouting.test.ts > Codex session runtime routing > normalizes restart rejection into a recoverable runtime status result 0ms\n ✓ src/__tests__/codexSessionRouting.test.ts > Codex session runtime routing > recovers a persisted running turn as interrupted after reload 0ms\n ✓ src/__tests__/codexSessionRouting.test.ts > Codex session runtime routing > cleans persisted running output without losing pending actions after reload 0ms\n ✓ src/__tests__/codexItemProjection.test.ts > Codex item projection > merges Codex item delta events without replaying duplicate sequences 1ms\n ✓ src/__tests__/codexItemProjection.test.ts > Codex item projection > drops late duplicate deltas after a newer sequence has already arrived 0ms\n ✓ src/__tests__/codexItemProjection.test.ts > Codex item projection > does not clear streamed text when app-server completes an item with an empty body 0ms\n ✓ src/__tests__/codexItemProjection.test.ts > Codex item projection > keeps completed item metadata while preserving already streamed text 0ms\n ✓ src/__tests__/codexItemProjection.test.ts > Codex item projection > does not let stale shorter upserts truncate already streamed text 0ms\n ✓ src/__tests__/codexItemProjection.test.ts > Codex item projection > does not let stale shorter complete events truncate already streamed text 0ms\n ✓ src/__tests__/codexItemProjection.test.ts > Codex item projection > marks failed streaming items without dropping their existing text 0ms\n ✓ src/__tests__/codexItemProjection.test.ts > Codex item projection > updates retry warnings in place instead of appending repeated reconnect items 0ms\n ✓ src/__tests__/codexItemProjection.test.ts > Codex item projection > maps Codex thread items into timeline and runtime message projections 36ms\n ✓ src/__tests__/codexItemProjection.test.ts > Codex item projection > maps Codex approval and terminal items into action and run-step models 1ms\n ✓ src/__tests__/codexItemProjection.test.ts > Codex item projection > builds Codex inspector sections for denied approvals, answered questions, edits, and usage 0ms\n\n Test Files  3 passed (3)\n      Tests  27 passed (27)\n   Start at  15:52:22\n   Duration  277ms (transform 253ms, setup 0ms, import 319ms, tests 52ms, environment 0ms)\n\n",
+      "stderrTail": ""
+    }
+  ]
+}

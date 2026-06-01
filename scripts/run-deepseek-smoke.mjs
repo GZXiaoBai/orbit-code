@@ -1,14 +1,19 @@
 #!/usr/bin/env node
+// Historical direct-DeepSeek harness. The default `npm run smoke:deepseek`
+// now targets Codex app-server routing via scripts/run-codex-app-server-smoke.mjs.
 import { execFileSync, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { timestampId, writeSmokeReport } from "./smoke-report.mjs";
 
 const DEFAULT_WORKSPACE = "/Users/zhoujunjie/PersonalProjects/test for orbit/orbit-mini-lab";
 const DEFAULT_MODEL = "deepseek-v4-flash";
-const DB_PATH = path.join(process.env.HOME || "", "Library/Application Support/com.zhoujunjie.orbitcode/orbit_code.db");
-const DEVICE_KEY_PATH = path.join(process.env.HOME || "", "Library/Application Support/com.zhoujunjie.orbitcode/orbit-device-unlock.key");
-const REPORT_DIR = path.resolve("docs/smoke");
+const APP_SUPPORT = process.env.ORBIT_APP_DATA_DIR
+  ? path.resolve(process.env.ORBIT_APP_DATA_DIR)
+  : path.join(process.env.HOME || "", "Library/Application Support/com.zhoujunjie.orbitcode");
+const DB_PATH = path.join(APP_SUPPORT, "orbit_code.db");
+const DEVICE_KEY_PATH = path.join(APP_SUPPORT, "orbit-device-unlock.key");
 
 const scenarios = [
   {
@@ -422,9 +427,8 @@ async function main() {
     records.push(record);
     console.log(record.result);
   }
-  fs.mkdirSync(REPORT_DIR, { recursive: true });
   const report = {
-    id: `deepseek-three-path-${new Date().toISOString().replace(/[:.]/g, "-")}`,
+    id: timestampId("deepseek-three-path"),
     model,
     workspacePath,
     startedAt: records[0]?.startedAt,
@@ -432,9 +436,7 @@ async function main() {
     result: records.every((record) => record.result === "passed") ? "verified" : records.some((record) => record.result === "passed") ? "partial" : "broken",
     records,
   };
-  const reportPath = path.join(REPORT_DIR, `${report.id}.json`);
-  fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
-  console.log(`Report: ${reportPath}`);
+  writeSmokeReport("deepseek-three-path", report, "DeepSeek legacy smoke report");
   if (report.result !== "verified") process.exit(1);
 }
 

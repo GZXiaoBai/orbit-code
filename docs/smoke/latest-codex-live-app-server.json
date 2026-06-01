@@ -1,0 +1,293 @@
+{
+  "id": "codex-live-app-server-2026-05-31T10-48-07-388Z",
+  "runtime": "codex-sidecar.v1",
+  "provider": "deepseek",
+  "model": "deepseek-chat",
+  "approvalPolicy": "untrusted",
+  "workspace": "/var/folders/mj/jy1pdbqn2xv757mwvmmtxggh0000gn/T/orbit-codex-live-480BUn",
+  "startedAt": "2026-05-31T10:48:02.452Z",
+  "completedAt": "2026-05-31T10:48:07.387Z",
+  "result": "verified",
+  "criteria": [
+    {
+      "id": "initialize",
+      "label": "Codex app-server initialize completed.",
+      "status": "verified",
+      "evidence": {
+        "capabilities": [
+          "userAgent",
+          "codexHome",
+          "platformFamily",
+          "platformOs"
+        ]
+      }
+    },
+    {
+      "id": "thread-start",
+      "label": "Codex app-server thread/start returned a thread id.",
+      "status": "verified",
+      "evidence": {
+        "threadId": "019e7da5-ddde-7b70-ab28-a7eb344aa901"
+      }
+    },
+    {
+      "id": "responses-bridge",
+      "label": "Codex app-server called the Orbit live Responses bridge.",
+      "status": "verified",
+      "evidence": {
+        "model": "deepseek-chat",
+        "inputItems": 8,
+        "tools": [
+          "exec_command",
+          "write_stdin",
+          "update_plan",
+          "request_user_input",
+          "view_image",
+          "multi_agent_v1"
+        ],
+        "stream": true
+      }
+    },
+    {
+      "id": "deepseek-live",
+      "label": "The live bridge completed at least one DeepSeek Responses stream.",
+      "status": "verified",
+      "evidence": {
+        "assistantChars": 444,
+        "reasoningChars": 0
+      }
+    },
+    {
+      "id": "turn-completed",
+      "label": "Codex app-server emitted turn completion or idle status.",
+      "status": "verified",
+      "evidence": {
+        "notificationMethods": [
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/agentMessage/delta",
+          "item/completed",
+          "thread/tokenUsage/updated",
+          "account/rateLimits/updated",
+          "thread/status/changed",
+          "turn/completed"
+        ]
+      }
+    },
+    {
+      "id": "final-assistant",
+      "label": "Codex app-server streamed a final assistant summary.",
+      "status": "verified",
+      "evidence": {
+        "assistantChars": 444,
+        "deltaCount": 110
+      }
+    },
+    {
+      "id": "usage",
+      "label": "Codex app-server emitted token usage updates.",
+      "status": "verified",
+      "evidence": {
+        "count": 3
+      }
+    },
+    {
+      "id": "terminal-output",
+      "label": "Codex app-server emitted command execution terminal output.",
+      "status": "verified",
+      "evidence": {
+        "count": 1
+      }
+    },
+    {
+      "id": "approval-loop",
+      "label": "Codex app-server issued at least one approval or user-input request.",
+      "status": "verified",
+      "evidence": {
+        "methods": [
+          "item/commandExecution/requestApproval",
+          "item/commandExecution/requestApproval"
+        ]
+      }
+    },
+    {
+      "id": "file-edit",
+      "label": "The live Build created the requested smoke file.",
+      "status": "verified",
+      "evidence": {
+        "path": "/var/folders/mj/jy1pdbqn2xv757mwvmmtxggh0000gn/T/orbit-codex-live-480BUn/SMOKE_CODEX_LIVE.md",
+        "content": "This is a smoke test for Codex Live.\n"
+      }
+    }
+  ],
+  "evidence": {
+    "responsesRequests": 3,
+    "deepseekResponses": 3,
+    "assistantChars": 444,
+    "reasoningChars": 0,
+    "toolCallCount": 2,
+    "jsonRpcMessages": 146,
+    "commandOutputCount": 1,
+    "serverRequestMethods": [
+      "item/commandExecution/requestApproval",
+      "item/commandExecution/requestApproval"
+    ],
+    "notificationMethods": [
+      "remoteControl/status/changed",
+      "thread/started",
+      "warning",
+      "thread/status/changed",
+      "turn/started",
+      "item/started",
+      "item/completed",
+      "item/started",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/started",
+      "item/completed",
+      "thread/status/changed",
+      "item/started",
+      "serverRequest/resolved",
+      "thread/status/changed",
+      "item/completed",
+      "thread/tokenUsage/updated",
+      "account/rateLimits/updated",
+      "thread/status/changed",
+      "item/started",
+      "serverRequest/resolved",
+      "thread/status/changed",
+      "item/commandExecution/outputDelta",
+      "thread/tokenUsage/updated",
+      "account/rateLimits/updated",
+      "item/completed",
+      "item/started",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/completed",
+      "thread/tokenUsage/updated",
+      "account/rateLimits/updated",
+      "thread/status/changed",
+      "turn/completed"
+    ],
+    "stderrTail": "{\"timestamp\":\"2026-05-31T10:48:02.780533Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Unknown model deepseek-chat is used. This will use fallback model metadata.\"},\"target\":\"codex_models_manager::model_info\"}\n{\"timestamp\":\"2026-05-31T10:48:02.781545Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Model personality requested but model_messages is missing, falling back to base instructions.\",\"model\":\"deepseek-chat\",\"personality\":\"pragmatic\"},\"target\":\"codex_protocol::openai_models\"}\n{\"timestamp\":\"2026-05-31T10:48:02.826387Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Unknown model deepseek-chat is used. This will use fallback model metadata.\"},\"target\":\"codex_models_manager::model_info\"}\n{\"timestamp\":\"2026-05-31T10:48:02.827579Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Unknown model deepseek-chat is used. This will use fallback model metadata.\"},\"target\":\"codex_models_manager::model_info\"}\n{\"timestamp\":\"2026-05-31T10:48:02.883759Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Unknown model deepseek-chat is used. This will use fallback model metadata.\"},\"target\":\"codex_models_manager::model_info\"}\n{\"timestamp\":\"2026-05-31T10:48:03.290836Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"failed to warm featured plugin ids cache\",\"error\":\"remote plugin sync request to https://chatgpt.com/backend-api/plugins/featured failed with status 401 Unauthorized: {\\\"detail\\\":\\\"Unauthorized\\\"}\"},\"target\":\"codex_core_plugins::manager\"}\n{\"timestamp\":\"2026-05-31T10:48:04.866114Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Model personality requested but model_messages is missing, falling back to base instructions.\",\"model\":\"deepseek-chat\",\"personality\":\"pragmatic\"},\"target\":\"codex_protocol::openai_models\"}\n{\"timestamp\":\"2026-05-31T10:48:06.130738Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Model personality requested but model_messages is missing, falling back to base instructions.\",\"model\":\"deepseek-chat\",\"personality\":\"pragmatic\"},\"target\":\"codex_protocol::openai_models\"}\n{\"timestamp\":\"2026-05-31T10:48:07.286239Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Model personality requested but model_messages is missing, falling back to base instructions.\",\"model\":\"deepseek-chat\",\"personality\":\"pragmatic\"},\"target\":\"codex_protocol::openai_models\"}",
+    "invalidJson": []
+  }
+}

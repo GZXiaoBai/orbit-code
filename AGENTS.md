@@ -1,12 +1,12 @@
-# AGENTS.md - Orbit Code AI Assistant Handover Guide
+# AGENTS.md - Orbit Code Handover Guide
 
-本文档是接手 Orbit Code 的快速入口。请以它和 `docs/STATUS_MATRIX.md` 为准；旧交接文档中带有“全部完成”“终极版”的表述已经被降级为历史记录，不能作为事实来源。
+本文档是接手 Orbit Code 的快速入口。请以它和 `docs/STATUS_MATRIX.md` 为准；历史交接文档只作为背景，不能作为当前事实源。
 
 ## 项目概况
 
-Orbit Code 是一个 Tauri v2 + React 19 + TypeScript + Rust 的本地优先编码 Agent 工作台。目标是多模型、多平台、可导入 Coding Plan、可审查本地执行的桌面应用。
+Orbit Code 是一个 Tauri v2 + React 19 + TypeScript + Rust 的本地优先编码 Agent 工作台。当前路线已经切到 Codex sidecar：Orbit 负责桌面 UI、项目管理、多模型凭据、provider bridge 和审查展示；Agent runtime 由 `codex app-server` 提供。
 
-当前状态：可靠闭环已经有第一版基础，`RuntimeLedger / ActionRequired / ToolCallLifecycle / Context Inspector` 是当前主线；前端和 Rust gateway 仍需继续拆深。不要把它当成已完成产品。
+核心事实源是 `Thread -> Turn -> Item`。前端不再解析模型工具 JSON，不再维护自研 runner/tool loop，也不迁移旧 runtime snapshot。
 
 ## 技术栈
 
@@ -15,45 +15,46 @@ Orbit Code 是一个 Tauri v2 + React 19 + TypeScript + Rust 的本地优先编�
 | 桌面壳 | Tauri 2 |
 | 前端 | React 19, TypeScript 5.8, Vite 7 |
 | 样式 | 纯 CSS，拆分在 `src/styles/*.css` |
-| 状态 | React hooks，目前核心聚合在 `src/state/useWorkspace.ts` |
+| 状态 | React hooks；新 runtime 入口是 `useCodexSession` |
 | 存储 | Rust SQLite 命令 + Web/localStorage 降级 |
 | 凭据 | Orbit 本地加密凭据库：Argon2id + AES-GCM，密文进 SQLite，解锁后密钥只驻留进程内存 |
-| LLM 网关 | Rust `reqwest` 中继，前端 `src/services/llmService.ts` |
+| Agent runtime | Codex sidecar via `codex app-server --listen stdio://` |
+| Provider bridge | Orbit loopback Responses bridge，目标 `/v1/responses` 与 `/v1/models` |
 | 测试 | Vitest, Playwright, Cargo test |
 
 ## 关键文件
 
-### 前端
-
 ```text
 src/
-  App.tsx                         # 根布局和大 props 转接
-  main.tsx                        # 引入 styles/*
+  App.tsx
+  main.tsx
   components/
-    Composer.tsx                  # Plan/需求输入、附件和运行控制
-    DiffViewer.tsx                # 行级 Diff 与冲突展示
-    RunControlBar.tsx             # Plan/Build、模型和推理强度入口
-  features/
-    workbench/WorkbenchShell.tsx  # 三域工作台骨架
-    workbench/ProjectRail.tsx     # 项目、文件树、对话列表、项目菜单
-    thread/ThreadCanvas.tsx       # 中央线程、Plan、timeline、Composer
-    review/ReviewDock.tsx         # Inspector：文件、Diff、Terminal、Context、History
-    settings/SettingsWorkspace.tsx# 独立设置页
-  state/
-    useWorkspace.ts               # 当前最大状态协调 Module，仍需拆分
-    useSession.ts                 # Plan/provider/session 子状态
-    useFileSystem.ts              # 文件树/命令日志子状态
-    agentLoopEngine.ts            # 旧 Agent Loop 兼容 Adapter，主循环已迁入 ToolLoopController
-    agentRunKernel.ts             # Build turn 准备、guard、task/resume/final-summary 选择
-    agentTurnRunner.ts            # Plan/Build turn lifecycle runner
-    toolLoopController.ts         # 非 React 模型 streaming / tool loop / strict JSON repair 内核
-    toolCallExecutor.ts           # ToolCallLifecycle / permission scheduling seam
-    sessionRestoreController.ts   # 恢复 pending action / terminal explicit-continue
-    checkpointRestoreController.ts# checkpoint runtime snapshot restore
+    Composer.tsx
+    DiffViewer.tsx
+    RunControlBar.tsx
+  domain/
+    codex.ts
+    runtimePrimitives.ts
+    runtimeMessages.ts
+    threadEvents.ts
+    threadEventSelectors.ts
   runtime/
-    toolRegistry.ts               # Agent 工具定义和执行 Adapter
-    approvalPolicy.ts             # 命令风险分类
-    semanticSearch.ts             # 向量搜索优先、LLM 排序回退
+    codexAgentPort.ts
+    codexItemProjection.ts
+    contextProviders.ts
+    workspaceGateway.ts
+  state/
+    useWorkspace.ts
+    useCodexSession.ts
+    useSession.ts
+    useFileSystem.ts
+  features/
+    workbench/WorkbenchShell.tsx
+    projects/ProjectRail.tsx
+    thread/ThreadCanvas.tsx
+    review/ReviewDock.tsx
+    actions/ActionRequiredOverlay.tsx
+    settings/SettingsWorkspace.tsx
   storage/
     sessionStore.ts
     tauriStorage.ts
@@ -61,74 +62,61 @@ src/
     keychain.ts
 ```
 
-### 后端
-
 ```text
 src-tauri/src/
-  lib.rs                          # Tauri command 注册
+  lib.rs
   commands/
-    mod.rs                        # Tauri commands 主模块，保持现有命令名
-    file.rs                       # 文件相关命令 extraction target
-    command.rs                    # Shell/进程命令 extraction target
-    patch.rs                      # Patch/checkpoint/rollback extraction target
-    context.rs                    # Orbit context 文件命令 extraction target
-    provider.rs                   # LLM/provider 命令 extraction target
-    vault.rs                      # credential vault 命令 extraction target
-  db.rs                           # SQLite schema 和 CRUD
-  ast_parser.rs                   # tree-sitter AST parser
-  code_graph.rs                   # 符号/依赖图
-  embedding.rs                    # OpenAI embedding + SQLite vector store
-  process_monitor.rs              # 子进程超时/内存守卫
-  window_manager.rs               # 多窗口命令
+    mod.rs
+    codex.rs                       # Codex command façade; includes split runtime shards
+    codex/
+      00_types.rs
+      10_state_sidecar.rs
+      20_json_rpc.rs
+      30_responses_bridge.rs
+      40_direct_plan.rs
+      50_app_server_lifecycle.rs
+      60_notification_mapper.rs
+      70_turn_commands.rs
+      80_response_translation.rs
+      90_tests.rs
+    file.rs
+    command.rs
+    patch.rs
+    context.rs
+    provider.rs
+    vault.rs
+  db.rs
+  ast_parser.rs
+  code_graph.rs
+  embedding.rs
+  process_monitor.rs
+  window_manager.rs
 ```
-
-## 已验证基线
-
-最近审查日期：2026-05-30。
-
-```bash
-npm test -- --run
-npm run build
-cargo test --manifest-path src-tauri/Cargo.toml
-npm run test:e2e
-npm run tauri build -- --debug
-npm run smoke:deepseek
-```
-
-当前目标是让以上四项长期全部通过。任何接手 Agent 修改前后都要至少跑受影响层的测试。
-
-## 当前已知事实
-
-- React/Vite shell 可以运行，macOS debug 包已验证。
-- 亮/暗主题已存在；当前视觉方向是独立 Agent Workbench，而不是复制 Codex 资产。
-- Plan/Build 第一版 runtime contract 已存在：Plan 只读，Build 才执行 command/patch/verification。
-- Rust SQLite、Keychain、LLM relay、事务 Patch、三方合并、AST/code graph、embedding 模块均有实现和部分测试。
-- `useWorkspace.ts` 仍是最大技术债，但 RuntimeLedger、ActionRequiredController、AgentRunKernel、AgentTurnRunner、ToolLoopController、ToolCallExecutor、SessionRestoreController 等深 Module 已开始分担职责。
-- 旧 `Conversation.tsx` / `Sidebar.tsx` / `CommandApprovalCard` 主路径已经删除；后续不要恢复两套审查体验。
-- Agent Loop 已通过真实 DeepSeek mini-lab smoke；`npm run smoke:deepseek` 已在 2026-05-30 跑通 happy path、stale-write recovery、rules/skills context path，并把证据写入 `docs/smoke/`。
-- Provider registry 声明了 Ollama，但 Rust LLM 网关目前没有 Ollama host 放行。
 
 ## 架构约束
 
-1. 本地文件、Shell、Patch 操作必须走 Rust 命令网关。
+1. 本地文件、Shell、Patch 操作必须走 Rust 命令网关或 Codex sidecar 审批链路。
 2. API Key 只能进入 Orbit 本地加密凭据库；SQLite/localStorage 不能保存明文密钥。
-3. 文件读写必须保留 workspace 路径校验。
-4. 多文件写入必须保留事务 rollback。
-5. 命令审批策略必须真实生效；危险命令不能被前端自动放行。
-6. 文档必须区分 `verified`、`partial`、`design-only`、`broken`、`not-started`。
+3. Orbit bridge 只能监听 `127.0.0.1:<ephemeral>`。
+4. 生成给 Codex 的临时配置不得包含 secret。
+5. 新版本使用 `codex-sidecar.v1` session schema；旧会话只允许 legacy unsupported 展示和删除。
+6. Provider registry 只负责 metadata、model discovery、vault key mapping，不直接驱动 Agent loop。
+7. 文档必须区分 `verified`、`partial`、`design-only`、`broken`、`not-started`。
 
-## 下一步优先级
+## 当前优先级
 
-1. 保持完整验证基线：Vitest、build、E2E、Cargo、Tauri debug 包。
-2. 继续把 Runner 从兼容层中收口：删除薄 `agentLoopEngine.ts` Adapter，扩大 `ToolLoopController`、`ToolCallExecutor`、`SessionRestoreController`、`CheckpointRestoreController` 的边界测试。
-3. 继续把真实 DeepSeek smoke 接入日常验收，重点补桌面 overlay UX 和 restored verification 的人工验证。
-4. 继续拆分 `src-tauri/src/commands/mod.rs`，把 file/command/patch/context/provider/vault 的实现迁入子 Module。
-5. 重做前端视觉系统：保留三栏效率，但建立独立 Agent Workbench 风格，黑/白主题都要完整。
+1. 验证真实 Codex app-server 长 turn：当前 runtime 已使用 persistent reader、pending response routing 和 `Orbit threadId -> Codex threadId` 进程内缓存；下一步重点是用真实 DeepSeek Build 压 approval/question/tool result/interrupt、crash cleanup。
+2. DeepSeek 是唯一 Build provider。其他 OpenRouter、Qwen/DashScope、SiliconFlow、Kimi、Groq、自定义 OpenAI-compatible 先保留 discovery-only 和 blocked reason。
+3. Plan/普通聊天走 `direct-deepseek-plan`，默认不启动 Codex app-server；Build 才走 `codex-app-server-build`。running turn 期间必须阻止重复提交，失败/中断/完成后恢复输入。
+4. `npm run smoke:deepseek` 当前是 prepared sidecar + app-server routing contract smoke；`npm run smoke:deepseek:live-app-server` 已验证独立 live driver 的 approval -> terminal/fileEdit -> final summary。translation-only smoke 是 `npm run smoke:deepseek:bridge-unit`，旧直连 harness 是 `npm run smoke:deepseek:legacy`。下一步是把同等证据落到 Rust bridge + 桌面 UI Build 路径。
+5. `npm run smoke:desktop-build` 是 packaged workbench Build smoke。默认只做 readiness；设置 `ORBIT_DESKTOP_BUILD_LIVE=1` 才执行真实 approval -> terminal/fileEdit -> usage/final summary；设置 `ORBIT_DESKTOP_BUILD_DENY=1` 验证拒绝路径。CI 的手动 `desktop-build-live` job 使用 `orbit-live-smoke` environment secret `ORBIT_LIVE_VAULT_BUNDLE_B64`，解包到临时 `ORBIT_APP_DATA_DIR`，设置隔离的 `ORBIT_DESKTOP_BUILD_WORKSPACE`，再在 Ubuntu `xvfb` 下跑 approve/deny 两条 live 路径。
+6. 设置页要作为 Codex runtime control plane：sidecar version/path/sha256、bridge base URL、pid、last error、restart、model discovery、bridge smoke、Build enabled。
+7. Smoke 证据默认只保留 `docs/smoke/latest-*.json`；只有设置 `ORBIT_SMOKE_KEEP_HISTORY=1` 才写 timestamp 历史，且历史 JSON 必须保持 Git ignored。
+8. 跑并维护基线：`npm test -- --run`、`npm run build`、`cargo test --manifest-path src-tauri/Cargo.toml`、`npm run test:e2e`、`npm run smoke:deepseek`、`npm run tauri build -- --debug`。
 
-## 给 Gemini / DeepSeek / GPT 的提示
+## 接手提示
 
-- 先读 `docs/STATUS_MATRIX.md`，不要先相信历史交接文档。
-- 如果看到“所有功能已完成”的说法，请当成过期内容。
-- 修改前端时优先缩小 Interface，而不是继续往 `ThreadCanvas.tsx`、`ReviewDock.tsx` 和 `useWorkspace.ts` 里塞 props。
-- 修改 Rust command 后必须跑 `cargo test --manifest-path src-tauri/Cargo.toml`。
-- 修改 Plan/Composer/Timeline 后必须跑 `npm run test:e2e`。
+- 先读 `docs/STATUS_MATRIX.md`。
+- 不要恢复已删除的自研 runtime、前端 tool loop、实验适配器或旧 session replay。
+- 修改 Rust command 后跑 `cargo test --manifest-path src-tauri/Cargo.toml`。
+- 修改 Thread/Composer/Timeline 后跑 `npm run test:e2e`，如果旧 E2E 仍未迁移，要明确记录。

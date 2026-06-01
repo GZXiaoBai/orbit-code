@@ -1,0 +1,42 @@
+{
+  "id": "plan-stability-smoke-2026-06-01T07-51-28-884Z",
+  "runtime": "direct-deepseek-plan",
+  "provider": "deepseek",
+  "scope": "Combined Plan stability gate. This proves the frontend route does not touch Codex app-server after submit and the live DeepSeek SSE path can stream a simple greeting. It is not a packaged Tauri window WebDriver smoke.",
+  "startedAt": "2026-06-01T07:51:11.746Z",
+  "completedAt": "2026-06-01T07:51:28.883Z",
+  "result": "verified",
+  "steps": [
+    {
+      "id": "desktop-route-fixture",
+      "label": "Workbench Plan submit uses direct-deepseek-plan and does not preflight/restart Codex app-server.",
+      "command": "npm",
+      "args": [
+        "run",
+        "smoke:plan-route"
+      ],
+      "status": "verified",
+      "startedAt": "2026-06-01T07:51:11.747Z",
+      "completedAt": "2026-06-01T07:51:22.056Z",
+      "exitCode": 0,
+      "stdoutTail": "\n> orbit-code@1.0.0 smoke:plan-route\n> node scripts/run-plan-route-smoke.mjs\n\n\nRunning 1 test using 1 worker\n\n  ✓  1 e2e/run-controls.spec.ts:403:3 › Orbit Code — Run Controls › desktop Plan submission uses direct DeepSeek route without app-server preflight (4.2s)\n\n  1 passed (9.0s)\nPlan route smoke report: /Users/zhoujunjie/PersonalProjects/Agent GUI/docs/smoke/latest-plan-route-smoke.json\n",
+      "stderrTail": "(node:20111) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n(node:20111) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n"
+    },
+    {
+      "id": "live-deepseek-sse",
+      "label": "DeepSeek direct Plan path can stream reasoning/content deltas from the Orbit vault credential.",
+      "command": "npm",
+      "args": [
+        "run",
+        "smoke:plan-live"
+      ],
+      "status": "verified",
+      "startedAt": "2026-06-01T07:51:22.056Z",
+      "completedAt": "2026-06-01T07:51:28.881Z",
+      "exitCode": 0,
+      "stdoutTail": "\n> orbit-code@1.0.0 smoke:plan-live\n> node scripts/run-plan-live-streaming-smoke.mjs\n\nPlan live streaming report: /Users/zhoujunjie/PersonalProjects/Agent GUI/docs/smoke/latest-plan-live-streaming.json\nResult: verified\n",
+      "stderrTail": ""
+    }
+  ],
+  "remainingGap": "Add tauri-driver/WebDriver or equivalent desktop automation to prove both checks inside the packaged Orbit Code window."
+}

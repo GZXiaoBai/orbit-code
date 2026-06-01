@@ -1,120 +1,47 @@
-# Architecture
+# Orbit Code Architecture
 
-Last updated: 2026-05-24.
+当前架构以 Codex sidecar 为唯一 Agent runtime。Orbit 不再在前端实现模型工具循环。
 
-This document describes the current architecture, not the intended final product. For feature status, see `docs/STATUS_MATRIX.md`.
+## Runtime Boundary
 
-## Stack
+```mermaid
+flowchart LR
+  UI["React Workbench"] --> Port["CodexAgentPort"]
+  Port --> Tauri["Tauri commands"]
+  Tauri --> Sidecar["codex app-server stdio"]
+  Sidecar --> Bridge["Orbit Responses Bridge"]
+  Bridge --> Vault["Orbit Vault"]
+  Bridge --> Providers["DeepSeek / OpenRouter / Qwen / SiliconFlow / Kimi / Groq / Custom"]
+  Sidecar --> Items["Thread / Turn / Item notifications"]
+  Items --> Projection["Codex item projection"]
+  Projection --> UI
+```
 
-- Desktop shell: Tauri 2.
-- Frontend: React 19, TypeScript, Vite.
-- Styling: plain CSS modules imported from `src/styles/*.css`.
-- Validation: Zod.
-- Plan parsing: YAML.
-- Local runtime: Rust commands through Tauri invoke.
-- Storage: SQLite through Rust commands with localStorage fallback in web/test contexts.
-- Credentials: Orbit-owned encrypted local vault, stored as ciphertext in SQLite and unlocked into process memory with a user passphrase.
-- Tests: Vitest, Playwright, Cargo test.
+## Frontend
 
-## Frontend Layers
+- `src/state/useWorkspace.ts` is a workbench facade.
+- `src/state/useCodexSession.ts` owns Codex thread and turn lifecycle.
+- `src/runtime/codexAgentPort.ts` is the only frontend command port for sidecar operations.
+- `src/runtime/codexItemProjection.ts` converts Codex items into thread, review, terminal, action, and run-step view models.
+- UI surfaces keep their current shell but consume Codex-backed projections.
 
-### App Shell
+## Rust
 
-`src/App.tsx` wires the layout:
+- `src-tauri/src/commands/codex.rs` owns the current Codex app-server integration: sidecar process launch, temporary config generation, JSON-RPC request/response routing, app-server request handling, notification mapping, and the loopback Responses bridge.
+- `codex_turn_start` returns a running turn quickly; the blocking app-server run continues on a background thread and emits `codex://status`, `codex://item`, `codex://turn`, and `codex://error`.
+- The next hardening step is persistent app-server reuse with durable `Orbit threadId -> Codex threadId` mapping. Do not document that as complete until the real long-turn path has live smoke evidence.
+- The provider bridge must bind only to loopback and must read secrets from vault memory.
+- Generated Codex config must point to `orbit-bridge` and contain no API keys.
+- Codex sidecar packaging uses a preparation script plus version/checksum pin. Large sidecar binaries are not committed.
 
-- `WorkbenchShell`
-- `ProjectRail`
-- `ThreadCanvas`
-- `ReviewDock`
-- `SettingsWorkspace`
+## Storage
 
-It currently passes too many raw fields from `useWorkspace`. The next architecture step is to return a smaller view model from state Modules.
+- New session schema is `codex-sidecar.v1`.
+- Old sessions are not imported into the runtime.
+- Old sessions may be displayed as unsupported and deleted.
 
-### UI Modules
+## Provider Model
 
-`src/features/` and `src/components/` contain current surfaces:
+The provider registry remains metadata-only: labels, model discovery, capability flags, and vault key mapping. Build entry must be blocked for models that cannot reliably run through the Responses bridge.
 
-- `ThreadCanvas` - central thread, Plan summary, Agent timeline, composer, and thread actions.
-- `Composer` - text/file Plan import and Plan/Build run controls.
-- `ReviewDock` - command approvals, questions, patch review, verification, terminal runs, and file preview.
-- `ProjectRail` - project navigation, real file tree, usage popover, and project actions.
-- `DiffViewer` - line Diff and conflict display.
-
-The old `Conversation.tsx` path has been removed. `ThreadCanvas` is now the central composition layer; continue moving runtime display logic into focused view models before adding more UI behavior.
-
-### State Modules
-
-Current state Modules:
-
-- `useWorkspace` - main coordinator; still too large.
-- `useSession` - Plan/provider/session state.
-- `useFileSystem` - workspace files, command logs, command status.
-- `agentTurnRunner` / `toolLoopController` - non-React Runner kernel for Build turns, model streaming, strict tool-envelope repair, and tool-result feedback.
-- `agentLoopEngine` - thin compatibility Adapter over `ToolLoopController`; do not add new loop logic here.
-
-Target direction:
-
-- `useWorkspace` should become a composition layer.
-- Agent run, patch workflow, embedding index, and window actions should become separate deep Modules.
-
-### Runtime Modules
-
-- `approvalPolicy.ts` classifies command risk.
-- `toolRegistry.ts` defines Agent tools and their frontend Adapters.
-- `semanticSearch.ts` gathers task context using vector search when available and fallback search otherwise.
-- `projectAnalyzer.ts` identifies project shape.
-
-Known issue: `toolRegistry.ts` and Rust command signatures are not fully aligned for command execution and transactional patching.
-
-## Backend Layers
-
-### Tauri Command Gateway
-
-`src-tauri/src/lib.rs` registers commands. `src-tauri/src/commands.rs` implements:
-
-- credentials,
-- file tree/read,
-- shell execution,
-- patch application,
-- code graph/symbol index,
-- embeddings,
-- merge conflict resolution,
-- LLM relay.
-
-Known issue: many commands infer the workspace from `std::env::current_dir()`. Future work should pass explicit workspace/project roots.
-
-### Persistence
-
-`src-tauri/src/db.rs` owns SQLite schema and CRUD for projects, threads, messages, plans, tasks, runtime events, permission requests, provider configs, and session state.
-
-Frontend adapters:
-
-- `sessionStore.ts`
-- `tauriStorage.ts`
-- `workspaceStorage.ts`
-- `keychain.ts`
-
-API keys must stay out of plaintext localStorage/SQLite. New credentials are encrypted in the Orbit credential vault; the vault passphrase is never stored.
-
-### Code Intelligence
-
-- `ast_parser.rs` wraps tree-sitter parsing.
-- `code_graph.rs` builds symbols/imports/exports.
-- `embedding.rs` stores and searches code embeddings.
-
-The vector path requires an OpenAI API key and a built index.
-
-## Critical Seams
-
-| Seam | Current Adapter | Target |
-| --- | --- | --- |
-| Plan import | `Composer` -> `useSession.importPlan` | Keep small; add Enter/Shift+Enter tests. |
-| Runtime tools | `toolRegistry.ts` -> Tauri commands | Align command args and transactional patching. |
-| Patch application | UI patch flow -> `resolve_patch_conflict` -> `apply_workspace_patches_transactional` | Make Agent tools use the same seam. |
-| Approval | `approvalPolicy.ts` + UI cards | Replace auto-approval with real pending user decisions. |
-| Storage | `sessionStore` / `tauriStorage` / localStorage fallback | Add schema/version/migration strategy. |
-| Workspace root | `current_dir()` | Explicit workspace/project root everywhere. |
-
-## Architecture Rule
-
-Prefer deeper Modules: small Interfaces with real Leverage and Locality. Do not split files merely to distribute complexity; split where the caller can know less.
+DeepSeek is the only Build provider in the current mainline. OpenRouter, Qwen/DashScope, SiliconFlow, Kimi, Groq, and custom OpenAI-compatible providers may be discovered but remain blocked until each adapter has live bridge evidence.

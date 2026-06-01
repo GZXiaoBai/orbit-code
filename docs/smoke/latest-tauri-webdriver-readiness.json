@@ -1,0 +1,38 @@
+{
+  "id": "tauri-webdriver-readiness-2026-05-31T12-59-23-664Z",
+  "scope": "Readiness check for a future packaged Orbit Code window smoke driven by tauri-driver/WebDriver.",
+  "startedAt": "2026-05-31T12:59:23.205Z",
+  "completedAt": "2026-05-31T12:59:23.664Z",
+  "result": "blocked",
+  "criteria": [
+    {
+      "id": "tauri-cli",
+      "label": "Tauri CLI is available for building and launching Orbit Code.",
+      "status": "verified",
+      "message": "Tauri CLI responded.",
+      "evidence": {
+        "stdout": "tauri-cli 2.11.2",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "desktop-webdriver-platform",
+      "label": "Host platform can run Tauri desktop WebDriver automation.",
+      "status": "blocked",
+      "message": "macOS cannot run Tauri desktop WebDriver automation because there is no WKWebView driver. Use Linux/Windows CI for tauri-driver coverage, or add a separate macOS accessibility smoke.",
+      "evidence": {
+        "platform": "darwin",
+        "docs": "https://v2.tauri.app/develop/tests/webdriver/"
+      }
+    },
+    {
+      "id": "tauri-driver-binary",
+      "label": "tauri-driver binary is installed.",
+      "status": "blocked",
+      "message": "Skipped on macOS because desktop WebDriver automation is not supported here.",
+      "evidence": {
+        "path": null
+      }
+    }
+  ]
+}

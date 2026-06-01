@@ -1,176 +1,23 @@
 # Next Tasks
 
-Last updated: 2026-05-29.
+## P0
 
-This task list is prepared for GPT, Gemini, or DeepSeek handoff. Work in order unless the user changes priority.
+1. Turn the packaged-window smoke from launch coverage into full live Plan coverage. `npm run smoke:desktop-plan` now starts the real Tauri binary through `tauri-driver` on Linux/Windows and has an opt-in `ORBIT_DESKTOP_PLAN_LIVE=1` path for sending “你好”; the remaining gap is running that live mode in a credentialed desktop environment.
+2. Commit/push the CI workflow update, then trigger the manual `desktop-build-live` workflow in the protected `orbit-live-smoke` environment. It now bootstraps an encrypted vault bundle into `ORBIT_APP_DATA_DIR`, seeds an isolated `ORBIT_DESKTOP_BUILD_WORKSPACE`, runs live readiness, then runs approved and denied `npm run smoke:desktop-build` paths under Ubuntu `xvfb`; the remaining gap is a credentialed run result, not missing wiring.
+3. Finish app-server request handling verification for question/tool result/interrupt with real provider traffic, not fixture-synthesized items. Current live evidence proves initialize, thread/start, approval request/response, turn completion, terminal output, usage, final assistant summary, and file write.
+4. Add sidecar crash/restart recovery tests while a Build turn is active, building on the current pending-response cleanup and early Orbit-turn attachment coverage. Composer/session duplicate-submit protection has first-pass coverage; keep expanding it through real turn state transitions.
+5. Keep retry/error output stable in live desktop Build: Rust now has stable per-turn app-server error item ids; next verify reconnect warning updates and final error upserts through the packaged UI and extend `smoke:desktop-build` once a deterministic crash harness is available.
+6. Add tests for `useCodexSession` streaming/retry/approval/interrupted/failed/reload recovery states beyond the current duplicate-submit lock and runtime-error coverage.
 
-## P0 - Restore Trust In The Baseline
+## P1
 
-Status: complete for the current baseline.
+1. Keep DeepSeek as the only Build-enabled provider; keep OpenRouter, Qwen/DashScope, SiliconFlow, Kimi, Groq, and custom providers discovery-only with explicit blocked reasons.
+2. Expand DeepSeek bridge tests for illegal role sanitization, orphan tool output repair, tool call result loops, usage mapping, SSE mid-stream errors, and no-secret logging.
+3. Finish Settings as the Codex runtime control plane: sidecar version/path/sha256, bridge base URL, pid, last error, restart result, discovery/smoke/build states.
+4. Add regression coverage for streaming caret, last-thread deletion, and empty-thread state; Markdown rendering, auto-scroll, and first-pass composer/session submit recovery already have focused coverage.
 
-1. Latest verification:
-   - `npm test -- --run`
-   - `npm run build`
-   - `cargo test --manifest-path src-tauri/Cargo.toml`
-   - `npm run test:e2e`
-   - `npm run tauri build -- --debug`
-2. Keep `docs/STATUS_MATRIX.md` updated with the real result, not intended progress.
+## P2
 
-## P1 - Frontend Stabilization
-
-Status: major stabilization complete; keep shrinking architecture and adding deeper flow coverage.
-
-Done:
-
-- Removed the legacy `Conversation.tsx` / `CommandApprovalCard` path.
-- Split the current thread surface into deeper view Modules:
-   - `ThreadCanvas`
-   - `PlanSummary`
-   - `AgentTimeline`
-   - `EmptyThreadState`
-- Added E2E coverage for:
-   - Enter imports Plan.
-   - Shift+Enter inserts a newline.
-   - Theme toggle keeps layout stable.
-   - Language toggle changes visible labels.
-- Routed main visible UI copy through `src/i18n/copy.ts` for project rail, thread, review dock, settings, terminal, and diff surfaces.
-- Added responsive shell rules so 390px narrow viewports keep the conversation and composer usable.
-- Replaced the old output panel path with center-thread action affordances plus Review Dock inspector surfaces.
-- Removed normal-path demo projects/output and fake no-model Diff generation.
-- Added a real workspace path flow: set local project directory, load file tree, preview real files, and run file/shell/patch commands against the active root.
-- Fixed the opened-project Composer regression with real desktop fixture coverage.
-- Tightened light theme readability: local usage popover no longer bleeds through file names, and the primary open-folder hover remains high contrast.
-- Reworked the independent settings workspace into a left-aligned, compact layout with a tighter Models two-pane surface.
-- Moved command/question authorization into central overlays; Review Dock now keeps inspector-style file, diff, terminal, and history surfaces.
-- Added a typed Review Dock projection for patch review and terminal records from the shared thread event source.
-- Promoted Agent `ask_user` into a first-class question/answer flow with fixture E2E coverage.
-- Persisted Agent waiting state and added reload recovery E2E for pending command approval, question, and patch review.
-- Added provider smoke state and a manual smoke button in Models settings; fixture smoke is covered by Playwright.
-- Added Ollama discovery-only Build blocking coverage so imported Ollama models cannot be mistaken for executable Agent models.
-- Replaced OS Keychain usage with an Orbit-owned encrypted credential vault; next manual smoke should verify restart, unlock, wrong passphrase, and model refresh.
-- Added smart Composer paste attachment classification for code blocks, YAML plans, long text, images, PDFs, and dropped files.
-- Added first-pass Provider adapter coverage for OpenRouter, xAI, Mistral, Groq, Qwen/DashScope, Kimi/Moonshot, SiliconFlow, and Zhipu/GLM.
-- Scoped Agent runs to `workspacePath + threadId + taskId + runSessionId`, so explicit continue no longer restarts from the first queued task.
-- Tightened DeepSeek-facing tool instructions and malformed-output recovery: one strict JSON tool call, structured command args/cwd, no fabricated tool results, bounded correction loops.
-- Improved Review Dock current-task scoping and terminal counts so historical runs do not pollute the active inspector surface.
-- Added typed `ThreadEvent` storage/projection and central approval grant scopes (`once / session / project`) to reduce cross-component state guessing.
-- Split official model capability fallback into `modelCapabilityCatalog`, with DeepSeek context/reasoning and Ollama discovery-only behavior covered by unit tests.
-- Improved dark-theme readability for disabled Agent action buttons, select checks, Agent timeline avatars, and task status controls.
-- Fixed new-thread isolation after session restore and added left-rail thread archive/delete actions with E2E coverage.
-- Added Codex-style structured question overlay and central approval overlay so blocking questions and command/verification approvals are handled from the thread surface while Review Dock remains the inspector/history surface.
-- Added a unified file action menu for file tree rows, Review Dock previews, diff filenames, and Timeline rich file references, backed by a whitelisted Rust workspace-file open/reveal command.
-- Added `PolicyEngine` and `PermissionScheduler` so Plan/Build permissions are decided at a runtime Seam before UI approvals.
-- Added `ActionRequiredEvent` and `ThreadRuntimeStore` coverage for blocking action tool-result semantics and pending replay without restoring old Promises.
-- Added read-only controlled extension adapters for `ORBIT.md`, `.orbit/rules`, accepted plan context, record-only hooks, and skill manifests.
-- Split the runtime event contract into a pure `ThreadEventProtocol`; legacy `AgentEvent` conversion remains only as a compatibility/migration path.
-- Added `ActionRequiredStore` persistence/projection so blocking question, approval, patch-review, and verification state can be replayed without resurrecting stale Promises.
-- Added explicit `WorkspaceGateway` runtime adapters for read/list/search/command, and moved `search_code` to the Rust `search_workspace_files` gateway instead of frontend file scanning.
-- Replaced Git checkpoint strategy tagging with an isolated OS-temp shadow Git repository for Git workspaces; non-Git workspaces continue using file snapshots.
-- Added `RuntimeLedger` as the runtime write seam for thread events and `ActionRequired` records, with pending replay and snapshot serialization tests.
-- Added a DeepSeek smoke harness that verifies the required typed event milestones and writes a failure ledger record for the first missing stage.
-- Added the Current Context Inspector for read-only `ORBIT.md` / `.orbit/rules` / accepted-plan context visibility, including source, mode, token estimate, matched rules, provider errors, and `permissionImpact: none`.
-- Added Context Control Center v1: Settings user rules with mode/enabled controls, Inspector editing for fixed Orbit project rule files, read-only `.orbit/skills/*/SKILL.md` discovery, and safe Rust-gateway writes for Orbit context files.
-- Added Runtime item lifecycle helpers in `RuntimeLedger` and default `resumeAction` creation for pending `ActionRequired` records.
-- Added a Current Context Inspector smoke-gate action that evaluates the live thread/action snapshot against the required DeepSeek typed milestones.
-- Added sandbox-preview retry after a failed patch preview; failed previews stay pending and can be retried before real workspace apply.
-- Added install/network approval classification coverage, plus E2E coverage that denying an install approval does not create a terminal run.
-- Added `ToolCallLifecycle` and ledger snapshot projections for pending actions, Inspector, run steps, terminal runs, and checkpoint browser inputs.
-- Added `SmokeRunController` so fixture providers cannot mark the DeepSeek smoke gate as passed.
-- Added accepted-Plan `todoList` events and external rule import candidates (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules`) that remain disabled unless explicitly imported.
-- Tightened `PolicyEngine` so dynamic project-rule decisions cannot make the effective security policy more permissive.
-- Made `ReviewDockModel`, `selectPendingActions`, and `selectRunSteps` consume the runtime ledger snapshot instead of legacy approval/question queues, and persisted tool-call lifecycle records in session/thread snapshots.
-- Unified command approval, verification approval, structured questions, and patch review into `ActionRequiredOverlay`. `PermissionScheduler`, `ask_user`, and patch proposals now publish durable `ActionRequired` records through `ActionRequiredController`; old approval/question queues are no longer the UI main input.
-- Moved `ToolCallLifecycle` storage out of `useAgentRun`; tool-call creation and updates now write through `RuntimeLedger.appendToolCall/updateToolCall`, and `useAgentRun` only emits lifecycle write intents.
-- Added a non-React `ToolCallExecutor` for generated/result/approval lifecycle updates and a non-React `ResumeController` for explicit-continue restored action handling.
-- Fed persisted session/project approval grants into `PolicyEngine` with workspace, mode, tool, action, and cwd/path scope checks; Plan grants do not expand Build write permissions.
-- Added Active Grants visibility and revoke controls in the Inspector.
-- Moved legacy empty queue props behind `legacyQueuesForMigrationOnly`; new UI surfaces should not accept `approvalRequests`, `questionRequests`, or `AgentEvent` arrays as runtime facts.
-- Added `SessionRestoreController` and `CheckpointRestoreController` so restored pending actions, recovered terminal state, checkpoint runtime snapshots, and explicit-continue results have non-React test coverage.
-- Extended `ToolCallExecutor` with a permission-scheduling execution seam that records policy evaluation, ActionRequired linkage, and denied/approved tool results through the lifecycle store.
-- Added Context rule `globs / regex / policy` filtering and surfaced match reasons in the Current Context Inspector while preserving `permissionImpact: none`.
-- Added dedicated install/network risk copy in the unified approval overlay.
-- Added `AgentRunKernel` as the first deeper Runner Kernel extraction. `useAgentRun` now delegates Build-turn guard/provider/task/resume/final-summary preparation to a non-React module, and legacy-boundary tests prevent the hook from re-owning provider lookup.
-- Upgraded `AgentTurnRunner` to own injected Build-engine execution and return structured Build turn results; `useAgentRun` no longer constructs `BuildAgentEngine` directly.
-- Added `ToolCallExecutor.requestApproval()` so command approval lifecycle writes and ActionRequired linkage go through the executor instead of ad hoc hook code.
-- Moved the Rust gateway monolith from `src-tauri/src/commands.rs` to `src-tauri/src/commands/mod.rs` and added file/command/patch/context/provider/vault child-module entry points while keeping public Tauri command names stable.
-
-Next:
-
-1. Extract `StreamingMessage` if the streaming surface grows beyond the current inline node.
-2. Move runtime/generated Agent status strings into an i18n-aware message layer.
-3. Add E2E coverage for Active Grants revoke; after revoke, the same command should request approval again.
-4. Move more of `useAgentRun`'s callback-heavy question/patch/terminal result wiring into `AgentTurnRunner` + `ToolCallExecutor`; the current Runner Kernel covers turn preparation, injected Build execution, and command approval lifecycle, but not streaming repair, ask_user, patch result handling, or terminal recording.
-5. Remove the remaining legacy approval/question queue hooks after old snapshot migration no longer needs them.
-6. Add E2E coverage for:
-   - Send button imports Plan.
-   - Real provider/key form flow with manual API smoke against OpenAI/Anthropic/Gemini/DeepSeek.
-   - Composer paste/drop attachment chips and explicit YAML Plan import choice.
-   - Manual API smoke for OpenRouter, xAI, Mistral, Groq, Qwen/DashScope, Kimi/Moonshot, SiliconFlow, and Zhipu/GLM.
-   - Task edit/delete/reorder flow.
-   - Verification approval reload recovery and terminal run completion after restored command execution.
-- Additional real DeepSeek small-project smoke in `/Users/zhoujunjie/PersonalProjects/test for orbit/orbit-mini-lab` for restored verification approval, restart resume, and desktop overlay UX. The current happy path passed on 2026-05-29 with `SMOKE_LEDGER_20260529.md`; `npm run smoke:deepseek` passed on 2026-05-30 for happy path, stale-write recovery, and rules/skills context.
-   - Explicit continue after restored verification approval and restored command completion.
-
-## P2 - State Architecture
-
-1. Turn `useWorkspace.ts` into a coordinator with a narrow Interface.
-2. Extract Modules:
-   - `useAgentRun` for Agent Loop phase, streaming, tool calls, cancellation. (done; writes typed ThreadEvent directly and delegates tool lifecycle writes to `ToolCallExecutor`)
-   - `usePatchWorkflow` for event patches, three-way conflict checks, transaction apply, refine. (done; updates typed ThreadEvent directly)
-   - `useEmbeddingIndex` for build progress and index events. (done)
-   - `useWindowActions` for multi-window. (done)
-3. Complete the non-React runner split: expand `AgentRunKernel` / `AgentTurnRunner` from Build-turn preparation into streaming, strict envelope repair, tool-result callbacks, cancellation, and error state; keep `ToolCallExecutor` as the only policy/action/tool lifecycle writer, and keep `SessionRestoreController` / `ResumeController` as the restored-action interpreters.
-4. Define a `ThreadViewModel` returned to `App.tsx` so components receive fewer workflow internals.
-
-## P3 - Runtime Safety
-
-Done:
-
-- Agent tool envelopes now require strict JSON and structured `run_command { command, args, reason }`.
-- Rust command sync tests cover structured args.
-- Agent command approval is a real pending gate; fixture E2E covers approve and deny.
-- Agent `apply_patch` creates a Review Dock patch proposal instead of direct writes.
-- Patch proposal now runs a temp sandbox preview before Diff review; failed sandbox previews block real workspace apply.
-- Fixture E2E now covers approved transaction write, file preview refresh, and the post-patch verification command approval card.
-- Fixture E2E now also covers local-change conflict detection: no transaction write before resolution, then retry write after resolving.
-- Agent continuation now preserves the current run scope and returns the last approved/answered/applied/verified tool result to the same task instead of reselecting a queued task.
-- ThreadEvent is now written into session/thread snapshots as a serializable storage protocol. `useAgentRun` and `usePatchWorkflow` write through the typed ThreadEvent seam; legacy AgentEvent remains a compatibility projection for older UI consumers.
-- Session/project approval grants are persisted and restored; project grants survive thread creation/switching within the same workspace flow.
-- Context compaction now emits a scoped ThreadEvent-compatible timeline record instead of only changing the internal loop state.
-- Rust snapshot rollback can restore modified files and delete files created by a patch; Git workspaces now create a real isolated shadow checkpoint repo under the OS temp directory, while non-Git workspaces use file snapshots.
-- Runtime file/search/command tool calls now go through explicit `WorkspaceGateway` methods that reject missing workspace paths.
-- Failed sandbox previews remain in the pending patch-review projection and can be retried through the same controlled sandbox command path before applying to the real workspace.
-- Install/network command requests are classified as dedicated `ActionRequired` kinds before UI approval; fixture E2E covers install denial without terminal execution.
-- `RuntimeLedger` can carry tool-call lifecycle and terminal-run records; `useWorkspace` now derives pending actions and run steps from a ledger snapshot rather than merging legacy approval queues.
-- Context provider inspection now surfaces external assistant rule files only as disabled import candidates; these candidates do not enter prompt context and do not change permissions.
-- Session/project approval grants now participate in `PolicyEngine.evaluate()` instead of being only restored UI state; grants are mode-aware and can be revoked from the Inspector.
-- Session restore and checkpoint restore now have dedicated non-React controllers. Checkpoint restore can restore the ledger snapshot and create a fresh patch-review action when no pending patch review exists.
-- User context rules now support glob/regex/policy filtering; these filters only decide context injection and never widen runtime permissions.
-
-Next:
-
-1. Move implementations out of `src-tauri/src/commands/mod.rs` into the file/command/patch/context/provider/vault child modules, then make Rust command execution fully explicit about workspace root/project id in every remaining compatibility path.
-2. Keep `npm run smoke:deepseek` as the real-provider gate and extend it with restored verification approval and restart resume cases.
-3. Add E2E for verification approval reload recovery and terminal run completion after restored command execution.
-4. Add more localized install/network risk copy in Inspector history.
-5. Continue desktop manual smoke for user rules, `.orbit/rules`, `ORBIT.md`, and read-only skill manifests; the 2026-05-30 runner path verifies the protocol evidence and permission impact.
-
-## P4 - Product Design Cleanup
-
-1. Establish a distinct Agent Workbench visual direction:
-   - restrained local-tool density,
-   - black/white parity,
-   - fewer cards,
-   - less generic AI phrasing,
-   - calm but recognizable brand.
-2. Remove remaining Codex-like layout details that do not serve the product.
-3. Use Browser screenshots at 1440x920 and one mobile-ish narrow viewport before claiming UI completion.
-4. Continue reducing settings card bulk and align all setting rows to the same rhythm.
-
-## P5 - Provider And Packaging
-
-1. Keep Ollama explicitly model-discovery-only in Build until chat/streaming relay is implemented.
-2. Run real provider-specific smoke tests manually when API keys are available; CI remains fixture-only.
-3. GitHub publication is unblocked with authenticated `gh`; keep direct `main` pushes gated by the full verification suite.
-4. macOS debug packaging is verified; keep running it before desktop handoffs.
-5. Document Windows/Linux packaging as manual until verified.
+1. Turn sidecar preparation into a release-grade pipeline: platform target map, checksum validation, clear build-time error, and no committed large binaries. First-pass cleanup now keeps `src-tauri/binaries/codex-*` ignored and lets Cargo-only tests compile without a prepared sidecar.
+2. Run an isolated OpenCode adapter spike behind `AgentRuntimePort`; do not connect it to production UI until it proves stable machine events and approval/file-edit semantics.
+3. Revisit the visual system after the Codex loop is stable.

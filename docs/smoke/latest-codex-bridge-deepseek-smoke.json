@@ -1,0 +1,13 @@
+{
+  "id": "codex-bridge-deepseek-smoke-2026-05-30T16-09-26-032Z",
+  "runtime": "codex-sidecar.v1",
+  "provider": "deepseek",
+  "scope": "Codex Responses bridge translation and item mapping",
+  "command": "cargo test --manifest-path src-tauri/Cargo.toml commands::codex::tests::responses_bridge_translates_deepseek_payload_and_items -- --nocapture",
+  "startedAt": "2026-05-30T16:09:23.979Z",
+  "completedAt": "2026-05-30T16:09:26.032Z",
+  "result": "verified",
+  "note": "This replaces the legacy direct DeepSeek smoke as the default npm run smoke:deepseek contract. The historical harness remains available as npm run smoke:deepseek:legacy.",
+  "stdoutTail": "\nrunning 1 test\ntest commands::codex::tests::responses_bridge_translates_deepseek_payload_and_items ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 40 filtered out; finished in 0.01s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s\n\n",
+  "stderrTail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s\n     Running unittests src/lib.rs (src-tauri/target/debug/deps/agent_gui_lib-9dbba80e3850a077)\n     Running unittests src/main.rs (src-tauri/target/debug/deps/orbit_code-ed0253873fea26ff)\n     Running tests/ast_parser_test.rs (src-tauri/target/debug/deps/ast_parser_test-fd553c88fdede7ce)\n     Running tests/code_graph_test.rs (src-tauri/target/debug/deps/code_graph_test-e799f139952296b0)\n     Running tests/embedding_test.rs (src-tauri/target/debug/deps/embedding_test-01fcc69bc9a3ad70)\n"
+}
