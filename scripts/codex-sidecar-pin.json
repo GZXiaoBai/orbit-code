@@ -1,6 +1,10 @@
 {
   "version": "codex-cli 0.135.0-alpha.1",
   "sha256": {
-    "aarch64-apple-darwin": "924a9c44e0ec23afe7715e62356a7a77215617987c12b46861a26e1e6083edf4"
+    "aarch64-apple-darwin": "422d6412cb766b41f7110c4b7177a40601f3ca6e77b60218e1da10d6fd06f3ce",
+    "x86_64-apple-darwin": "a17427bcf44014c88c7d309aa990d5a106d8b5a17f9d552bf4299aaba2979906",
+    "aarch64-unknown-linux-gnu": "6eb64c1560cf18848b4c3e00e560450656738fc0c409e207887484dfb7863bad",
+    "x86_64-unknown-linux-gnu": "e34c76cfea5bf6961917e0ebf4093f5d3d4d1b51a7c8dd00755416e521126308",
+    "x86_64-pc-windows-msvc": "db991d1d96ee2f3f1ea715b8f8fa1067fdb934c11ff1056c54e732abefb86392"
   }
 }

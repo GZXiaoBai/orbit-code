@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -16,8 +17,24 @@ const targetByPlatform = {
   "win32-x64": "x86_64-pc-windows-msvc",
 };
 
-function targetTriple() {
+const npmVendorTargetByPlatform = {
+  "darwin-arm64": "aarch64-apple-darwin",
+  "darwin-x64": "x86_64-apple-darwin",
+  "linux-arm64": "aarch64-unknown-linux-musl",
+  "linux-x64": "x86_64-unknown-linux-musl",
+  "win32-x64": "x86_64-pc-windows-msvc",
+};
+
+function targetPlatformKey() {
   const key = `${process.platform}-${process.arch}`;
+  if (!targetByPlatform[key]) {
+    throw new Error(`Unsupported sidecar target platform: ${key}`);
+  }
+  return key;
+}
+
+function targetTriple() {
+  const key = targetPlatformKey();
   const target = process.env.TAURI_TARGET_TRIPLE || process.env.TARGET || targetByPlatform[key];
   if (!target) {
     throw new Error(`Unsupported sidecar target platform: ${key}`);
@@ -25,10 +42,20 @@ function targetTriple() {
   return target;
 }
 
-function pathCandidates() {
+function npmVendorCandidates(target, extension) {
+  const platformKey = targetPlatformKey();
+  const packageName = `codex-${platformKey}`;
+  const vendorTarget = npmVendorTargetByPlatform[platformKey] ?? target;
+  return [
+    path.join(repoRoot, "node_modules", "@openai", packageName, "vendor", vendorTarget, "bin", `codex${extension}`),
+  ];
+}
+
+function pathCandidates(target, extension) {
   const candidates = [
     process.env.ORBIT_CODEX_BINARY,
     process.env.CODEX_BINARY,
+    ...npmVendorCandidates(target, extension),
     "/Applications/Codex.app/Contents/Resources/codex",
     "/opt/homebrew/bin/codex",
     "/usr/local/bin/codex",
@@ -38,7 +65,7 @@ function pathCandidates() {
 
   try {
     const found = execFileSync("sh", ["-lc", "command -v codex"], { encoding: "utf8" }).trim();
-    if (found) candidates.unshift(found);
+    if (found) candidates.push(found);
   } catch {
     // PATH lookup is best-effort; explicit app bundle and env paths cover packaged dev machines.
   }
@@ -46,8 +73,8 @@ function pathCandidates() {
   return [...new Set(candidates)];
 }
 
-function resolveCodexBinary() {
-  for (const candidate of pathCandidates()) {
+function resolveCodexBinary(target, extension) {
+  for (const candidate of pathCandidates(target, extension)) {
     if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
       return candidate;
     }
@@ -58,7 +85,9 @@ function resolveCodexBinary() {
 }
 
 function sha256(filePath) {
-  return execFileSync("shasum", ["-a", "256", filePath], { encoding: "utf8" }).split(/\s+/)[0];
+  const hash = crypto.createHash("sha256");
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest("hex");
 }
 
 function readPin() {
@@ -87,7 +116,7 @@ function verifyPinnedBinary(source, target) {
 function main() {
   const target = targetTriple();
   const extension = process.platform === "win32" ? ".exe" : "";
-  const source = resolveCodexBinary();
+  const source = resolveCodexBinary(target, extension);
   const destination = path.join(binariesDir, `codex-${target}${extension}`);
   verifyPinnedBinary(source, target);
 

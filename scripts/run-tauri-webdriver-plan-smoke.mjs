@@ -7,6 +7,7 @@ import { timestampId, writeSmokeReport } from "./smoke-report.mjs";
 
 const TAURI_WEBDRIVER_DOC = "https://v2.tauri.app/develop/tests/webdriver/";
 const DEFAULT_TIMEOUT_MS = Number(process.env.ORBIT_DESKTOP_PLAN_TIMEOUT_MS || 45_000);
+const REQUEST_TIMEOUT_MS = Number(process.env.ORBIT_WEBDRIVER_REQUEST_TIMEOUT_MS || 15_000);
 const LIVE_PLAN_ENABLED = process.env.ORBIT_DESKTOP_PLAN_LIVE === "1";
 
 function reportId() {
@@ -58,24 +59,36 @@ function discoverAppPath() {
 }
 
 async function requestJson(baseUrl, method, route, body) {
-  const response = await fetch(`${baseUrl}${route}`, {
-    method,
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await response.text();
-  let json = null;
-  if (text.trim()) {
-    try {
-      json = JSON.parse(text);
-    } catch {
-      json = { raw: text };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${baseUrl}${route}`, {
+      method,
+      headers: body === undefined ? undefined : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    }).catch((error) => {
+      if (error?.name === "AbortError") {
+        throw new Error(`${method} ${route} timed out after ${REQUEST_TIMEOUT_MS}ms`);
+      }
+      throw error;
+    });
+    const text = await response.text();
+    let json = null;
+    if (text.trim()) {
+      try {
+        json = JSON.parse(text);
+      } catch {
+        json = { raw: text };
+      }
     }
+    if (!response.ok) {
+      throw new Error(`${method} ${route} returned ${response.status}: ${text.slice(0, 500)}`);
+    }
+    return json;
+  } finally {
+    clearTimeout(timeout);
   }
-  if (!response.ok) {
-    throw new Error(`${method} ${route} returned ${response.status}: ${text.slice(0, 500)}`);
-  }
-  return json;
 }
 
 async function waitForDriver(baseUrl, timeoutMs) {

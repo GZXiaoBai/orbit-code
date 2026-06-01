@@ -1,17 +1,16 @@
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const root = path.resolve(__dirname, "..");
+const sourceModules = import.meta.glob("../**/*.{ts,tsx}", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>;
 
-function walk(dir: string, files: string[] = []): string[] {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "__tests__" || entry.name === "node_modules") continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) walk(full, files);
-    if (entry.isFile() && /\.(ts|tsx)$/.test(entry.name)) files.push(full);
-  }
-  return files;
+function productionSource(): string {
+  return Object.entries(sourceModules)
+    .filter(([file]) => !file.includes("/__tests__/") && !file.endsWith(".test.ts") && !file.endsWith(".test.tsx"))
+    .map(([, source]) => source)
+    .join("\n");
 }
 
 describe("Codex runtime boundary", () => {
@@ -28,9 +27,7 @@ describe("Codex runtime boundary", () => {
       "legacyQueuesForMigrationOnly",
       "parseToolEnvelopes",
     ];
-    const haystack = walk(root)
-      .map((file) => fs.readFileSync(file, "utf8"))
-      .join("\n");
+    const haystack = productionSource();
     for (const token of forbidden) {
       expect(haystack).not.toContain(token);
     }
