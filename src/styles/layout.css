@@ -942,6 +942,8 @@
   margin-top: 4px;
   color: var(--text-muted);
   font-size: var(--font-size-sm);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .usage-grid {

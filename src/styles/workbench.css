@@ -968,6 +968,20 @@
   border-bottom: 1px solid var(--line);
 }
 
+.review-dock-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.review-dock-header small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .review-dock > .ui-tabs {
   grid-row: 2;
   padding: var(--space-2) var(--space-2);
@@ -1205,6 +1219,7 @@
 .dock-task-list,
 .dock-changes,
 .dock-terminal-list,
+.codex-inspector-list,
 .dock-context,
 .dock-context-blocks,
 .dock-context-errors {
@@ -1216,10 +1231,121 @@
 .dock-task-list > *,
 .dock-changes > *,
 .dock-terminal-list > *,
+.codex-inspector-list > *,
 .dock-context > *,
 .dock-context-blocks > *,
 .dock-context-errors > * {
   min-width: 0;
+}
+
+.codex-inspector-card {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 74%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg-primary));
+  box-shadow: 0 1px 0 color-mix(in srgb, #fff 4%, transparent) inset;
+}
+
+.codex-inspector-card header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+}
+
+.codex-inspector-card header > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.codex-inspector-card strong,
+.codex-inspector-card small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-inspector-card strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 760;
+}
+
+.codex-inspector-card small,
+.codex-inspector-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.codex-inspector-card p {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.codex-inspector-card pre {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--line);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.codex-inspector-card > .codex-inspector-meta {
+  display: block;
+  padding: 0 var(--space-3) var(--space-2);
+  white-space: normal;
+}
+
+.codex-inspector-card > .btn {
+  margin: 0 var(--space-3) var(--space-3);
+}
+
+.codex-inspector-card-danger {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--line-strong));
+}
+
+.codex-inspector-card-warning {
+  border-color: color-mix(in srgb, var(--warning) 34%, var(--line-strong));
+}
+
+.codex-usage-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--line-strong) 64%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-2) 42%, transparent);
+}
+
+.codex-usage-strip span,
+.codex-usage-strip small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.codex-usage-strip strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+.codex-usage-strip small {
+  grid-column: 1 / -1;
+  font-family: var(--font-mono);
 }
 
 .dock-context-summary,

@@ -26,14 +26,8 @@ references: []`);
     await textarea.press("Enter");
     await page.waitForTimeout(2000);
 
-    // Agent collaboration timeline should appear
-    const timeline = page.locator(".agent-collaboration-timeline");
-    await expect(timeline).toBeVisible({ timeout: 5000 });
-
-    // Timeline nodes should exist without fabricating patches.
-    const nodes = timeline.locator(".timeline-node");
-    await expect(nodes.first()).toBeVisible({ timeout: 8000 });
-    await expect(timeline).toContainText(/计划已就绪|Plan Ready/);
+    await expect(page.locator(".plan-card")).toBeVisible({ timeout: 5000 });
+    await expect(page.locator(".plan-card")).toContainText("Agent Task");
     await expect(page.locator("button:has-text('Agent run')")).toHaveCount(0);
     await expect(page.locator("button:has-text('开始执行')")).toHaveCount(0);
   });

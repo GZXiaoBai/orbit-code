@@ -61,6 +61,8 @@ export function RunControlBar({ copy, controls, onOpenSettings }: RunControlBarP
           icon={<Brain size={14} />}
           value={controls.selection.reasoningEffort}
           ariaLabel={copy.runControls.reasoning}
+          preferredPlacement="below"
+          minPopoverWidth={150}
           onChange={(value) => controls.setReasoningEffort(value as ReasoningEffort)}
           options={controls.availableReasoningEfforts.map((effort) => ({
             value: effort,

@@ -3,13 +3,13 @@ import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, CornerDownLeft, GitPu
 import type { ActionGrantScope, ActionRequiredEvent } from "../../domain/actionRequired";
 import type { QuestionAnswerInput } from "../../domain/questionRequest";
 import { QUESTION_OPTION_DESCRIPTION_FALLBACK } from "../../domain/questionRequest";
-import type { AgentEventPatch } from "../../domain/agentEvents";
+import type { ThreadPatch } from "../../domain/threadEvents";
 import type { ThreadEvent } from "../../domain/threadEvents";
 import type { PermissionAction } from "../../domain/types";
 import type { AppCopy } from "../../i18n/copy";
 import { DiffViewer } from "../../components/DiffViewer";
 import { SelectMenu, StatusBadge } from "../../ui/primitives";
-import { localizedAgentEventName } from "../../components/thread/agentDisplayText";
+import { localizedRuntimeName } from "../../components/thread/agentDisplayText";
 import { commandApprovalView, patchApplySummary, patchSandboxSummary } from "../review/reviewCardUtils";
 
 interface ActionRequiredOverlayProps {
@@ -22,7 +22,7 @@ interface ActionRequiredOverlayProps {
   onAnswer: (id: string, answer: string | QuestionAnswerInput) => void;
   onGrantScopeChange: (id: string, scope: ActionGrantScope) => void;
   onApplyPatch: (eventId: string) => Promise<void> | void;
-  onUpdatePatch: (eventId: string, path: string, updates: Partial<AgentEventPatch>) => void;
+  onUpdatePatch: (eventId: string, path: string, updates: Partial<ThreadPatch>) => void;
 }
 
 function actionOrder(action: ActionRequiredEvent): number {
@@ -368,7 +368,7 @@ function PatchActionDialog({
   nav: { index: number; total: number; previous: () => void; next: () => void };
   workspaceRoot: string;
   onApplyPatch: (eventId: string) => Promise<void> | void;
-  onUpdatePatch: (eventId: string, path: string, updates: Partial<AgentEventPatch>) => void;
+  onUpdatePatch: (eventId: string, path: string, updates: Partial<ThreadPatch>) => void;
   onDismiss: () => void;
 }) {
   const sandboxStatus = patchSandboxSummary(event);
@@ -379,7 +379,7 @@ function PatchActionDialog({
     && patches.every((patch) => patch.applied || (patch.sandboxStatus === "sandboxed" && patch.applyStatus !== "failed" && !patch.hasConflict));
   return (
     <section className="approval-dialog patch-review-dialog" role="dialog" aria-modal="true" aria-labelledby="patch-review-dialog-title" tabIndex={-1}>
-      <ActionHeader copy={copy} icon={<GitPullRequestArrow size={16} />} kicker={copy.language === "中" ? "需要审查" : "Review required"} title={localizedAgentEventName(copy, event.title || action.title)} nav={nav} titleId="patch-review-dialog-title" />
+      <ActionHeader copy={copy} icon={<GitPullRequestArrow size={16} />} kicker={copy.language === "中" ? "需要审查" : "Review required"} title={localizedRuntimeName(copy, event.title || action.title)} nav={nav} titleId="patch-review-dialog-title" />
       <div className="patch-review-overlay-meta">
         <StatusBadge tone={sandboxStatus === "failed" ? "danger" : sandboxStatus === "sandboxed" ? "success" : "warning"}>
           {copy.workbench.sandboxLabel} {copy.workbench.patchSandboxStatus[sandboxStatus]}

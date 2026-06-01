@@ -23,7 +23,8 @@ import {
 import type { AppCopy } from "../../i18n/copy";
 import { providerRegistry } from "../../providers/providerRegistry";
 import { discoverProviderModels } from "../../services/modelDiscovery";
-import { addCustomModel, getProviderConfig, setImportedModels, setModelEnabled } from "../../state/modelSettings";
+import type { CodexRuntimeSettingsModel, ProviderBridgeStatus, ProviderBuildGate } from "../../domain/codex";
+import { addCustomModel, buildProviderBuildGate, getProviderConfig, setImportedModels, setModelEnabled } from "../../state/modelSettings";
 import { getProviderSmokeRecord, setProviderSmokeRecord } from "../../state/providerSmoke";
 import type { WorkspaceProject } from "../../state/useProjectStore";
 import type { ProviderSettings } from "../../state/useWorkspace";
@@ -48,6 +49,9 @@ interface SettingsWorkspaceProps {
   apiKeys: Record<string, string>;
   credentialVaultProviders: string[];
   credentialVaultAutoUnlock: boolean;
+  codexRuntimeSettings: CodexRuntimeSettingsModel;
+  providerBuildGate: ProviderBuildGate;
+  onRestartRuntime?: (providerId?: string) => Promise<unknown> | unknown;
   usageSnapshot: UsageSnapshot;
   theme: Theme;
   layoutPreferences: LayoutPreferences;
@@ -98,6 +102,8 @@ export function SettingsWorkspace({
   apiKeys,
   credentialVaultProviders,
   credentialVaultAutoUnlock,
+  codexRuntimeSettings,
+  onRestartRuntime,
   usageSnapshot,
   theme,
   layoutPreferences,
@@ -170,6 +176,24 @@ export function SettingsWorkspace({
   const activeConfig = getProviderConfig(draftSettings, activeProvider.id);
   const activeProviderHasVaultCredential = credentialVaultProviders.includes(activeProvider.id);
   const activeProviderHasDetectedKey = Boolean(apiKeys[activeProvider.id] || localApiKeys[activeProvider.id] || activeProviderHasVaultCredential);
+  const activeModelForGate = activeConfig.defaultModel || activeConfig.enabledModels[0] || activeConfig.importedModels[0] || activeConfig.customModels[0] || "";
+  const activeProviderBuildGate = useMemo(() => buildProviderBuildGate({
+    providerId: activeProvider.id,
+    model: activeModelForGate,
+    settings: draftSettings,
+    apiKeys: { ...apiKeys, ...(localApiKeys[activeProvider.id] ? { [activeProvider.id]: localApiKeys[activeProvider.id] } : {}) },
+    savedCredentialProviders: credentialVaultProviders,
+    sidecarStatus: codexRuntimeSettings.sidecarStatus,
+  }), [activeConfig, activeModelForGate, activeProvider.id, apiKeys, credentialVaultProviders, codexRuntimeSettings.sidecarStatus, draftSettings, localApiKeys]);
+  const activeSmokeRecord = getProviderSmokeRecord(draftSettings, activeProvider.id);
+  const activeProviderBridgeStatus: ProviderBridgeStatus = useMemo(() => ({
+    providerId: activeProvider.id,
+    model: activeModelForGate,
+    modelDiscovery: activeConfig.importedModels.length > 0 || activeConfig.customModels.length > 0 ? "ready" : "notConfigured",
+    bridgeSmoke: activeSmokeRecord.status === "smokePassed" ? "passed" : activeSmokeRecord.status === "smokeFailed" ? "failed" : "notRun",
+    buildEnabled: activeProviderBuildGate.canBuild,
+    blockedReason: activeProviderBuildGate.blockedReason,
+  }), [activeConfig.customModels.length, activeConfig.importedModels.length, activeModelForGate, activeProvider.id, activeProviderBuildGate.blockedReason, activeProviderBuildGate.canBuild, activeSmokeRecord.status]);
   const vaultCopy = {
     passphrase: copy.language === "中" ? "Orbit 凭据库主密码" : "Orbit credential vault passphrase",
     passphraseHelp: copy.language === "中"
@@ -246,19 +270,27 @@ export function SettingsWorkspace({
 
   const ensureProviderCredential = async (providerId: string) => {
     const provider = providerRegistry.find((item) => item.id === providerId);
-    if (!provider || provider.capabilities.local || apiKeys[providerId]) return true;
+    if (!provider || provider.capabilities.local) return true;
 
     const typedKey = localApiKeys[providerId]?.trim() || "";
     const passphrase = vaultPassphrase.trim();
+
+    if (typedKey) {
+      if (!passphrase) {
+        setVaultMessage(vaultCopy.required);
+        return false;
+      }
+      await onUpdateApiKey(providerId, typedKey, passphrase, rememberVaultUnlock);
+      setLocalApiKeys((prev) => ({ ...prev, [providerId]: "" }));
+      setVaultMessage(rememberVaultUnlock ? vaultCopy.remembered : vaultCopy.unlocked);
+      return true;
+    }
+
+    if (apiKeys[providerId]) return true;
+
     if (!passphrase) {
       setVaultMessage(vaultCopy.required);
       return false;
-    }
-
-    if (typedKey) {
-      await onUpdateApiKey(providerId, typedKey, passphrase, rememberVaultUnlock);
-      setVaultMessage(rememberVaultUnlock ? vaultCopy.remembered : vaultCopy.unlocked);
-      return true;
     }
 
     if (credentialVaultProviders.includes(providerId)) {
@@ -472,6 +504,13 @@ export function SettingsWorkspace({
                   })}
                 </span>
               </section>
+              <CodexRuntimePanel
+                copy={copy}
+                runtime={codexRuntimeSettings}
+                activeGate={activeProviderBuildGate}
+                bridgeStatus={activeProviderBridgeStatus}
+                onRestart={() => void onRestartRuntime?.(activeProvider.id)}
+              />
               <section className="provider-credential-panel">
                 {!activeProvider.capabilities.local ? (
                   <>
@@ -566,6 +605,8 @@ export function SettingsWorkspace({
                 copy={copy}
                 settings={draftSettings}
                 providerId={activeProvider.id}
+                apiKeys={apiKeys}
+                credentialVaultProviders={credentialVaultProviders}
                 search={modelSearch}
                 customModel={customModel}
                 onSearchChange={setModelSearch}
@@ -875,6 +916,102 @@ function InfoCard({ title, body }: { title: string; body: string }) {
   return <article className="settings-info-card"><strong>{title}</strong><p>{body}</p></article>;
 }
 
+function gateLabel(copy: AppCopy, gate: ProviderBuildGate) {
+  if (gate.canBuild) return copy.language === "中" ? "Build 已启用" : "Build enabled";
+  if (gate.bridgeStatus === "vaultLocked") return copy.language === "中" ? "凭据库未解锁" : "Vault locked";
+  if (gate.bridgeStatus === "discovery") return copy.language === "中" ? "等待模型导入" : "Model discovery required";
+  return copy.language === "中" ? "Build 已阻止" : "Build blocked";
+}
+
+function CodexRuntimePanel({
+  copy,
+  runtime,
+  activeGate,
+  bridgeStatus,
+  onRestart,
+}: {
+  copy: AppCopy;
+  runtime: CodexRuntimeSettingsModel;
+  activeGate: ProviderBuildGate;
+  bridgeStatus: ProviderBridgeStatus;
+  onRestart?: () => void;
+}) {
+  const sidecarReady = runtime.sidecarStatus.running;
+  const discoveryLabel = bridgeStatus.modelDiscovery === "ready"
+    ? (copy.language === "中" ? "Model discovery 已完成" : "Model discovery ready")
+    : (copy.language === "中" ? "等待模型导入" : "Model discovery pending");
+  const smokeText = bridgeStatus.bridgeSmoke === "passed"
+    ? (copy.language === "中" ? "Bridge smoke 已通过" : "Bridge smoke passed")
+    : bridgeStatus.bridgeSmoke === "failed"
+      ? (copy.language === "中" ? "Bridge smoke 失败" : "Bridge smoke failed")
+      : (copy.language === "中" ? "Bridge smoke 未运行" : "Bridge smoke not run");
+  const runtimeFailureDetails = [
+    typeof runtime.sidecarStatus.lastExitCode === "number"
+      ? (copy.language === "中" ? `退出码 ${runtime.sidecarStatus.lastExitCode}` : `exit ${runtime.sidecarStatus.lastExitCode}`)
+      : "",
+    runtime.sidecarStatus.lastStderrTail
+      ? `stderr: ${runtime.sidecarStatus.lastStderrTail}`
+      : "",
+  ].filter(Boolean).join("\n");
+  const desktopBuildSmoke = runtime.latestDesktopBuildSmoke
+    ? `${runtime.latestDesktopBuildSmoke.result}${runtime.latestDesktopBuildSmoke.liveBuildEnabled ? " · live" : " · readiness"}${runtime.latestDesktopBuildSmoke.path ? ` · ${runtime.latestDesktopBuildSmoke.path}` : ""}`
+    : (copy.language === "中" ? "尚无报告" : "No report yet");
+  return (
+    <section className="provider-credential-panel codex-runtime-panel">
+      <div className="codex-runtime-grid">
+        <InfoCard
+          title={copy.language === "中" ? "Codex sidecar" : "Codex sidecar"}
+          body={sidecarReady
+            ? `${runtime.sidecarInfo?.version || "Codex"} · PID ${runtime.sidecarStatus.pid || "-"}`
+            : runtime.lastError || (copy.language === "中" ? "尚未启动" : "Not running")}
+        />
+        <InfoCard
+          title={copy.language === "中" ? "Sidecar path" : "Sidecar path"}
+          body={runtime.sidecarInfo?.path || runtime.sidecarPath || runtime.sidecarInfo?.source || "-"}
+        />
+        <InfoCard
+          title={copy.language === "中" ? "SHA-256" : "SHA-256"}
+          body={runtime.sidecarInfo?.sha256 ? runtime.sidecarInfo.sha256.slice(0, 16) : "-"}
+        />
+        <InfoCard
+          title={copy.language === "中" ? "Responses bridge" : "Responses bridge"}
+          body={runtime.bridgeBaseUrl || runtime.bridgeStatus}
+        />
+        <InfoCard
+          title={copy.language === "中" ? "Runtime diagnostics" : "Runtime diagnostics"}
+          body={runtimeFailureDetails || runtime.lastError || (copy.language === "中" ? "暂无错误" : "No recent error")}
+        />
+        <InfoCard
+          title={copy.language === "中" ? "Model discovery" : "Model discovery"}
+          body={discoveryLabel}
+        />
+        <InfoCard
+          title={copy.language === "中" ? "Bridge smoke" : "Bridge smoke"}
+          body={smokeText}
+        />
+        <InfoCard
+          title={copy.language === "中" ? "Desktop Build smoke" : "Desktop Build smoke"}
+          body={desktopBuildSmoke}
+        />
+        <InfoCard
+          title={copy.language === "中" ? "Build enabled" : "Build enabled"}
+          body={bridgeStatus.blockedReason || activeGate.blockedReason || gateLabel(copy, activeGate)}
+        />
+      </div>
+      <div className={`codex-runtime-status-chip ${activeGate.canBuild ? "smokePassed" : "smokeFailed"}`}>
+        <ShieldCheck size={13} />
+        {gateLabel(copy, activeGate)}
+      </div>
+      {onRestart ? (
+        <button type="button" className="btn" onClick={onRestart}>
+          <Loader2 size={14} />
+          {copy.language === "中" ? "重启 Codex runtime" : "Restart Codex runtime"}
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
 function SegmentedSetting({ label, value, options, onChange }: { label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) {
   return (
     <div className="settings-row">
@@ -917,6 +1054,8 @@ function ModelList({
   copy,
   settings,
   providerId,
+  apiKeys,
+  credentialVaultProviders,
   search,
   customModel,
   onSearchChange,
@@ -927,6 +1066,8 @@ function ModelList({
   copy: AppCopy;
   settings: ProviderSettings;
   providerId: string;
+  apiKeys: Record<string, string>;
+  credentialVaultProviders: string[];
   search: string;
   customModel: string;
   onSearchChange: (value: string) => void;
@@ -953,9 +1094,20 @@ function ModelList({
         <div className="model-toggle-list">
           {models.map((model) => {
             const enabled = config.enabledModels.includes(model);
+            const gate = buildProviderBuildGate({
+              providerId: provider.id,
+              model,
+              settings,
+              apiKeys,
+              savedCredentialProviders: credentialVaultProviders,
+            });
             return (
               <button key={model} type="button" className={`model-toggle-row ${enabled ? "enabled" : ""}`} onClick={() => onToggleModel(provider.id, model, !enabled)}>
-                <span><strong>{model}</strong>{config.customModels.includes(model) ? <small>{copy.settingsModal.customModel}</small> : null}</span>
+                <span>
+                  <strong>{model}</strong>
+                  <small>{config.customModels.includes(model) ? copy.settingsModal.customModel : gateLabel(copy, gate)}</small>
+                  {!gate.canBuild && gate.blockedReason ? <small>{gate.blockedReason}</small> : null}
+                </span>
                 <span className="model-switch" aria-hidden="true">{enabled ? <Check size={14} /> : null}</span>
               </button>
             );

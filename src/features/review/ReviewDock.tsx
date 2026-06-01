@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, BookOpenText, FileCode2, GitPullRequestArrow, ShieldCheck } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, BookOpenText, FileCode2, FilePenLine, GitPullRequestArrow, ShieldQuestion, TerminalSquare } from "lucide-react";
 import type { Theme } from "../../domain/types";
+import type { CodexInspectableItem } from "../../domain/codex";
 import type { TerminalRun } from "../../domain/terminalRun";
 import type { AppCopy } from "../../i18n/copy";
 import type { useWorkspace } from "../../state/useWorkspace";
@@ -9,15 +10,82 @@ import { EmptyState, StatusBadge, Tabs } from "../../ui/primitives";
 import { CodePreview } from "./CodePreview";
 import { PatchReviewQueue } from "./PatchReviewQueue";
 import { TerminalRunList } from "./TerminalRunList";
-import { localizedAgentEventName, localizedRuntimeText } from "../../components/thread/agentDisplayText";
 
 type WorkspaceState = ReturnType<typeof useWorkspace>;
-type DockTab = "files" | "changes" | "terminal" | "context";
+type DockTab = "files" | "actions" | "edits" | "terminal" | "context";
 
 interface ReviewDockProps {
   copy: AppCopy;
   theme: Theme;
   workspace: WorkspaceState;
+}
+
+function itemStatusLabel(copy: AppCopy, item: CodexInspectableItem) {
+  if (item.kind === "question" && item.status === "completed") return copy.language === "中" ? "已回答" : "Answered";
+  if (item.kind === "question" && item.status === "denied") return copy.language === "中" ? "已取消" : "Cancelled";
+  if (item.kind === "approval" && item.status === "completed") return copy.language === "中" ? "已批准" : "Approved";
+  if (item.kind === "approval" && item.status === "denied") return copy.language === "中" ? "已拒绝" : "Denied";
+  if (item.status === "pending") return copy.workbench.pendingApproval;
+  if (item.status === "running") return copy.thread.thinking;
+  if (item.status === "failed") return copy.language === "中" ? "失败" : "Failed";
+  return copy.language === "中" ? "完成" : "Done";
+}
+
+function itemKindLabel(copy: AppCopy, item: CodexInspectableItem) {
+  if (item.kind === "question") return copy.workbench.agentQuestion;
+  if (item.kind === "approval") return copy.workbench.authorizationRequired;
+  if (item.kind === "fileEdit") return copy.language === "中" ? "Codex 文件编辑" : "Codex file edit";
+  if (item.kind === "terminal") return copy.workbench.terminalTab;
+  if (item.kind === "usage") return copy.language === "中" ? "Token 使用量" : "Token usage";
+  if (item.kind === "reasoning") return copy.language === "中" ? "推理摘要" : "Reasoning";
+  if (item.kind === "error") return copy.language === "中" ? "错误" : "Error";
+  return item.title;
+}
+
+function focusActionOverlay() {
+  requestAnimationFrame(() => {
+    const dialog = document.querySelector<HTMLElement>(".approval-dialog");
+    dialog?.focus();
+    dialog?.scrollIntoView({ block: "center", behavior: "smooth" });
+  });
+}
+
+function ActionItemCard({ copy, item }: { copy: AppCopy; item: CodexInspectableItem }) {
+  const params = item.metadata?.params && typeof item.metadata.params === "object"
+    ? JSON.stringify(item.metadata.params, null, 2)
+    : "";
+  const answer = typeof item.metadata?.answer === "string" ? item.metadata.answer : "";
+  return (
+    <article className={`codex-inspector-card codex-inspector-card-${item.tone}`} data-review-focus={item.status === "pending" || item.status === "running" ? "pending" : undefined}>
+      <header>
+        <div>
+          <strong>{itemKindLabel(copy, item)}</strong>
+          <small>{item.title}</small>
+        </div>
+        <StatusBadge tone={item.tone}>{itemStatusLabel(copy, item)}</StatusBadge>
+      </header>
+      <p>{item.text}</p>
+      {answer ? <small className="codex-inspector-meta">{copy.workbench.answerQuestion}: {answer}</small> : null}
+      {params ? <pre>{params}</pre> : null}
+      {(item.status === "pending" || item.status === "running") ? (
+        <button type="button" className="btn" onClick={focusActionOverlay}>
+          {copy.language === "中" ? "打开处理弹窗" : "Open action overlay"}
+        </button>
+      ) : null}
+    </article>
+  );
+}
+
+function UsageStrip({ copy, workspace }: { copy: AppCopy; workspace: WorkspaceState }) {
+  const usage = workspace.codexInspectorModel.usage;
+  if (usage.totalTokens <= 0) return null;
+  return (
+    <div className="codex-usage-strip">
+      <span>{copy.workbench.contextTokens}</span>
+      <strong>{usage.totalTokens}</strong>
+      <small>in {usage.inputTokens} / out {usage.outputTokens}</small>
+    </div>
+  );
 }
 
 export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
@@ -27,12 +95,9 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
   const [contextSaveState, setContextSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [smokeRecord, setSmokeRecord] = useState<ReturnType<WorkspaceState["evaluateDeepSeekSmokeRun"]> | null>(null);
   const didAutoSelectTab = useRef(false);
-  const model = workspace.reviewDockModel;
+  const model = workspace.codexInspectorModel;
   const filePreview = useFilePreview(workspace.activeFilePath, workspace.activeFileContent);
-  const terminalRuns = model.terminalRuns.length > 0
-    ? model.terminalRuns
-    : model.historyTerminalRuns;
-  const terminalEntries: TerminalRun[] = terminalRuns.length > 0 ? terminalRuns : Object.entries(workspace.terminalLogs).map(([taskId, output]) => ({
+  const terminalEntries: TerminalRun[] = model.terminalRuns.length > 0 ? model.terminalRuns : Object.entries(workspace.terminalLogs).map(([taskId, output]) => ({
     id: taskId,
     taskId,
     command: taskId,
@@ -48,32 +113,29 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
   const contextInspector = workspace.currentContextInspector;
   const editableContext = contextInspector.editableSources.find((source) => source.path === editingContextPath)
     || contextInspector.editableSources[0];
-  const activeChangeSteps = useMemo(
-    () => workspace.runSteps
-      .filter((step) => (step.kind === "command" || step.kind === "patch") && step.status !== "done")
-      .slice(-4),
-    [workspace.runSteps],
-  );
-  const headerStatus = reviewHeaderStatus(copy, model.counts.changes, failedTerminalCount, workspace.pendingActions.length);
+  const headerStatus = reviewHeaderStatus(copy, model.counts.edits, failedTerminalCount, model.counts.pendingActions);
 
   useEffect(() => {
     if (didAutoSelectTab.current) return;
-    if (model.counts.changes > 0) {
+    if (model.counts.pendingActions > 0) {
       didAutoSelectTab.current = true;
-      setActiveTab("changes");
+      setActiveTab("actions");
+    } else if (model.counts.edits > 0) {
+      didAutoSelectTab.current = true;
+      setActiveTab("edits");
     } else if (failedTerminalCount > 0) {
       didAutoSelectTab.current = true;
       setActiveTab("terminal");
     }
-  }, [failedTerminalCount, model.counts.changes]);
+  }, [failedTerminalCount, model.counts.edits, model.counts.pendingActions]);
 
   useEffect(() => {
     const focusReviewDock = () => {
-      setActiveTab("changes");
+      setActiveTab(model.counts.pendingActions > 0 ? "actions" : model.counts.edits > 0 ? "edits" : "terminal");
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           const dock = document.querySelector(".review-dock");
-          const target = dock?.querySelector<HTMLElement>("[data-review-focus='pending'], .approval-request-card, .dock-diff-card, .dock-run-step");
+          const target = dock?.querySelector<HTMLElement>("[data-review-focus='pending'], .codex-inspector-card, .dock-diff-card, .dock-terminal");
           target?.scrollIntoView({ block: "center", behavior: "smooth" });
           target?.classList.add("review-focus-pulse");
           window.setTimeout(() => target?.classList.remove("review-focus-pulse"), 1200);
@@ -82,7 +144,7 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
     };
     window.addEventListener("orbit:focus-review-dock", focusReviewDock);
     return () => window.removeEventListener("orbit:focus-review-dock", focusReviewDock);
-  }, []);
+  }, [model.counts.edits, model.counts.pendingActions]);
 
   useEffect(() => {
     if (!editableContext) return;
@@ -102,9 +164,12 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
   };
 
   return (
-    <aside className="review-dock" aria-label={copy.workbench.reviewDock}>
+    <aside className="review-dock codex-inspector" aria-label={copy.workbench.reviewDock}>
       <header className="review-dock-header">
-        <strong>{copy.workbench.reviewDock}</strong>
+        <div>
+          <strong>{copy.workbench.reviewDock}</strong>
+          <small>{copy.language === "中" ? "Codex items" : "Codex items"}</small>
+        </div>
         <StatusBadge tone={headerStatus.tone}>
           {headerStatus.label}
         </StatusBadge>
@@ -115,7 +180,8 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
         onChange={setActiveTab}
         tabs={[
           { id: "files", label: copy.workbench.filesTab },
-          { id: "changes", label: copy.workbench.changesTab, count: model.counts.changes },
+          { id: "actions", label: copy.language === "中" ? "动作" : "Actions", count: model.counts.actions },
+          { id: "edits", label: copy.workbench.changesTab, count: model.counts.edits },
           { id: "terminal", label: copy.workbench.terminalTab, count: terminalEntries.length },
           { id: "context", label: copy.workbench.contextTab, count: contextInspector.blocks.length },
         ]}
@@ -130,125 +196,69 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
           )
         ) : null}
 
-        {activeTab === "changes" ? (
-          <div className="dock-changes">
-            {activeChangeSteps.map((step) => (
-              <article key={step.id} className={`dock-run-step dock-run-step-${step.status}`} data-review-focus="pending">
+        {activeTab === "actions" ? (
+          <div className="codex-inspector-list">
+            {model.actions.map((item) => <ActionItemCard key={item.id} copy={copy} item={item} />)}
+            <UsageStrip copy={copy} workspace={workspace} />
+            {model.errors.map((item) => (
+              <article key={item.id} className="codex-inspector-card codex-inspector-card-danger">
                 <header>
                   <div>
-                    <strong>{localizedAgentEventName(copy, step.title)}</strong>
-                    <small>{localizedRuntimeText(copy, step.detail)}</small>
+                    <strong>{itemKindLabel(copy, item)}</strong>
+                    <small>{item.title}</small>
                   </div>
-                  <StatusBadge tone={step.status === "waiting" ? "warning" : step.status === "denied" || step.status === "failed" ? "danger" : step.status === "done" ? "success" : "neutral"}>
-                    {copy.workbench.runStepStatus[step.status]}
-                  </StatusBadge>
+                  <StatusBadge tone="danger">{itemStatusLabel(copy, item)}</StatusBadge>
                 </header>
+                <p>{item.text}</p>
               </article>
             ))}
+            {model.actions.length === 0 && model.errors.length === 0 ? (
+              <EmptyState icon={<ShieldQuestion size={22} />} title={copy.workbench.noApprovals} />
+            ) : null}
+          </div>
+        ) : null}
 
+        {activeTab === "edits" ? (
+          <div className="dock-changes codex-inspector-list">
+            <div className="dock-queue-heading">
+              <FilePenLine size={14} />
+              <strong>{copy.language === "中" ? "Codex 文件编辑" : "Codex file edits"}</strong>
+            </div>
             <PatchReviewQueue
               copy={copy}
-              events={model.patchReviews}
+              events={model.patchEvents}
               onApply={workspace.applyEventPatch}
               onUpdatePatch={workspace.updateEventPatch}
               workspacePath={workspace.workspaceRoot}
             />
-
-            {model.checkpointEvents.length > 0 ? (
-              <div className="dock-checkpoint-browser" data-testid="checkpoint-browser">
-                <div className="dock-queue-heading">
-                  <GitPullRequestArrow size={14} />
-                  <strong>{copy.language === "中" ? "Checkpoint Restore" : "Checkpoint Restore"}</strong>
-                </div>
-                {model.checkpointEvents.slice(0, 6).map((event) => (
-                  <article key={event.id} className="dock-run-step dock-run-step-done">
-                    <header>
-                      <div>
-                        <strong>{event.checkpoint?.checkpointId || event.title}</strong>
-                        <small>
-                          {(event.checkpoint?.strategy || "checkpoint")}
-                          {event.checkpoint?.filePaths?.length ? ` · ${event.checkpoint.filePaths.join(", ")}` : ""}
-                        </small>
-                      </div>
-                      <div className="dock-run-step-actions">
-                        <StatusBadge tone={event.checkpoint?.status === "failed" ? "danger" : "neutral"}>
-                          {event.checkpoint?.status || "created"}
-                        </StatusBadge>
-                        {event.checkpoint?.checkpointId && event.checkpoint.status === "created" ? (
-                          <button type="button" onClick={() => void workspace.restoreCheckpoint(event.checkpoint!.checkpointId)}>
-                            {copy.language === "中" ? "恢复" : "Restore"}
-                          </button>
-                        ) : null}
-                      </div>
-                    </header>
-                  </article>
-                ))}
-              </div>
+            {model.edits.length > 0 && model.patchEvents.length === 0 ? (
+              model.edits.map((item) => (
+                <article key={item.id} className="dock-diff-card codex-inspector-card">
+                  <header>
+                    <div>
+                      <strong>{item.title}</strong>
+                      <small>{item.text}</small>
+                    </div>
+                    <StatusBadge tone={item.tone}>{itemStatusLabel(copy, item)}</StatusBadge>
+                  </header>
+                </article>
+              ))
             ) : null}
-
-            {(model.appliedPatchReviews.length > 0 || model.failedPatchReviews.length > 0 || model.historyPatchReviews.length > 0) ? (
-              <div className="dock-applied-history">
-                <div className="dock-queue-heading">
-                  <GitPullRequestArrow size={14} />
-                  <strong>{copy.workbench.patchHistory}</strong>
-                </div>
-                {[...model.appliedPatchReviews, ...model.failedPatchReviews, ...model.historyPatchReviews].slice(0, 4).map((event) => {
-                  const failed = event.patches?.every((patch) => !patch.applied && (patch.sandboxStatus === "failed" || patch.applyStatus === "failed"));
-                  return (
-                    <article key={event.id} className="dock-run-step dock-run-step-done">
-                    <header>
-                      <div>
-                        <strong>{localizedAgentEventName(copy, event.title)}</strong>
-                        <small>{event.patches?.map((patch) => patch.path).join(", ")}</small>
-                      </div>
-                      <div className="dock-run-step-actions">
-                        <StatusBadge tone={failed ? "danger" : "success"}>
-                          {failed ? copy.workbench.patchFailed : copy.diff.allApplied}
-                        </StatusBadge>
-                        {event.checkpoint?.checkpointId ? (
-                          <button type="button" onClick={() => void workspace.rollbackEventPatch(event.id)}>
-                            {copy.language === "中" ? "回滚" : "Rollback"}
-                          </button>
-                        ) : null}
-                      </div>
-                    </header>
-                  </article>
-                  );
-                })}
-              </div>
-            ) : null}
-
-            {model.rollbackEvents.length > 0 && model.appliedPatchReviews.length === 0 && model.failedPatchReviews.length === 0 && model.historyPatchReviews.length === 0 ? (
-              <div className="dock-applied-history">
-                <div className="dock-queue-heading">
-                  <GitPullRequestArrow size={14} />
-                  <strong>{copy.language === "中" ? "恢复历史" : "Restore history"}</strong>
-                </div>
-                {model.rollbackEvents.slice(0, 4).map((event) => (
-                  <article key={event.id} className="dock-run-step dock-run-step-done">
-                    <header>
-                      <div>
-                        <strong>{localizedAgentEventName(copy, event.title)}</strong>
-                        <small>{event.rollback?.filePaths?.join(", ") || event.message}</small>
-                      </div>
-                      <div className="dock-run-step-actions">
-                        <StatusBadge tone={event.rollback?.status === "failed" ? "danger" : "success"}>
-                          {event.rollback?.status || "restored"}
-                        </StatusBadge>
-                      </div>
-                    </header>
-                  </article>
-                ))}
-              </div>
-            ) : null}
-
-            {model.counts.changes === 0 ? (
+            {model.counts.edits === 0 ? (
               <EmptyState icon={<GitPullRequestArrow size={22} />} title={copy.workbench.noChanges} />
             ) : null}
           </div>
         ) : null}
 
-        {activeTab === "terminal" ? <TerminalRunList copy={copy} runs={terminalEntries} /> : null}
+        {activeTab === "terminal" ? (
+          <div className="codex-inspector-list">
+            <div className="dock-queue-heading">
+              <TerminalSquare size={14} />
+              <strong>{copy.workbench.terminalTab}</strong>
+            </div>
+            <TerminalRunList copy={copy} runs={terminalEntries} />
+          </div>
+        ) : null}
 
         {activeTab === "context" ? (
           <div className="dock-context" data-testid="current-context-inspector">
@@ -272,8 +282,8 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
                   <strong>{copy.language === "中" ? "DeepSeek 闭环验收" : "DeepSeek smoke gate"}</strong>
                   <small>
                     {copy.language === "中"
-                      ? "根据当前线程事件和阻塞动作生成可记录的 smoke 结果。"
-                      : "Evaluate the current thread events and blocking actions into a smoke record."}
+                      ? "根据当前 Codex items 和阻塞动作生成可记录的 smoke 结果。"
+                      : "Evaluate the current Codex items and blocking actions into a smoke record."}
                   </small>
                 </div>
                 <button type="button" className="btn" onClick={() => setSmokeRecord(workspace.evaluateDeepSeekSmokeRun())}>
@@ -344,31 +354,6 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
                   <article key={`${error.providerId}-${error.message}`} className="dock-context-error">
                     <AlertTriangle size={14} />
                     <span>{error.providerId}: {error.message}</span>
-                  </article>
-                ))}
-              </div>
-            ) : null}
-
-            {model.activeGrants.length > 0 ? (
-              <div className="dock-context-blocks" data-testid="active-grants">
-                <div className="dock-queue-heading">
-                  <ShieldCheck size={14} />
-                  <strong>{copy.language === "中" ? "Active Grants" : "Active Grants"}</strong>
-                </div>
-                {model.activeGrants.map((grant) => (
-                  <article key={grant.id} className="dock-context-block">
-                    <header>
-                      <strong>{grant.tool}</strong>
-                      <StatusBadge tone="neutral">{grant.scope}</StatusBadge>
-                    </header>
-                    <small>
-                      {(grant.mode || "build")}
-                      {grant.actions?.length ? ` · ${grant.actions.join(", ")}` : ""}
-                      {grant.cwdOrPathScope ? ` · ${grant.cwdOrPathScope}` : ""}
-                    </small>
-                    <button type="button" className="btn" onClick={() => workspace.revokeApprovalGrant(grant.id)}>
-                      {copy.language === "中" ? "撤销" : "Revoke"}
-                    </button>
                   </article>
                 ))}
               </div>

@@ -1,14 +1,12 @@
-import { Bot, MoreHorizontal } from "lucide-react";
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { MoreHorizontal } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { AppCopy } from "../../i18n/copy";
 import type { useWorkspace } from "../../state/useWorkspace";
-import { selectCenterTimeline } from "../../domain/threadEventSelectors";
-import { selectRuntimeThread } from "../../domain/runtimeThreadSelectors";
 import { Composer } from "../../components/Composer";
-import { AgentTimeline } from "../../components/thread/AgentTimeline";
+import { CodexThreadTimeline } from "../../components/thread/CodexThreadTimeline";
 import { PlanSummary } from "../../components/thread/PlanSummary";
-import { EmptyState } from "../../ui/primitives";
 import { ThreadActionsMenu } from "./ThreadActionsMenu";
+import { buildThreadScrollSignal, shouldFollowThreadScroll } from "./threadAutoScroll";
 import { nextWorkbenchMode, shouldToggleModeFromKey } from "./threadModeShortcut";
 
 type WorkspaceState = ReturnType<typeof useWorkspace>;
@@ -21,25 +19,24 @@ interface ThreadCanvasProps {
 
 export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const scrollEndRef = useRef<HTMLDivElement | null>(null);
+  const shouldFollowScrollRef = useRef(true);
+  const wasRunningRef = useRef(false);
   const plan = workspace.importedPlan?.plan;
   const isBuildMode = workspace.runControls.mode === "build";
-  const title = workspace.threadUiState.title || plan?.title || copy.workbench.startEmptyTitle;
-  const centerThreadEvents = useMemo(() => selectCenterTimeline(workspace.threadEvents), [workspace.threadEvents]);
-  const runtimeThread = useMemo(() => selectRuntimeThread(
-    workspace.runtimeMessages || [],
-    workspace.actionRequired,
-    [],
-    workspace.layoutPreferences.thinkingDisplayPreference,
-  ), [workspace.actionRequired, workspace.layoutPreferences.thinkingDisplayPreference, workspace.runtimeMessages]);
+  const codexThreadModel = workspace.codexThreadModel;
+  const title = workspace.threadUiState.title || plan?.title || (codexThreadModel.itemCount > 0 ? "Orbit Codex" : copy.workbench.startEmptyTitle);
+  const scrollSignal = buildThreadScrollSignal(codexThreadModel);
   const threadSummary = useMemo(() => {
     const taskCount = plan?.tasks.length || 0;
     return [
       `${copy.workbench.activeThread}: ${title}`,
       `${copy.workbench.headerProject}: ${workspace.workspaceRoot || copy.workbench.noWorkspace}`,
       `${copy.planTasks}: ${taskCount}`,
-      `${copy.workbench.changesTab}: ${workspace.threadEvents.length}`,
+      `${copy.workbench.changesTab}: ${workspace.codexInspectorModel.counts.edits}`,
     ].join("\n");
-  }, [copy, plan?.tasks.length, title, workspace.threadEvents.length, workspace.workspaceRoot]);
+  }, [copy, plan?.tasks.length, title, workspace.codexInspectorModel.counts.edits, workspace.workspaceRoot]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (!shouldToggleModeFromKey(event.nativeEvent)) return;
@@ -66,6 +63,24 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
       window.dispatchEvent(new CustomEvent("orbit:focus-review-dock"));
     }, 80);
   }
+
+  function updateScrollFollowState() {
+    const element = scrollRef.current;
+    if (!element) return;
+    shouldFollowScrollRef.current = shouldFollowThreadScroll(element);
+  }
+
+  useEffect(() => {
+    if (codexThreadModel.running && !wasRunningRef.current) {
+      shouldFollowScrollRef.current = true;
+    }
+    wasRunningRef.current = codexThreadModel.running;
+  }, [codexThreadModel.running]);
+
+  useEffect(() => {
+    if (!shouldFollowScrollRef.current) return;
+    scrollEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+  }, [scrollSignal]);
 
   return (
     <section className="thread-canvas" aria-label={copy.workbench.activeThread} onKeyDown={handleKeyDown}>
@@ -103,38 +118,22 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
         ) : null}
       </header>
 
-      <div className="thread-scroll">
-        {!plan && workspace.threadEvents.length === 0 && runtimeThread.messages.length === 0 ? (
-          <EmptyState
-            icon={<Bot size={24} />}
-            title={copy.workbench.startEmptyTitle}
-            body={copy.workbench.startEmptyBody}
-          />
-        ) : null}
-
+      <div className="thread-scroll" ref={scrollRef} onScroll={updateScrollFollowState}>
         <PlanSummary copy={copy} importedPlan={workspace.importedPlan} importError={workspace.importError} />
 
-        <AgentTimeline
+        <CodexThreadTimeline
           copy={copy}
-          threadEvents={centerThreadEvents}
-          runtimeThread={runtimeThread}
-          agentLoopPhase={workspace.agentLoopPhase}
-          agentLoopRunning={workspace.agentLoopRunning}
-          agentLoopToolCalls={workspace.agentLoopToolCalls}
-          pendingActions={workspace.pendingActions}
-          onStartAgentLoop={isBuildMode ? workspace.startAgentLoop : undefined}
-          onContinueAgentRun={workspace.continueAgentRun}
-          canContinueAgentRun={Boolean(workspace.agentRunSession.canContinue)}
-          onCancelAgentLoop={workspace.cancelAgentLoop}
-          onRestartCollaboration={workspace.startCollaborationFlow}
-          onApplyEventPatch={workspace.applyEventPatch}
-          onRefinePatch={workspace.refinePatch}
-          onUpdatePatch={workspace.updateEventPatch}
+          model={codexThreadModel}
+          canStartBuild={isBuildMode}
+          canContinue={workspace.canContinueCodexRun}
+          onStartBuild={workspace.startAgentLoop}
+          onContinue={workspace.continueAgentRun}
+          onCancel={workspace.cancelAgentLoop}
           onAcceptPlanDraft={workspace.acceptPlanDraft}
-          streamingContent={workspace.streamingContent}
-          streamingActive={workspace.streamingActive}
+          onOpenReviewDock={reviewHere}
           showReasoningProcess={workspace.layoutPreferences.showAgentReasoning}
         />
+        <div ref={scrollEndRef} aria-hidden="true" />
       </div>
 
       <Composer
@@ -147,8 +146,10 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
         workspaceRoot={workspace.workspaceRoot}
         projectPermissionPreset={workspace.projectSecurityOverride?.preset || workspace.effectiveSecurityPolicy.preset}
         onProjectPermissionChange={(preset) => void workspace.updateProjectSecurityOverride({ preset })}
-        reviewPendingCount={workspace.reviewDockModel.counts.changes}
+        reviewPendingCount={workspace.codexInspectorModel.counts.edits}
         onReviewHere={reviewHere}
+        submitDisabled={workspace.composerSubmitLocked}
+        submitDisabledMessage={copy.composer.turnRunning}
       />
     </section>
   );

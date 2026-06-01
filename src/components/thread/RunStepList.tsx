@@ -1,7 +1,7 @@
 import { CheckCircle2, Clock3, FileDiff, PlayCircle, XCircle } from "lucide-react";
 import type { RunStep } from "../../domain/runSteps";
 import type { AppCopy } from "../../i18n/copy";
-import { localizedAgentEventName, localizedRuntimeText } from "./agentDisplayText";
+import { localizedRuntimeName, localizedRuntimeText } from "./agentDisplayText";
 
 interface RunStepListProps {
   copy: AppCopy;
@@ -28,7 +28,7 @@ export function RunStepList({ copy, steps }: RunStepListProps) {
         <article key={step.id} className={`run-step run-step-${step.status}`}>
           <span className="run-step-icon">{iconForStep(step)}</span>
           <div>
-            <strong>{localizedAgentEventName(copy, step.title)}</strong>
+            <strong>{localizedRuntimeName(copy, step.title)}</strong>
             <p>{localizedRuntimeText(copy, step.detail)}</p>
           </div>
         </article>

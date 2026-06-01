@@ -1,20 +1,21 @@
 import { CheckCircle2, CircleAlert, Clock3, FileText, MessageSquare, Play, RefreshCw, TerminalSquare, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
-import type { AgentLoopPhase, ToolCall } from "../../domain/agentLoop";
+import type { CodexRunPhase, LiveToolCall } from "../../domain/runtimePrimitives";
 import type { PendingAction } from "../../domain/threadEventSelectors";
 import type { ThreadEvent } from "../../domain/threadEvents";
 import type { RuntimeThreadViewModel } from "../../domain/runtimeThreadSelectors";
 import type { AppCopy } from "../../i18n/copy";
-import { compactRuntimeTextForTimeline, localizedAgentEventName } from "./agentDisplayText";
+import { compactRuntimeTextForTimeline, localizedRuntimeName } from "./agentDisplayText";
 import { RichFileText } from "./RichFileText";
+import type { RuntimeMessagePart } from "../../domain/runtimeMessages";
 
 interface AgentTimelineProps {
   copy: AppCopy;
   threadEvents: ThreadEvent[];
   runtimeThread?: RuntimeThreadViewModel;
-  agentLoopPhase?: AgentLoopPhase;
+  agentLoopPhase?: CodexRunPhase;
   agentLoopRunning?: boolean;
-  agentLoopToolCalls?: ToolCall[];
+  agentLoopToolCalls?: LiveToolCall[];
   pendingActions?: PendingAction[];
   onStartAgentLoop?: () => void;
   onContinueAgentRun?: () => void;
@@ -63,7 +64,7 @@ export function AgentTimeline({
   if (threadEvents.length === 0 && !hasActions && !hasRuntimeMessages) return null;
   const visibleEvents = compactThreadEvents(
     hasRuntimeMessages
-      ? threadEvents.filter((event) => !["userMessage", "agentMessage", "reasoningSummary", "toolCall"].includes(event.kind))
+      ? threadEvents.filter((event) => !isRuntimeMessageBackedEvent(event.kind))
       : threadEvents,
     showReasoningProcess,
   );
@@ -155,57 +156,143 @@ export function AgentTimeline({
   );
 }
 
+function isRuntimeMessageBackedEvent(kind: string): boolean {
+  return [
+    "userMessage",
+    "agentMessage",
+    "reasoningSummary",
+    "toolCall",
+    "commandBegin",
+    "commandEnd",
+    "terminalRun",
+    "finalSummary",
+    "toolDeniedByMode",
+  ].includes(kind);
+}
+
 function RuntimeThreadMessages({ copy, runtimeThread }: { copy: AppCopy; runtimeThread: RuntimeThreadViewModel }) {
   return (
     <>
-      {runtimeThread.messages.map((message) => (
-        <div
-          key={message.id}
-          className={`timeline-node message-stream-item message-${message.role === "user" ? "user" : "assistant"} role-${message.role} status-${message.status === "streaming" ? "thinking" : "done"}`}
-        >
-          <article className={message.role === "user" ? "user-message" : "assistant-message"}>
-            <div className="message-author">{message.role === "user" ? (copy.language === "中" ? "你" : "You") : "Agent"}</div>
-            {message.parts.map((part, index) => {
-              if (part.type === "thinking" || part.type === "reasoning") {
-                const text = part.text;
-                if (!text) return null;
-                return (
-                  <details key={`${message.id}-thinking-${index}`} className="reasoning-message" open={part.type === "thinking" ? !part.collapsed : false}>
-                    <summary>
-                      <span>{copy.thread.thinking}</span>
-                      <small>{part.type === "thinking" && !part.collapsed ? (copy.language === "中" ? "进行中" : "running") : (copy.language === "中" ? "已折叠" : "collapsed")}</small>
-                    </summary>
-                    <div className="node-message">
-                      <RichFileText copy={copy} text={compactRuntimeTextForTimeline(copy, text, 1200)} surface="timeline" />
-                    </div>
-                  </details>
-                );
-              }
-              if (part.type === "text") {
-                return <div key={`${message.id}-text-${index}`} className="node-message"><RichFileText copy={copy} text={part.text} surface="timeline" /></div>;
-              }
-              if (part.type === "toolCall") {
-                return (
-                  <div key={`${message.id}-tool-${part.id}-${index}`} className="tool-event-row">
-                    <TerminalSquare size={14} />
-                    <strong>{String(part.name)}</strong>
-                    <span>{part.argsSummary}</span>
+      {runtimeThread.messages.map((message) => {
+        const grouped = groupRuntimeParts(message.parts);
+        const thinkingOpen = grouped.thinking.length > 0 && grouped.thinking.some((part) => part.type !== "thinking" || !part.collapsed);
+        return (
+          <div
+            key={message.id}
+            className={`timeline-node message-stream-item message-${message.role === "user" ? "user" : "assistant"} role-${message.role} status-${message.status === "streaming" ? "thinking" : "done"}`}
+          >
+            <article className={message.role === "user" ? "user-message" : "assistant-message"}>
+              <div className="message-author">{message.role === "user" ? (copy.language === "中" ? "你" : "You") : "Agent"}</div>
+              {grouped.thinking.length > 0 ? (
+                <details className="reasoning-message runtime-thinking-group" open={thinkingOpen}>
+                  <summary>
+                    <span>{copy.thread.thinking}</span>
+                    <small>{thinkingOpen ? (copy.language === "中" ? "进行中" : "running") : (copy.language === "中" ? "已折叠" : "collapsed")}</small>
+                  </summary>
+                  <div className="runtime-thinking-list">
+                    {compactThinkingParts(copy, grouped.thinking).map((text, index) => (
+                      <div key={`${message.id}-thinking-${index}`} className="runtime-thinking-line">
+                        {text}
+                      </div>
+                    ))}
                   </div>
-                );
-              }
-              if (part.type === "toolResult") {
-                return <div key={`${message.id}-result-${index}`} className="node-message tool-result-message">{compactRuntimeTextForTimeline(copy, part.content, 360)}</div>;
-              }
-              if (part.type === "error") {
-                return <div key={`${message.id}-error-${index}`} className="node-message timeline-error">{part.message}</div>;
-              }
-              return null;
-            })}
-          </article>
-        </div>
-      ))}
+                </details>
+              ) : null}
+              {grouped.tools.length > 0 ? (
+                <div className="runtime-tool-list">
+                  {grouped.tools.map((tool) => (
+                    <RuntimeToolRow key={`${message.id}-tool-${tool.id}`} copy={copy} tool={tool} result={grouped.resultsByTool.get(tool.id)} />
+                  ))}
+                </div>
+              ) : null}
+              {grouped.orphanResults.map((part, index) => (
+                <div key={`${message.id}-result-${index}`} className="runtime-tool-result">
+                  {compactRuntimeTextForTimeline(copy, part.content, 360)}
+                </div>
+              ))}
+              {grouped.texts.map((part, index) => (
+                <div key={`${message.id}-text-${index}`} className="node-message runtime-final-text">
+                  <RichFileText copy={copy} text={part.text} surface="timeline" />
+                </div>
+              ))}
+              {grouped.errors.map((part, index) => (
+                <div key={`${message.id}-error-${index}`} className="node-message timeline-error">{part.message}</div>
+              ))}
+            </article>
+          </div>
+        );
+      })}
     </>
   );
+}
+
+function RuntimeToolRow({
+  copy,
+  tool,
+  result,
+}: {
+  copy: AppCopy;
+  tool: Extract<RuntimeMessagePart, { type: "toolCall" }>;
+  result?: Extract<RuntimeMessagePart, { type: "toolResult" }>;
+}) {
+  const Icon = toolIcon(tool.name);
+  return (
+    <div className="runtime-tool-row">
+      <Icon size={14} />
+      <span className="runtime-tool-name">{String(tool.name)}</span>
+      <span className="runtime-tool-summary">{tool.argsSummary}</span>
+      <span className={`runtime-tool-status ${result?.isError ? "is-error" : tool.finished || result ? "is-done" : "is-running"}`}>
+        {result?.isError
+          ? (copy.language === "中" ? "失败" : "failed")
+          : tool.finished || result
+            ? (copy.language === "中" ? "完成" : "done")
+            : (copy.language === "中" ? "运行中" : "running")}
+      </span>
+      {result ? (
+        <div className="runtime-tool-result">{compactRuntimeTextForTimeline(copy, result.content, 280)}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function toolIcon(name: string) {
+  if (name === "read_file" || name === "list_files") return FileText;
+  if (name === "ask_user") return MessageSquare;
+  if (name === "propose_patch" || name === "apply_patch") return FileText;
+  return TerminalSquare;
+}
+
+function groupRuntimeParts(parts: RuntimeMessagePart[]) {
+  const thinking: Array<Extract<RuntimeMessagePart, { type: "thinking" | "reasoning" }>> = [];
+  const texts: Array<Extract<RuntimeMessagePart, { type: "text" }>> = [];
+  const tools: Array<Extract<RuntimeMessagePart, { type: "toolCall" }>> = [];
+  const errors: Array<Extract<RuntimeMessagePart, { type: "error" }>> = [];
+  const resultsByTool = new Map<string, Extract<RuntimeMessagePart, { type: "toolResult" }>>();
+  const orphanResults: Array<Extract<RuntimeMessagePart, { type: "toolResult" }>> = [];
+
+  for (const part of parts) {
+    if (part.type === "thinking" || part.type === "reasoning") thinking.push(part);
+    if (part.type === "text") texts.push(part);
+    if (part.type === "toolCall") tools.push(part);
+    if (part.type === "toolResult") resultsByTool.set(part.toolCallId, part);
+    if (part.type === "error") errors.push(part);
+  }
+  for (const result of resultsByTool.values()) {
+    if (!tools.some((tool) => tool.id === result.toolCallId)) orphanResults.push(result);
+  }
+  return { thinking, texts, tools, resultsByTool, orphanResults, errors };
+}
+
+function compactThinkingParts(copy: AppCopy, parts: Array<Extract<RuntimeMessagePart, { type: "thinking" | "reasoning" }>>): string[] {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const part of parts) {
+    const text = compactRuntimeTextForTimeline(copy, part.text, 220).trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    lines.push(text);
+  }
+  return lines.slice(-6);
 }
 
 function PendingActionStrip({
@@ -251,7 +338,7 @@ function focusElement(selector: string) {
   target?.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
-function LiveAgentOperations({ copy, toolCalls }: { copy: AppCopy; toolCalls: ToolCall[] }) {
+function LiveAgentOperations({ copy, toolCalls }: { copy: AppCopy; toolCalls: LiveToolCall[] }) {
   const compactCalls = compactToolCalls(toolCalls);
   const exploredFiles = new Set(
     toolCalls
@@ -290,14 +377,14 @@ function LiveAgentOperations({ copy, toolCalls }: { copy: AppCopy; toolCalls: To
   );
 }
 
-function compactToolCalls(toolCalls: ToolCall[]): ToolCall[] {
-  const byId = new Map<string, ToolCall>();
+function compactToolCalls(toolCalls: LiveToolCall[]): LiveToolCall[] {
+  const byId = new Map<string, LiveToolCall>();
   for (const call of toolCalls) byId.set(call.id, { ...byId.get(call.id), ...call });
   return Array.from(byId.values()).slice(-6);
 }
 
-function localizedToolName(copy: AppCopy, name: ToolCall["name"]): string {
-  const zh: Record<ToolCall["name"], string> = {
+function localizedToolName(copy: AppCopy, name: LiveToolCall["name"]): string {
+  const zh: Record<string, string> = {
     read_file: "读取文件",
     search_code: "搜索代码",
     list_files: "列出文件",
@@ -309,7 +396,7 @@ function localizedToolName(copy: AppCopy, name: ToolCall["name"]): string {
     done_plan: "完成计划",
     done_build: "完成执行",
   };
-  const en: Record<ToolCall["name"], string> = {
+  const en: Record<string, string> = {
     read_file: "Read file",
     search_code: "Search code",
     list_files: "List files",
@@ -321,10 +408,10 @@ function localizedToolName(copy: AppCopy, name: ToolCall["name"]): string {
     done_plan: "Done planning",
     done_build: "Done building",
   };
-  return copy.language === "中" ? zh[name] : en[name];
+  return (copy.language === "中" ? zh[name] : en[name]) || name;
 }
 
-function summarizeLiveToolCall(copy: AppCopy, call: ToolCall, exploredFileCount: number): string {
+function summarizeLiveToolCall(copy: AppCopy, call: LiveToolCall, exploredFileCount: number): string {
   if (exploredFileCount > 0 && ["read_file", "search_code", "list_files"].includes(call.name)) {
     return copy.workbench.agentOperationFiles.replace("{count}", String(exploredFileCount));
   }
@@ -344,7 +431,7 @@ function summarizeLiveToolCall(copy: AppCopy, call: ToolCall, exploredFileCount:
   return `${copy.workbench.agentOperations}: ${localizedToolName(copy, call.name)}`;
 }
 
-function formatToolCallDetails(call: ToolCall): string {
+function formatToolCallDetails(call: LiveToolCall): string {
   const details: string[] = [`${call.status}`];
   if (call.name === "run_command") {
     const command = typeof call.params.command === "string" ? call.params.command : "";
@@ -485,7 +572,7 @@ function getThreadEventDisplay(copy: AppCopy, event: ThreadEvent): {
   }
   return {
     variant: "assistant",
-    label: localizedAgentEventName(copy, event.title),
+    label: localizedRuntimeName(copy, event.title),
     icon: <MessageSquare size={14} />,
   };
 }
@@ -536,7 +623,7 @@ function getToolEventLabel(copy: AppCopy, event: ThreadEvent): string {
   if (/granted|approved|批准|已批准/i.test(text)) return isZh ? "已批准" : "Approved";
   if (/continue|继续|Waiting For Continue|等待继续/i.test(text)) return isZh ? "等待继续" : "Waiting to continue";
   if (/run_command|command|命令|npm|cargo|pnpm|yarn/i.test(text)) return isZh ? "等待审查：命令" : "Waiting for review: command";
-  return localizedAgentEventName(copy, event.title);
+  return localizedRuntimeName(copy, event.title);
 }
 
 function summarizeToolEvent(copy: AppCopy, event: ThreadEvent): string {

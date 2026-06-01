@@ -49,10 +49,10 @@ test.describe("Orbit Code — App Loads", () => {
     await page.goto("/");
     await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
 
-    await expect(page.locator(".thread-canvas-header h1")).toHaveText("打开项目或导入计划开始");
+    await expect(page.locator(".thread-canvas-header h1")).toHaveText("开始一个新线程");
     await page.locator(".workbench-header-actions").getByRole("button", { name: "切换语言" }).click();
 
-    await expect(page.locator(".thread-canvas-header h1")).toHaveText("Open a project or import a plan");
+    await expect(page.locator(".thread-canvas-header h1")).toHaveText("Start a new thread");
     await expect(page.getByText("Inspector")).toBeVisible();
     await expect(page.locator(".workbench-project-chip").getByText("Current project")).toBeVisible();
   });

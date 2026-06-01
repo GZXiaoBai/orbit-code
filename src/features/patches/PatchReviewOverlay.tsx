@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronLeft, ChevronRight, GitPullRequestArrow, X } from "lucide-react";
-import type { AgentEventPatch } from "../../domain/agentEvents";
+import type { ThreadPatch } from "../../domain/threadEvents";
 import type { ThreadEvent } from "../../domain/threadEvents";
 import type { AppCopy } from "../../i18n/copy";
 import { DiffViewer } from "../../components/DiffViewer";
 import { StatusBadge } from "../../ui/primitives";
-import { localizedAgentEventName } from "../../components/thread/agentDisplayText";
+import { localizedRuntimeName } from "../../components/thread/agentDisplayText";
 import { patchApplySummary, patchSandboxSummary } from "../review/reviewCardUtils";
 
 interface PatchReviewOverlayProps {
@@ -13,7 +13,7 @@ interface PatchReviewOverlayProps {
   events: ThreadEvent[];
   workspacePath?: string;
   onApply: (eventId: string) => Promise<void> | void;
-  onUpdatePatch: (eventId: string, path: string, updates: Partial<AgentEventPatch>) => void;
+  onUpdatePatch: (eventId: string, path: string, updates: Partial<ThreadPatch>) => void;
 }
 
 export function PatchReviewOverlay({
@@ -60,7 +60,7 @@ export function PatchReviewOverlay({
               <GitPullRequestArrow size={16} />
               {copy.language === "中" ? "需要审查" : "Review required"}
             </span>
-            <h2 id="patch-review-dialog-title">{localizedAgentEventName(copy, activeEvent.title)}</h2>
+            <h2 id="patch-review-dialog-title">{localizedRuntimeName(copy, activeEvent.title)}</h2>
           </div>
           <div className="approval-dialog-pager" aria-label={copy.workbench.approvalPager}>
             <button type="button" onClick={() => setActiveIndex((current) => Math.max(0, current - 1))} disabled={activeIndex === 0} aria-label={copy.workbench.previousApproval}>

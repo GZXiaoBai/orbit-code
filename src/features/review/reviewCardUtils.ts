@@ -1,4 +1,4 @@
-import type { AgentEventPatch } from "../../domain/agentEvents";
+import type { ThreadPatch } from "../../domain/threadEvents";
 import type { TaskStatus } from "../../domain/types";
 import { commandPermissionActions } from "../../runtime/approvalPolicy";
 import { formatCommandForDisplay } from "../../runtime/commandParser";
@@ -29,7 +29,7 @@ export function commandApprovalView(params: Record<string, unknown>, fallbackRea
   };
 }
 
-export function patchSandboxSummary(event: { patches?: AgentEventPatch[] }) {
+export function patchSandboxSummary(event: { patches?: ThreadPatch[] }) {
   const patches = event.patches || [];
   if (patches.some((patch) => patch.sandboxStatus === "failed")) return "failed";
   if (patches.some((patch) => patch.sandboxStatus === "sandboxing")) return "sandboxing";
@@ -37,7 +37,7 @@ export function patchSandboxSummary(event: { patches?: AgentEventPatch[] }) {
   return "idle";
 }
 
-export function patchApplySummary(event: { patches?: AgentEventPatch[] }) {
+export function patchApplySummary(event: { patches?: ThreadPatch[] }) {
   const patches = event.patches || [];
   if (patches.some((patch) => patch.applyStatus === "failed")) return "failed";
   if (patches.length > 0 && patches.every((patch) => patch.applied || patch.applyStatus === "applied")) return "applied";

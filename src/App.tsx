@@ -87,6 +87,9 @@ function App() {
           apiKeys={workspace.apiKeys}
           credentialVaultProviders={workspace.credentialVaultProviders}
           credentialVaultAutoUnlock={workspace.credentialVaultAutoUnlock}
+          codexRuntimeSettings={workspace.codexRuntimeSettings}
+          providerBuildGate={workspace.providerBuildGate}
+          onRestartRuntime={workspace.restartCodexRuntime}
           usageSnapshot={workspace.usageSnapshot}
           theme={theme}
           layoutPreferences={workspace.layoutPreferences}

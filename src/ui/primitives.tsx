@@ -121,6 +121,8 @@ export function SelectMenu({
   ariaLabel,
   size = "regular",
   icon,
+  preferredPlacement,
+  minPopoverWidth,
 }: {
   value: string;
   options: SelectMenuOption[];
@@ -128,6 +130,8 @@ export function SelectMenu({
   ariaLabel: string;
   size?: "compact" | "regular";
   icon?: ReactNode;
+  preferredPlacement?: "above" | "below" | "auto";
+  minPopoverWidth?: number;
 }) {
   const id = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -155,10 +159,12 @@ export function SelectMenu({
       Math.max(46, options.length * optionHeight + 12),
       window.innerHeight - viewportPadding * 2,
     );
-    const menuWidth = Math.min(Math.max(rect.width, size === "compact" ? 180 : 220), window.innerWidth - viewportPadding * 2);
+    const menuWidth = Math.min(Math.max(rect.width, minPopoverWidth ?? (size === "compact" ? 180 : 220)), window.innerWidth - viewportPadding * 2);
     const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
     const spaceAbove = rect.top - viewportPadding;
-    const nextPlacement = spaceBelow >= menuHeight || spaceBelow >= spaceAbove ? "below" : "above";
+    const nextPlacement = preferredPlacement && preferredPlacement !== "auto"
+      ? preferredPlacement
+      : spaceBelow >= menuHeight || spaceBelow >= spaceAbove ? "below" : "above";
     const top = nextPlacement === "below"
       ? Math.min(rect.bottom + 8, window.innerHeight - menuHeight - viewportPadding)
       : Math.max(viewportPadding, rect.top - menuHeight - 8);
@@ -202,7 +208,7 @@ export function SelectMenu({
       window.removeEventListener("resize", updateOnViewportChange);
       window.removeEventListener("scroll", updateOnViewportChange, true);
     };
-  }, [open, options.length]);
+  }, [open, options.length, preferredPlacement, minPopoverWidth]);
 
   useEffect(() => {
     const nextIndex = Math.max(0, options.findIndex((option) => option.value === value));

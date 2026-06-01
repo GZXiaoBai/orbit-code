@@ -1,9 +1,9 @@
 import { GitPullRequestArrow } from "lucide-react";
-import type { AgentEventPatch } from "../../domain/agentEvents";
+import type { ThreadPatch } from "../../domain/threadEvents";
 import type { ThreadEvent } from "../../domain/threadEvents";
 import type { AppCopy } from "../../i18n/copy";
 import { DiffViewer } from "../../components/DiffViewer";
-import { localizedAgentEventName, localizedRuntimeText } from "../../components/thread/agentDisplayText";
+import { localizedRuntimeName, localizedRuntimeText } from "../../components/thread/agentDisplayText";
 import { patchApplySummary, patchSandboxSummary } from "./reviewCardUtils";
 
 export function PatchReviewQueue({
@@ -16,7 +16,7 @@ export function PatchReviewQueue({
   copy: AppCopy;
   events: ThreadEvent[];
   onApply: (eventId: string) => Promise<void> | void;
-  onUpdatePatch: (eventId: string, path: string, updates: Partial<AgentEventPatch>) => void;
+  onUpdatePatch: (eventId: string, path: string, updates: Partial<ThreadPatch>) => void;
   workspacePath?: string;
 }) {
   if (events.length === 0) return null;
@@ -38,7 +38,7 @@ export function PatchReviewQueue({
             <header>
               <div>
                 <GitPullRequestArrow size={15} />
-                <strong>{localizedAgentEventName(copy, event.title)}</strong>
+                <strong>{localizedRuntimeName(copy, event.title)}</strong>
               </div>
               <small>{event.timestamp}</small>
             </header>

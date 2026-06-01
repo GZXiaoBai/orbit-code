@@ -28,6 +28,8 @@ interface ComposerProps {
   onProjectPermissionChange?: (preset: PermissionPreset) => void;
   reviewPendingCount?: number;
   onReviewHere?: () => void;
+  submitDisabled?: boolean;
+  submitDisabledMessage?: string;
 }
 
 export function Composer({
@@ -42,6 +44,8 @@ export function Composer({
   onProjectPermissionChange,
   reviewPendingCount = 0,
   onReviewHere,
+  submitDisabled = false,
+  submitDisabledMessage,
 }: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState("");
@@ -62,29 +66,39 @@ export function Composer({
     setAttachments((prev) => [...prev, attachment]);
   }
 
-  async function submitDraft() {
+  function submitDraft() {
     if (isSubmitting) return;
+    if (submitDisabled) return;
     if (!draft.trim() && attachments.length === 0) return;
     const source = `${draft.trim()}${formatAttachmentContext(attachments)}`;
+    const previousDraft = draft;
+    const previousAttachments = attachments;
+    setDraft("");
+    setAttachments([]);
     setIsSubmitting(true);
-    try {
-      const handled = runControls?.mode === "build" && onBuildMessage
-        ? await onBuildMessage(source)
-        : onPlanMessage
-          ? await onPlanMessage(source)
-          : await onPlanImport(source, "composer-input.md");
-      if (handled) {
-        setDraft("");
-        setAttachments([]);
-      }
-    } finally {
-      setIsSubmitting(false);
-    }
+    const submission = runControls?.mode === "build" && onBuildMessage
+      ? Promise.resolve(onBuildMessage(source))
+      : onPlanMessage
+        ? Promise.resolve(onPlanMessage(source))
+        : Promise.resolve(onPlanImport(source, "composer-input.md"));
+    submission
+      .then((handled) => {
+        if (handled) {
+          return;
+        }
+        setDraft(previousDraft);
+        setAttachments(previousAttachments);
+      })
+      .catch(() => {
+        setDraft(previousDraft);
+        setAttachments(previousAttachments);
+      })
+      .finally(() => setIsSubmitting(false));
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await submitDraft();
+    submitDraft();
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -172,13 +186,17 @@ export function Composer({
           placeholder={placeholder}
           aria-busy={isSubmitting}
         />
-        <button className="send-button" type="submit" aria-label={copy.workbench.send} disabled={isSubmitting}>
+        <button className="send-button" type="submit" aria-label={copy.workbench.send} disabled={isSubmitting || submitDisabled}>
           {isSubmitting ? <Loader2 size={18} className="spin-icon" /> : <ArrowUp size={18} />}
         </button>
       </div>
       {isSubmitting ? (
         <div className="composer-status" role="status">
           {isBuildMode ? copy.composer.sendingBuild : copy.composer.sendingPlan}
+        </div>
+      ) : submitDisabled && submitDisabledMessage ? (
+        <div className="composer-status" role="status">
+          {submitDisabledMessage}
         </div>
       ) : null}
       {attachments.length > 0 ? (

@@ -1,5 +1,5 @@
 import type { ActionRequiredEvent } from "../../domain/actionRequired";
-import type { RuntimeLedgerSelectorSnapshot } from "../../domain/threadEventSelectors";
+import type { CodexProjectionSnapshot } from "../../domain/threadEventSelectors";
 import type { ThreadEvent } from "../../domain/threadEvents";
 import type { TerminalRun } from "../../domain/terminalRun";
 import type { ApprovalGrant } from "../../domain/approvalGrant";
@@ -42,7 +42,7 @@ function isTerminalFailedPatchReview(event: ThreadEvent): boolean {
 }
 
 export function buildReviewDockModel(input: {
-  ledger: RuntimeLedgerSelectorSnapshot;
+  ledger: CodexProjectionSnapshot;
   workspacePath?: string;
   threadId?: string;
   taskId?: string | null;
