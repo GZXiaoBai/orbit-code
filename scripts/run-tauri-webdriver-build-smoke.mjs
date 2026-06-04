@@ -556,25 +556,35 @@ function inspectApprovedEvidenceText(text) {
     : null;
 }
 
-async function waitForApprovedEvidence(session) {
+async function waitForApprovedEvidence(session, onAdditionalApproval) {
   const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
   let lastValue = null;
   let lastError = null;
+  let additionalApprovals = 0;
   while (Date.now() < deadline) {
     try {
       const result = await session.execute(`
         const text = document.body.innerText || "";
         const terminal = document.querySelector(".dock-terminal")?.innerText || "";
         const edit = document.querySelector(".dock-diff-card")?.innerText || "";
+        const hasApproval = Boolean(document.querySelector(".approval-dialog"));
         const hasTerminal = terminal.length > 0 || /Terminal|终端|command|命令/i.test(text);
         const hasEdit = edit.includes(${JSON.stringify(SMOKE_FILE)}) || text.includes(${JSON.stringify(SMOKE_FILE)});
         const hasUsage = /Token|tokens|usage|使用量|prompt=|completion=|total=/i.test(text);
         const hasFinalSummary = /final summary|summary|总结|完成|completed|created|updated|wrote|写入|已完成/i.test(text);
-        return { text: text.slice(-2400), terminal, edit, hasTerminal, hasEdit, hasUsage, hasFinalSummary, source: "execute" };
+        return { text: text.slice(-2400), terminal, edit, hasApproval, hasTerminal, hasEdit, hasUsage, hasFinalSummary, source: "execute" };
       `);
       lastValue = result?.value;
       lastError = null;
       if (lastValue?.hasTerminal && lastValue?.hasEdit && lastValue?.hasUsage && lastValue?.hasFinalSummary) return lastValue;
+      if (lastValue?.hasApproval) {
+        additionalApprovals += 1;
+        if (additionalApprovals > 5) {
+          throw new Error("Too many follow-up approval requests during approved Build smoke.");
+        }
+        const approvalSubmit = await clickApprovalResolution(session);
+        if (onAdditionalApproval) onAdditionalApproval(additionalApprovals, approvalSubmit);
+      }
     } catch (error) {
       lastError = error;
       try {
@@ -643,7 +653,15 @@ async function runLiveBuild(session, criteria) {
     return "verified";
   }
 
-  const evidence = await waitForApprovedEvidence(session);
+  const evidence = await waitForApprovedEvidence(session, (index, approvalSubmit) => {
+    criteria.push(criterion(
+      `approval-submitted-extra-${index}`,
+      "Build follow-up approval resolution is submitted from the packaged window.",
+      "verified",
+      "The packaged window accepted an additional approval button action.",
+      approvalSubmit,
+    ));
+  });
   criteria.push(criterion("approval-terminal", "Approved Build produces terminal output.", "verified", "The packaged window showed terminal evidence after approval.", { smokeFile: SMOKE_FILE, terminal: evidence.terminal }));
   criteria.push(criterion("approval-file-edit", "Approved Build produces a fileEdit item.", "verified", "The packaged window showed file edit evidence after approval.", { smokeFile: SMOKE_FILE, edit: evidence.edit }));
   criteria.push(criterion("approval-usage", "Approved Build produces usage evidence.", "verified", "The packaged window showed token usage evidence after approval.", { smokeFile: SMOKE_FILE }));
