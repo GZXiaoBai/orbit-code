@@ -1,4 +1,4 @@
-import { useCallback, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Languages, Moon, PanelRight, Settings, Sun } from "lucide-react";
 import type { Language, Theme } from "../../domain/types";
@@ -11,6 +11,12 @@ import { ReviewDock } from "../review/ReviewDock";
 import { ThreadCanvas } from "../thread/ThreadCanvas";
 
 type WorkspaceState = ReturnType<typeof useWorkspace>;
+
+type OrbitDesktopSmokeWindow = Window & {
+  __ORBIT_DESKTOP_SMOKE__?: {
+    submitBuildPrompt: (prompt: string) => void;
+  };
+};
 
 interface WorkbenchShellProps {
   copy: AppCopy;
@@ -37,6 +43,24 @@ export function WorkbenchShell({
     : copy.workbench.providerMissing;
   const projectRailWidth = workspace.layoutPreferences.projectRailWidth || 274;
   const reviewDockWidth = workspace.layoutPreferences.reviewDockWidth || 360;
+
+  useEffect(() => {
+    const smokeWindow = window as OrbitDesktopSmokeWindow;
+    if (window.localStorage.getItem("orbit-code.desktop-smoke.enabled") !== "1") {
+      delete smokeWindow.__ORBIT_DESKTOP_SMOKE__;
+      return undefined;
+    }
+    smokeWindow.__ORBIT_DESKTOP_SMOKE__ = {
+      submitBuildPrompt: (prompt: string) => {
+        void workspace.submitBuildMessage(prompt);
+      },
+    };
+    return () => {
+      if (smokeWindow.__ORBIT_DESKTOP_SMOKE__) {
+        delete smokeWindow.__ORBIT_DESKTOP_SMOKE__;
+      }
+    };
+  }, [workspace]);
 
   const startWindowDrag = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0) return;

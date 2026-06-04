@@ -319,6 +319,7 @@ async function configureWorkspace(session, criteria) {
   const runControlState = liveBuildRunControlState();
   await session.execute(`
     window.localStorage.setItem("orbit-code.active-workspace.v1", ${JSON.stringify(WORKSPACE_DIR)});
+    window.localStorage.setItem("orbit-code.desktop-smoke.enabled", "1");
     window.localStorage.removeItem("agent-gui.active-workspace.v1");
     window.localStorage.setItem("orbit-code.codex-sidecar.session", ${JSON.stringify(JSON.stringify(sessionState))});
     window.localStorage.setItem("agent-gui.run-controls.v1", ${JSON.stringify(JSON.stringify(runControlState))});
@@ -451,6 +452,10 @@ async function submitBuildPrompt(session) {
     return Boolean(document.querySelector(".composer textarea") && document.querySelector(".composer .send-button"));
   `, DEFAULT_TIMEOUT_MS);
   await session.execute(`
+    if (window.__ORBIT_DESKTOP_SMOKE__?.submitBuildPrompt) {
+      window.setTimeout(() => window.__ORBIT_DESKTOP_SMOKE__.submitBuildPrompt(${JSON.stringify(prompt)}), 0);
+      return { submitted: true, source: "smoke-hook" };
+    }
     const buildButton = [...document.querySelectorAll(".run-control-bar button")]
       .find((button) => /Build/i.test(button.textContent || ""));
     if (buildButton) buildButton.click();
@@ -460,7 +465,7 @@ async function submitBuildPrompt(session) {
     setter.call(textarea, ${JSON.stringify(prompt)});
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, data: ${JSON.stringify(prompt)}, inputType: "insertText" }));
     window.setTimeout(() => button.click(), 0);
-    return true;
+    return { submitted: true, source: "composer-dom" };
   `);
 }
 
