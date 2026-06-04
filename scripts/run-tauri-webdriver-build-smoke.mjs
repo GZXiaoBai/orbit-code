@@ -117,6 +117,36 @@ async function waitForTruthy(session, script, timeoutMs) {
   throw new Error(`Timed out waiting for WebDriver condition. Last value: ${JSON.stringify(lastValue)}`);
 }
 
+async function captureDesktopDiagnostics(session) {
+  if (!session) return null;
+  try {
+    const result = await session.execute(`
+      const selectors = [
+        ".workbench-shell",
+        ".thread-canvas",
+        ".composer textarea",
+        ".send-button",
+        ".approval-dialog",
+        ".dock-terminal",
+        ".dock-diff-card",
+        "#root",
+      ];
+      return {
+        readyState: document.readyState,
+        url: window.location.href,
+        title: document.title,
+        bodyText: (document.body?.innerText || "").slice(0, 2400),
+        bodyHtml: (document.body?.innerHTML || "").slice(0, 2000),
+        selectors: Object.fromEntries(selectors.map((selector) => [selector, Boolean(document.querySelector(selector))])),
+        rootChildren: document.getElementById("root")?.children.length ?? null,
+      };
+    `);
+    return result?.value ?? null;
+  } catch (error) {
+    return { error: error?.message || String(error) };
+  }
+}
+
 function prepareSmokeWorkspace(criteria) {
   if (!WORKSPACE_DIR || !LIVE_BUILD_ENABLED) return;
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
@@ -373,12 +403,13 @@ async function runSmoke(criteria) {
     criteria.push(criterion("webdriver-session", "WebDriver can launch an Orbit Code desktop session.", "verified", "tauri-driver created a WRY session for Orbit Code.", { sessionId: session.id }));
     return await runLiveBuild(session, criteria);
   } catch (error) {
+    const diagnostics = await captureDesktopDiagnostics(session);
     criteria.push(criterion(
       "webdriver-build-run",
       "Packaged desktop Build smoke completes without runtime errors.",
       "broken",
       error?.message || String(error),
-      { stdout: stdout.join("").slice(-4000), stderr: stderr.join("").slice(-4000) },
+      { stdout: stdout.join("").slice(-4000), stderr: stderr.join("").slice(-4000), diagnostics },
     ));
     return "broken";
   } finally {

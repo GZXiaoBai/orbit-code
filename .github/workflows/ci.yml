@@ -89,9 +89,7 @@ jobs:
       - name: Build debug Tauri app for desktop smoke
         timeout-minutes: 20
         run: |
-          npm run prepare:codex-sidecar
-          npm run build
-          cargo build --manifest-path src-tauri/Cargo.toml
+          npm run tauri build -- --debug --no-bundle
           test -x src-tauri/target/debug/orbit-code
       - name: Verify packaged desktop window smoke
         timeout-minutes: 5
@@ -138,9 +136,7 @@ jobs:
       - name: Build debug Tauri app for live desktop Build smoke
         timeout-minutes: 20
         run: |
-          npm run prepare:codex-sidecar
-          npm run build
-          cargo build --manifest-path src-tauri/Cargo.toml
+          npm run tauri build -- --debug --no-bundle
           test -x src-tauri/target/debug/orbit-code
       - name: Verify live vault and DeepSeek readiness
         run: npm run smoke:deepseek:live-readiness

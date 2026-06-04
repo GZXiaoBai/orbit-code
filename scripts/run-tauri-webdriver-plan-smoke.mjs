@@ -119,6 +119,27 @@ async function waitForTruthy(session, script, timeoutMs) {
   throw new Error(`Timed out waiting for WebDriver condition. Last value: ${JSON.stringify(lastValue)}`);
 }
 
+async function captureDesktopDiagnostics(session) {
+  if (!session) return null;
+  try {
+    const result = await session.execute(`
+      const selectors = [".workbench-shell", ".thread-canvas", ".composer textarea", ".send-button", "#root"];
+      return {
+        readyState: document.readyState,
+        url: window.location.href,
+        title: document.title,
+        bodyText: (document.body?.innerText || "").slice(0, 2000),
+        bodyHtml: (document.body?.innerHTML || "").slice(0, 2000),
+        selectors: Object.fromEntries(selectors.map((selector) => [selector, Boolean(document.querySelector(selector))])),
+        rootChildren: document.getElementById("root")?.children.length ?? null,
+      };
+    `);
+    return result?.value ?? null;
+  } catch (error) {
+    return { error: error?.message || String(error) };
+  }
+}
+
 function elementKey(element) {
   return element?.["element-6066-11e4-a52e-4f735466cecf"] || element?.ELEMENT;
 }
@@ -307,6 +328,7 @@ async function runSmoke(criteria) {
     ));
     return "verified";
   } catch (error) {
+    const diagnostics = await captureDesktopDiagnostics(session);
     criteria.push(criterion(
       "webdriver-run",
       "WebDriver desktop smoke completes without runtime errors.",
@@ -315,6 +337,7 @@ async function runSmoke(criteria) {
       {
         stdout: stdout.join("").slice(-4000),
         stderr: stderr.join("").slice(-4000),
+        diagnostics,
       },
     ));
     return "broken";
