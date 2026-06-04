@@ -286,6 +286,13 @@ export function codexRuntimeEventBelongsToActiveScope(input: {
   if (!isOperationActive(activeOperation)) return true;
   if (payloadTurnId) {
     if (activeOperation?.turnId === payloadTurnId || activeTurn?.id === payloadTurnId) return true;
+    if (
+      activeOperation?.kind === "build"
+      && payloadThreadId
+      && activeOperation.threadId === payloadThreadId
+    ) {
+      return true;
+    }
     if (activeOperation?.turnId) return false;
   }
   if (payloadThreadId && activeOperation?.threadId) {

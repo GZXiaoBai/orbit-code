@@ -217,6 +217,12 @@ describe("Codex session runtime routing", () => {
       activeTurn,
     })).toBe(false);
     expect(codexRuntimeEventBelongsToActiveScope({
+      payloadTurnId: "app-server-turn-1",
+      payloadThreadId: "thread-1",
+      activeOperation: { ...activeOperation, kind: "build" },
+      activeTurn,
+    })).toBe(true);
+    expect(codexRuntimeEventBelongsToActiveScope({
       payloadTurnId: "turn-new-before-result",
       payloadThreadId: "thread-1",
       activeOperation: { ...activeOperation, turnId: undefined },
