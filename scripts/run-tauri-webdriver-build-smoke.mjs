@@ -146,7 +146,7 @@ async function captureDesktopDiagnostics(session) {
   const runtimeDiagnosticsPath = APP_DATA_DIR ? path.join(APP_DATA_DIR, "orbit_codex_runtime_diagnostics.json") : null;
   const fileDiagnostics = {
     smokeFile: readFileSnapshot(smokePath, 1000),
-    runtimeDiagnosticsFile: readFileSnapshot(runtimeDiagnosticsPath, 4000),
+    runtimeDiagnosticsFile: readFileSnapshot(runtimeDiagnosticsPath, 20000),
   };
   if (!session) return fileDiagnostics;
   try {

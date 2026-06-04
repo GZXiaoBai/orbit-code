@@ -456,10 +456,12 @@ fn persistent_app_server_reader_loop(
                 persistent_emit_context_error(&app, message);
             }
             CodexJsonRpcDispatch::Notification { method, params } => {
-                record_app_server_stage(
-                    &format!("notification:{method}"),
-                    json!({ "connectionId": connection_id }),
-                );
+                if !method.ends_with("/delta") {
+                    record_app_server_stage(
+                        &format!("notification:{method}"),
+                        json!({ "connectionId": connection_id }),
+                    );
+                }
                 persistent_handle_notification(&app, &method, params.as_ref());
             }
             CodexJsonRpcDispatch::ServerRequest { id, method, params } => {
