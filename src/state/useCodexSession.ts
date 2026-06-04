@@ -319,6 +319,23 @@ export function mergeRuntimeOperationPatch(
   return { ...current, ...patch };
 }
 
+export function finishRuntimeOperation(
+  current: RuntimeOperation,
+  finalState: "completed" | "failed" | "cancelled",
+  error?: string,
+  completedAt = now(),
+): RuntimeOperation {
+  if (!isOperationActive(current)) return current;
+  return {
+    ...current,
+    status: finalState,
+    finalState,
+    cancelled: finalState === "cancelled" ? true : current.cancelled,
+    error,
+    lastEventAt: completedAt,
+  };
+}
+
 export function codexStatusEventShouldCreateTimelineError(input: {
   status: CodexRuntimeStatus;
   error?: string;
@@ -529,31 +546,34 @@ export function useCodexSession() {
   const patchOperation = useCallback((operationId: string, patch: Partial<RuntimeOperation>) => {
     const currentRef = activeOperationRef.current;
     if (currentRef?.id === operationId) {
-      activeOperationRef.current = mergeRuntimeOperationPatch(currentRef, patch);
+      const nextRef = mergeRuntimeOperationPatch(currentRef, patch);
+      activeOperationRef.current = nextRef;
+      if (!isOperationActive(nextRef)) clearOperationDeadline();
     }
     setActiveOperation((current) => {
       if (!current || current.id !== operationId) return current;
       const next = mergeRuntimeOperationPatch(current, patch);
       activeOperationRef.current = next;
+      if (!isOperationActive(next)) clearOperationDeadline();
       return next;
     });
-  }, []);
+  }, [clearOperationDeadline]);
 
   const finishOperation = useCallback((operationId: string, finalState: "completed" | "failed" | "cancelled", error?: string) => {
+    const currentRef = activeOperationRef.current;
+    if (currentRef?.id === operationId) {
+      const nextRef = finishRuntimeOperation(currentRef, finalState, error);
+      activeOperationRef.current = nextRef;
+      if (!isOperationActive(nextRef)) clearOperationDeadline();
+    }
     setActiveOperation((current) => {
       if (!current || current.id !== operationId) return current;
-      const next: RuntimeOperation = {
-        ...current,
-        status: finalState,
-        finalState,
-        cancelled: finalState === "cancelled" ? true : current.cancelled,
-        error,
-        lastEventAt: now(),
-      };
+      const next = finishRuntimeOperation(current, finalState, error);
       activeOperationRef.current = next;
+      if (!isOperationActive(next)) clearOperationDeadline();
       return next;
     });
-  }, []);
+  }, [clearOperationDeadline]);
 
   const cancelOperation = useCallback(async (operation: RuntimeOperation, reason: string) => {
     ignoredTurnIdsRef.current = new Set([

@@ -15,6 +15,7 @@ import {
   codexSubmissionRoutingDecision,
   codexTurnStartTimeoutMs,
   failRunningCodexTurn,
+  finishRuntimeOperation,
   mergeRuntimeOperationPatch,
   recoverCodexRuntimeState,
   recoverStoredItems,
@@ -291,6 +292,59 @@ describe("Codex session runtime routing", () => {
     })).toEqual({
       ...completed,
       lastEventAt: "2026-05-31T00:00:06.000Z",
+    });
+  });
+
+  it("does not downgrade a completed operation when a stale cancel arrives", () => {
+    const completed = {
+      id: "op-current",
+      kind: "build" as const,
+      status: "completed" as const,
+      finalState: "completed" as const,
+      threadId: "thread-1",
+      turnId: "app-turn-1",
+      startedAt: "2026-05-31T00:00:00.000Z",
+      deadlineAt: "2026-05-31T00:01:00.000Z",
+      lastEventAt: "2026-05-31T00:00:05.000Z",
+    };
+
+    expect(finishRuntimeOperation(
+      completed,
+      "failed",
+      "Codex operation op-current was cancelled",
+      "2026-05-31T00:01:05.000Z",
+    )).toEqual(completed);
+    expect(finishRuntimeOperation(
+      completed,
+      "cancelled",
+      "Codex operation op-current was cancelled",
+      "2026-05-31T00:01:05.000Z",
+    )).toEqual(completed);
+  });
+
+  it("records final state for active operations", () => {
+    const running = {
+      id: "op-current",
+      kind: "build" as const,
+      status: "running" as const,
+      threadId: "thread-1",
+      turnId: "app-turn-1",
+      startedAt: "2026-05-31T00:00:00.000Z",
+      deadlineAt: "2026-05-31T00:01:00.000Z",
+    };
+
+    expect(finishRuntimeOperation(
+      running,
+      "failed",
+      "Build failed",
+      "2026-05-31T00:00:05.000Z",
+    )).toEqual({
+      ...running,
+      status: "failed",
+      finalState: "failed",
+      cancelled: undefined,
+      error: "Build failed",
+      lastEventAt: "2026-05-31T00:00:05.000Z",
     });
   });
 
