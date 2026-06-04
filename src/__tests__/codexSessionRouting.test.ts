@@ -15,6 +15,7 @@ import {
   codexSubmissionRoutingDecision,
   codexTurnStartTimeoutMs,
   failRunningCodexTurn,
+  mergeRuntimeOperationPatch,
   recoverCodexRuntimeState,
   recoverStoredItems,
   recoverStoredTurn,
@@ -267,6 +268,30 @@ describe("Codex session runtime routing", () => {
       activeOperation,
       activeTurn,
     })).toBe(true);
+  });
+
+  it("does not downgrade a completed operation when a late running turn result arrives", () => {
+    const completed = {
+      id: "op-current",
+      kind: "build" as const,
+      status: "completed" as const,
+      finalState: "completed" as const,
+      threadId: "thread-1",
+      turnId: "app-turn-1",
+      startedAt: "2026-05-31T00:00:00.000Z",
+      deadlineAt: "2026-05-31T00:01:00.000Z",
+      lastEventAt: "2026-05-31T00:00:05.000Z",
+    };
+
+    expect(mergeRuntimeOperationPatch(completed, {
+      status: "running",
+      turnId: "orbit-turn-1",
+      lastEventAt: "2026-05-31T00:00:06.000Z",
+      deadlineAt: "2026-05-31T00:02:00.000Z",
+    })).toEqual({
+      ...completed,
+      lastEventAt: "2026-05-31T00:00:06.000Z",
+    });
   });
 
   it("keeps operation status failures with dedicated error items out of the thread timeline", () => {

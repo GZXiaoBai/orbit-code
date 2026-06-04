@@ -301,6 +301,24 @@ export function codexRuntimeEventBelongsToActiveScope(input: {
   return false;
 }
 
+export function mergeRuntimeOperationPatch(
+  current: RuntimeOperation,
+  patch: Partial<RuntimeOperation>,
+): RuntimeOperation {
+  const currentIsTerminal = current.status !== "starting" && current.status !== "running";
+  if (currentIsTerminal && (patch.status === "starting" || patch.status === "running")) {
+    const next = {
+      ...current,
+      lastEventAt: patch.lastEventAt || current.lastEventAt,
+    };
+    if (!next.threadId && patch.threadId) next.threadId = patch.threadId;
+    if (!next.turnId && patch.turnId) next.turnId = patch.turnId;
+    if (!next.connectionId && patch.connectionId) next.connectionId = patch.connectionId;
+    return next;
+  }
+  return { ...current, ...patch };
+}
+
 export function codexStatusEventShouldCreateTimelineError(input: {
   status: CodexRuntimeStatus;
   error?: string;
@@ -511,7 +529,7 @@ export function useCodexSession() {
   const patchOperation = useCallback((operationId: string, patch: Partial<RuntimeOperation>) => {
     setActiveOperation((current) => {
       if (!current || current.id !== operationId) return current;
-      const next = { ...current, ...patch };
+      const next = mergeRuntimeOperationPatch(current, patch);
       activeOperationRef.current = next;
       return next;
     });
@@ -999,7 +1017,6 @@ export function useCodexSession() {
         reasoningEffort: input.reasoningEffort,
         operationId: operation.id,
       }), codexTurnStartTimeoutMs(runtimeMode), `${runtimeMode} turn/start`);
-      setActiveTurn(result.turn);
       patchOperation(operation.id, {
         status: result.turn.status === "running" ? "running" : result.turn.status === "failed" ? "failed" : "completed",
         turnId: result.turn.id,
@@ -1010,9 +1027,17 @@ export function useCodexSession() {
           : operation.deadlineAt,
         finalState: result.turn.status === "running" ? undefined : result.turn.status === "failed" ? "failed" : "completed",
       });
+      const latestOperation = activeOperationRef.current;
+      const resultArrivedAfterTerminalEvent = latestOperation?.id === operation.id
+        && !isOperationActive(latestOperation)
+        && result.turn.status === "running";
+      setActiveTurn((current) => {
+        if (resultArrivedAfterTerminalEvent && current && current.status !== "running") return current;
+        return result.turn;
+      });
       setItems((prev) => applyCodexItemEvents(prev, result.items));
-      setStatus(result.turn.status === "failed" ? "error" : result.turn.status === "running" ? "running" : "ready");
-      if (result.turn.status === "running") {
+      setStatus(resultArrivedAfterTerminalEvent ? "ready" : result.turn.status === "failed" ? "error" : result.turn.status === "running" ? "running" : "ready");
+      if (result.turn.status === "running" && !resultArrivedAfterTerminalEvent) {
         armTurnWatchdog(result.turn);
       } else {
         clearTurnWatchdog();
