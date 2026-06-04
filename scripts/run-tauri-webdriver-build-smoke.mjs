@@ -342,6 +342,17 @@ function elementKey(element) {
   return element?.["element-6066-11e4-a52e-4f735466cecf"] || element?.ELEMENT;
 }
 
+async function waitForProcessExit(child, timeoutMs = 2000) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
 async function createSession(baseUrl, appPath) {
   const response = await requestJson(baseUrl, "POST", "/session", {
     capabilities: {
@@ -358,9 +369,23 @@ async function createSession(baseUrl, appPath) {
     async execute(script, args = []) {
       return requestJson(baseUrl, "POST", `/session/${sessionId}/execute/sync`, { script, args });
     },
+    async source(timeoutMs = REQUEST_TIMEOUT_MS) {
+      return requestJson(baseUrl, "GET", `/session/${sessionId}/source`, undefined, timeoutMs);
+    },
+    async findElement(selector, timeoutMs = REQUEST_TIMEOUT_MS) {
+      return requestJson(baseUrl, "POST", `/session/${sessionId}/element`, {
+        using: "css selector",
+        value: selector,
+      }, timeoutMs);
+    },
+    async clickElement(element, timeoutMs = REQUEST_TIMEOUT_MS) {
+      const key = elementKey(element?.value || element);
+      if (!key) throw new Error(`WebDriver element response did not include an element key: ${JSON.stringify(element)}`);
+      return requestJson(baseUrl, "POST", `/session/${sessionId}/element/${key}/click`, {}, timeoutMs);
+    },
     async quit() {
       try {
-        await requestJson(baseUrl, "DELETE", `/session/${sessionId}`);
+        await requestJson(baseUrl, "DELETE", `/session/${sessionId}`, undefined, 3000);
       } catch {
         // The app may already be closed by the driver.
       }
@@ -439,6 +464,121 @@ async function submitBuildPrompt(session) {
   `);
 }
 
+function inspectBuildPreflightText(text) {
+  if (/Build blocked|Build 已阻止|Codex Build blocked|runtime is not ready|凭据库|vault|API key/i.test(text)) {
+    return { blocked: true, text: text.slice(-1600) };
+  }
+  if (/approval-dialog|approval-dialog-approve|批准|Approve/i.test(text)) {
+    return { approval: true, text: text.slice(-1600) };
+  }
+  return null;
+}
+
+async function waitForBuildPreflight(session) {
+  const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
+  let lastValue = null;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const result = await session.execute(`
+        const text = document.body.innerText || "";
+        if (/Build blocked|Build 已阻止|Codex Build blocked|runtime is not ready|凭据库|vault|API key/i.test(text)) {
+          return { blocked: true, text: text.slice(-1600), source: "execute" };
+        }
+        if (document.querySelector(".approval-dialog")) {
+          return { approval: true, text: text.slice(-1600), source: "execute" };
+        }
+        return "";
+      `);
+      lastValue = result?.value;
+      lastError = null;
+      if (lastValue) return lastValue;
+    } catch (error) {
+      lastError = error;
+      try {
+        const source = await session.source(5000);
+        const inspected = inspectBuildPreflightText(String(source?.value || source?.raw || ""));
+        if (inspected) return { ...inspected, source: "page-source" };
+      } catch (sourceError) {
+        lastError = sourceError;
+      }
+    }
+    await sleep(300);
+  }
+  const suffix = lastError ? ` Last WebDriver error: ${lastError?.message || String(lastError)}` : "";
+  throw new Error(`Timed out waiting for Build preflight. Last value: ${JSON.stringify(lastValue)}.${suffix}`);
+}
+
+async function clickApprovalResolution(session) {
+  const selector = DENY_APPROVAL
+    ? ".approval-dialog .approval-dialog-deny"
+    : ".approval-dialog .approval-dialog-approve";
+  try {
+    const element = await session.findElement(selector, 5000);
+    await session.clickElement(element, 5000);
+    return;
+  } catch {
+    // Fall back to DOM script for WebDriver implementations that do not expose element click reliably.
+  }
+  await session.execute(`
+    const dialog = document.querySelector(".approval-dialog");
+    const button = [...dialog.querySelectorAll("button")]
+      .find((candidate) => ${DENY_APPROVAL}
+        ? /拒绝|Deny|Cancel/i.test(candidate.textContent || "")
+        : /批准|Approve/i.test(candidate.textContent || ""));
+    if (!button) throw new Error("Approval resolution button not found.");
+    window.setTimeout(() => button.click(), 0);
+    return true;
+  `);
+}
+
+function inspectApprovedEvidenceText(text) {
+  const hasTerminal = /dock-terminal|Terminal|终端|command|命令/i.test(text);
+  const hasEdit = text.includes(SMOKE_FILE);
+  const hasUsage = /Token|tokens|usage|使用量|prompt=|completion=|total=/i.test(text);
+  const hasFinalSummary = /final summary|summary|总结|完成|completed|created|updated|wrote|写入|已完成/i.test(text);
+  return hasTerminal && hasEdit && hasUsage && hasFinalSummary
+    ? { text: text.slice(-2400), terminal: "", edit: "", hasTerminal, hasEdit, hasUsage, hasFinalSummary, source: "page-source" }
+    : null;
+}
+
+async function waitForApprovedEvidence(session) {
+  const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
+  let lastValue = null;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const result = await session.execute(`
+        const text = document.body.innerText || "";
+        const terminal = document.querySelector(".dock-terminal")?.innerText || "";
+        const edit = document.querySelector(".dock-diff-card")?.innerText || "";
+        const hasTerminal = terminal.length > 0 || /Terminal|终端|command|命令/i.test(text);
+        const hasEdit = edit.includes(${JSON.stringify(SMOKE_FILE)}) || text.includes(${JSON.stringify(SMOKE_FILE)});
+        const hasUsage = /Token|tokens|usage|使用量|prompt=|completion=|total=/i.test(text);
+        const hasFinalSummary = /final summary|summary|总结|完成|completed|created|updated|wrote|写入|已完成/i.test(text);
+        return hasTerminal && hasEdit && hasUsage && hasFinalSummary
+          ? { text: text.slice(-2400), terminal, edit, hasTerminal, hasEdit, hasUsage, hasFinalSummary, source: "execute" }
+          : "";
+      `);
+      lastValue = result?.value;
+      lastError = null;
+      if (lastValue) return lastValue;
+    } catch (error) {
+      lastError = error;
+      try {
+        const source = await session.source(5000);
+        const inspected = inspectApprovedEvidenceText(String(source?.value || source?.raw || ""));
+        if (inspected) return inspected;
+      } catch (sourceError) {
+        lastError = sourceError;
+      }
+    }
+    await sleep(500);
+  }
+  const suffix = lastError ? ` Last WebDriver error: ${lastError?.message || String(lastError)}` : "";
+  throw new Error(`Timed out waiting for approved Build evidence. Last value: ${JSON.stringify(lastValue)}.${suffix}`);
+}
+
 async function runLiveBuild(session, criteria) {
   await waitForTruthy(session, `
     return Boolean(
@@ -463,32 +603,14 @@ async function runLiveBuild(session, criteria) {
   prepareSmokeWorkspace(criteria);
   await configureWorkspace(session, criteria);
   await submitBuildPrompt(session);
-  const preflight = await waitForTruthy(session, `
-    const text = document.body.innerText || "";
-    if (/Build blocked|Build 已阻止|Codex Build blocked|runtime is not ready|凭据库|vault|API key/i.test(text)) {
-      return { blocked: true, text: text.slice(-1600) };
-    }
-    if (document.querySelector(".approval-dialog")) {
-      return { approval: true, text: text.slice(-1600) };
-    }
-    return "";
-  `, DEFAULT_TIMEOUT_MS);
+  const preflight = await waitForBuildPreflight(session);
   if (preflight.blocked) {
     criteria.push(criterion("build-gate", "Build is not allowed to enter a half-running state when prerequisites are missing.", "broken", "Build was blocked before approval.", preflight));
     return "broken";
   }
   criteria.push(criterion("approval-request", "Build produces a real approval request.", "verified", "Approval overlay appeared in the packaged desktop window."));
 
-  await session.execute(`
-    const dialog = document.querySelector(".approval-dialog");
-    const button = [...dialog.querySelectorAll("button")]
-      .find((candidate) => ${DENY_APPROVAL}
-        ? /拒绝|Deny|Cancel/i.test(candidate.textContent || "")
-        : /批准|Approve/i.test(candidate.textContent || ""));
-    if (!button) throw new Error("Approval resolution button not found.");
-    window.setTimeout(() => button.click(), 0);
-    return true;
-  `);
+  await clickApprovalResolution(session);
 
   if (DENY_APPROVAL) {
     await waitForTruthy(session, `
@@ -501,18 +623,7 @@ async function runLiveBuild(session, criteria) {
     return "verified";
   }
 
-  const evidence = await waitForTruthy(session, `
-    const text = document.body.innerText || "";
-    const terminal = document.querySelector(".dock-terminal")?.innerText || "";
-    const edit = document.querySelector(".dock-diff-card")?.innerText || "";
-    const hasTerminal = terminal.length > 0 || /Terminal|终端|command|命令/i.test(text);
-    const hasEdit = edit.includes(${JSON.stringify(SMOKE_FILE)}) || text.includes(${JSON.stringify(SMOKE_FILE)});
-    const hasUsage = /Token|tokens|usage|使用量|prompt=|completion=|total=/i.test(text);
-    const hasFinalSummary = /final summary|summary|总结|完成|completed|created|updated|wrote|写入|已完成/i.test(text);
-    return hasTerminal && hasEdit && hasUsage && hasFinalSummary
-      ? { text: text.slice(-2400), terminal, edit, hasTerminal, hasEdit, hasUsage, hasFinalSummary }
-      : "";
-  `, DEFAULT_TIMEOUT_MS);
+  const evidence = await waitForApprovedEvidence(session);
   criteria.push(criterion("approval-terminal", "Approved Build produces terminal output.", "verified", "The packaged window showed terminal evidence after approval.", { smokeFile: SMOKE_FILE, terminal: evidence.terminal }));
   criteria.push(criterion("approval-file-edit", "Approved Build produces a fileEdit item.", "verified", "The packaged window showed file edit evidence after approval.", { smokeFile: SMOKE_FILE, edit: evidence.edit }));
   criteria.push(criterion("approval-usage", "Approved Build produces usage evidence.", "verified", "The packaged window showed token usage evidence after approval.", { smokeFile: SMOKE_FILE }));
@@ -553,6 +664,13 @@ async function runSmoke(criteria) {
   } finally {
     if (session) await session.quit();
     driver.kill("SIGTERM");
+    await waitForProcessExit(driver);
+    if (driver.exitCode === null && driver.signalCode === null) {
+      driver.kill("SIGKILL");
+      await waitForProcessExit(driver, 1000);
+    }
+    driver.stdout.destroy();
+    driver.stderr.destroy();
   }
 }
 
