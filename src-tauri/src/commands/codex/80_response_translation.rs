@@ -2,6 +2,15 @@ pub fn generated_codex_config(base_url: &str) -> String {
     CodexConfigWriter::new(base_url).config_toml()
 }
 
+fn redact_provider_secret(message: &str, secret: &str) -> String {
+    let secret = secret.trim();
+    if secret.is_empty() {
+        message.to_string()
+    } else {
+        message.replace(secret, "<redacted>")
+    }
+}
+
 pub fn deepseek_missing_credential_error(provider_id: &str) -> CodexProviderError {
     CodexProviderError {
         code: "missing_credential".to_string(),
@@ -11,6 +20,7 @@ pub fn deepseek_missing_credential_error(provider_id: &str) -> CodexProviderErro
 }
 
 pub fn responses_to_deepseek_chat(payload: &Value, model: &str) -> Value {
+    let api_model = direct_plan_api_model("deepseek", payload.get("model").and_then(Value::as_str).unwrap_or(model));
     let mut messages = Vec::new();
     if let Some(instructions) = payload.get("instructions").and_then(Value::as_str) {
         if !instructions.trim().is_empty() {
@@ -29,7 +39,7 @@ pub fn responses_to_deepseek_chat(payload: &Value, model: &str) -> Value {
         _ => {}
     }
     let mut output = json!({
-        "model": payload.get("model").and_then(Value::as_str).unwrap_or(model),
+        "model": api_model,
         "messages": messages,
         "stream": payload.get("stream").and_then(Value::as_bool).unwrap_or(false),
     });
@@ -57,30 +67,43 @@ fn response_input_item_to_deepseek_message(item: &Value) -> Option<Value> {
         .unwrap_or("message");
     match item_type {
         "message" | "input_message" => {
-            let role =
-                deepseek_chat_role(item.get("role").and_then(Value::as_str).unwrap_or("user"));
+            let raw_role = item.get("role").and_then(Value::as_str).unwrap_or("user");
             let content =
                 response_content_to_text(item.get("content")).unwrap_or_else(|| item.to_string());
+            if raw_role == "tool" {
+                return Some(json!({ "role": "user", "content": tool_result_text(item, content) }));
+            }
+            let role = deepseek_chat_role(raw_role);
             Some(json!({ "role": role, "content": content }))
         }
-        "function_call_output" | "custom_tool_call_output" => {
-            let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
-            let content =
-                response_content_to_text(item.get("output")).unwrap_or_else(|| item.to_string());
-            let text = if call_id.is_empty() {
-                format!("Tool result:\n{content}")
-            } else {
-                format!("Tool result for {call_id}:\n{content}")
-            };
-            Some(json!({ "role": "user", "content": text }))
+        "function_call_output" | "custom_tool_call_output" | "tool_call_output" | "tool_result" => {
+            let content = response_content_to_text(item.get("output").or_else(|| item.get("content")))
+                .unwrap_or_else(|| item.to_string());
+            Some(json!({ "role": "user", "content": tool_result_text(item, content) }))
         }
         _ => {
-            let role =
-                deepseek_chat_role(item.get("role").and_then(Value::as_str).unwrap_or("user"));
+            let raw_role = item.get("role").and_then(Value::as_str).unwrap_or("user");
             let content =
                 response_content_to_text(item.get("content")).unwrap_or_else(|| item.to_string());
+            if raw_role == "tool" {
+                return Some(json!({ "role": "user", "content": tool_result_text(item, content) }));
+            }
+            let role = deepseek_chat_role(raw_role);
             Some(json!({ "role": role, "content": content }))
         }
+    }
+}
+
+fn tool_result_text(item: &Value, content: String) -> String {
+    let call_id = item
+        .get("call_id")
+        .or_else(|| item.get("tool_call_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if call_id.is_empty() {
+        format!("Tool result:\n{content}")
+    } else {
+        format!("Tool result for {call_id}:\n{content}")
     }
 }
 

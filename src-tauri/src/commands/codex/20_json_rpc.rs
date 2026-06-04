@@ -64,6 +64,7 @@ impl CodexJsonRpcClient {
         self.next_request_id += 1;
         self.pending.insert(request_id, method.to_string());
         let payload = json!({
+            "jsonrpc": "2.0",
             "id": request_id,
             "method": method,
             "params": params,
@@ -128,13 +129,21 @@ pub fn codex_event_for_notification(method: &str) -> &'static str {
         | "thread/item"
         | "item/started"
         | "item/completed"
+        | "rawResponseItem/completed"
         | "item/agentMessage/delta"
         | "item/plan/delta"
         | "item/reasoning/textDelta"
         | "item/reasoning/summaryTextDelta"
         | "item/commandExecution/outputDelta"
+        | "command/exec/outputDelta"
+        | "process/outputDelta"
         | "item/fileChange/outputDelta"
-        | "item/fileChange/patchUpdated" => CODEX_EVENT_ITEM,
+        | "item/fileChange/patchUpdated"
+        | "thread/tokenUsage/updated"
+        | "error"
+        | "warning"
+        | "guardianWarning"
+        | "configWarning" => CODEX_EVENT_ITEM,
         "turn"
         | "codex/turn"
         | "codex.turn"
@@ -226,10 +235,27 @@ fn app_server_notification_message(method: &str, params: &Value) -> String {
     }
 }
 
+fn app_server_json_rpc_payload(payload: &Value) -> Value {
+    let Some(object) = payload.as_object() else {
+        return payload.clone();
+    };
+    let is_json_rpc_shape = object.contains_key("id")
+        || object.contains_key("method")
+        || object.contains_key("result")
+        || object.contains_key("error");
+    if !is_json_rpc_shape || object.contains_key("jsonrpc") {
+        return payload.clone();
+    }
+    let mut next = object.clone();
+    next.insert("jsonrpc".to_string(), json!("2.0"));
+    Value::Object(next)
+}
+
 fn write_active_app_server_payload(payload: &Value) -> Result<(), String> {
+    let payload = app_server_json_rpc_payload(payload);
     let raw = format!(
         "{}\n",
-        serde_json::to_string(payload).map_err(|e| e.to_string())?
+        serde_json::to_string(&payload).map_err(|e| e.to_string())?
     );
     let mut guard = active_app_server().lock().map_err(|e| e.to_string())?;
     let stdin = guard
@@ -248,11 +274,26 @@ struct PersistentAppServerRequest {
 }
 
 fn clear_active_app_server_after_failure(message: &str, kill_child: bool) {
+    clear_active_app_server_after_failure_for_connection(message, kill_child, None);
+}
+
+fn clear_active_app_server_after_failure_for_connection(
+    message: &str,
+    kill_child: bool,
+    expected_connection_id: Option<&str>,
+) {
     let mut exit_code = None;
     let mut pending_responses = HashMap::new();
+    let mut child_to_stop = None;
     if let Ok(mut guard) = active_app_server().lock() {
+        if let Some(expected) = expected_connection_id {
+            if guard.connection_id.as_deref() != Some(expected) {
+                return;
+            }
+        }
         pending_responses = std::mem::take(&mut guard.pending_responses);
         guard.stdin = None;
+        guard.connection_id = None;
         guard.pending_requests.clear();
         guard.app_thread_id = None;
         guard.app_turn_id = None;
@@ -260,21 +301,25 @@ fn clear_active_app_server_after_failure(message: &str, kill_child: bool) {
         guard.orbit_to_app_thread.clear();
         guard.app_to_orbit_thread.clear();
         guard.active_context = None;
+        if let Some(operation) = guard.active_operation.as_mut() {
+            operation.status = "failed".to_string();
+            operation.final_state = Some("failed".to_string());
+            operation.error = Some(message.to_string());
+            operation.last_event_at = Some(now_iso());
+        }
         guard.sequence = 0;
-        if kill_child {
-            if let Some(mut child) = guard.child.take() {
-                if let Ok(Some(status)) = child.try_wait() {
-                    exit_code = status.code();
-                }
-                let _ = child.kill();
+        guard.last_event_at = Some(now_iso());
+        if let Some(mut child) = guard.child.take() {
+            if let Ok(Some(status)) = child.try_wait() {
+                exit_code = status.code();
             }
-        } else {
-            if let Some(child) = guard.child.as_mut() {
-                if let Ok(Some(status)) = child.try_wait() {
-                    exit_code = status.code();
-                }
-            }
-            guard.child = None;
+            child_to_stop = Some(child);
+        }
+    }
+    if kill_child {
+        if let Some(mut child) = child_to_stop {
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
     for (_, tx) in pending_responses {
@@ -477,21 +522,104 @@ fn app_server_response_payload_for_action(
     }
 }
 
+fn begin_runtime_operation(
+    operation_id: Option<String>,
+    kind: &str,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    timeout: Duration,
+) {
+    let Some(operation_id) = operation_id else {
+        return;
+    };
+    let started_at = now_iso();
+    let deadline_at = SystemTime::now()
+        .checked_add(timeout)
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| format!("unix-ms:{}", duration.as_millis()))
+        .unwrap_or_else(now_iso);
+    if let Ok(mut guard) = active_app_server().lock() {
+        guard.active_operation = Some(RuntimeOperationSnapshot {
+            id: operation_id,
+            connection_id: guard.connection_id.clone(),
+            kind: kind.to_string(),
+            status: "running".to_string(),
+            thread_id,
+            turn_id,
+            started_at,
+            deadline_at,
+            last_event_at: None,
+            cancelled: None,
+            final_state: None,
+            error: None,
+        });
+    }
+}
+
+fn patch_runtime_operation_status(
+    status: &str,
+    final_state: Option<&str>,
+    error: Option<String>,
+) {
+    if let Ok(mut guard) = active_app_server().lock() {
+        if let Some(operation) = guard.active_operation.as_mut() {
+            operation.status = status.to_string();
+            operation.last_event_at = Some(now_iso());
+            operation.final_state = final_state.map(str::to_string);
+            operation.cancelled = if final_state == Some("cancelled") {
+                Some(true)
+            } else {
+                operation.cancelled
+            };
+            operation.error = error;
+        }
+    }
+}
+
+fn active_restart_operation() -> Option<RuntimeOperationSnapshot> {
+    active_app_server().lock().ok().and_then(|guard| {
+        guard.active_operation.as_ref().and_then(|operation| {
+            if operation.kind == "restart"
+                && (operation.status == "starting" || operation.status == "running")
+            {
+                Some(operation.clone())
+            } else {
+                None
+            }
+        })
+    })
+}
+
 fn cleanup_active_app_server() {
+    let mut pending_responses = HashMap::new();
+    let mut child_to_kill = None;
     if let Ok(mut guard) = active_app_server().lock() {
         guard.stdin = None;
+        guard.connection_id = None;
+        pending_responses = std::mem::take(&mut guard.pending_responses);
         guard.pending_requests.clear();
         guard.app_thread_id = None;
         guard.app_turn_id = None;
         guard.provider_id = None;
-        guard.pending_responses.clear();
         guard.orbit_to_app_thread.clear();
         guard.app_to_orbit_thread.clear();
         guard.active_context = None;
-        guard.sequence = 0;
-        if let Some(mut child) = guard.child.take() {
-            let _ = child.kill();
+        if let Some(operation) = guard.active_operation.as_mut() {
+            operation.status = "cancelled".to_string();
+            operation.cancelled = Some(true);
+            operation.final_state = Some("cancelled".to_string());
+            operation.last_event_at = Some(now_iso());
         }
+        guard.sequence = 0;
+        guard.last_event_at = Some(now_iso());
+        child_to_kill = guard.child.take();
+    }
+    for (_, tx) in pending_responses {
+        let _ = tx.send(Err("Codex app-server stopped".to_string()));
+    }
+    if let Some(mut child) = child_to_kill {
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 
@@ -500,6 +628,7 @@ fn stop_all_codex_processes() -> Result<(), String> {
     let mut guard = state().lock().map_err(|e| e.to_string())?;
     if let Some(mut child) = guard.child.take() {
         let _ = child.kill();
+        let _ = child.wait();
     }
     Ok(())
 }

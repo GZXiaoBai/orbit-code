@@ -9,6 +9,7 @@ import type {
   CodexThreadViewModel,
   CodexTurn,
   CodexUsageSummary,
+  RuntimeOperation,
 } from "../domain/codex";
 import { createRuntimeMessage, type RuntimeMessage } from "../domain/runtimeMessages";
 import type { RunStep } from "../domain/runSteps";
@@ -253,9 +254,29 @@ export function codexItemsToRunSteps(items: CodexItem[]): RunStep[] {
 
 function usageFromItem(item: CodexItem): CodexUsageSummary {
   const metadata = asRecord(item.metadata);
-  const inputTokens = numberField(metadata, ["inputTokens", "input_tokens", "promptTokens", "prompt_tokens"]);
-  const outputTokens = numberField(metadata, ["outputTokens", "output_tokens", "completionTokens", "completion_tokens"]);
-  const totalTokens = numberField(metadata, ["totalTokens", "total_tokens"], inputTokens + outputTokens);
+  const nestedUsage = asRecord(metadata.usage);
+  const usage = Object.keys(nestedUsage).length > 0 ? nestedUsage : metadata;
+  const inputTokens = numberField(usage, [
+    "inputTokens",
+    "input_tokens",
+    "promptTokens",
+    "prompt_tokens",
+    "promptTokenCount",
+    "prompt_eval_count",
+  ]);
+  const outputTokens = numberField(usage, [
+    "outputTokens",
+    "output_tokens",
+    "completionTokens",
+    "completion_tokens",
+    "candidatesTokenCount",
+    "eval_count",
+  ]);
+  const totalTokens = numberField(usage, [
+    "totalTokens",
+    "total_tokens",
+    "totalTokenCount",
+  ], inputTokens + outputTokens);
   return { inputTokens, outputTokens, totalTokens };
 }
 
@@ -270,10 +291,16 @@ function sumUsage(items: CodexItem[]): CodexUsageSummary {
     }), { inputTokens: 0, outputTokens: 0, totalTokens: 0 });
 }
 
+function operationIsThreadRunning(operation: RuntimeOperation | null | undefined): boolean {
+  if (!operation || (operation.status !== "running" && operation.status !== "starting")) return false;
+  return operation.kind === "plan" || operation.kind === "build" || operation.kind === "interrupt";
+}
+
 export function buildCodexThreadViewModel(input: {
   status: CodexRuntimeStatus;
   thread: CodexThread | null;
   activeTurn: CodexTurn | null;
+  activeOperation?: RuntimeOperation | null;
   items: CodexItem[];
   error?: string;
 }): CodexThreadViewModel {
@@ -295,10 +322,11 @@ export function buildCodexThreadViewModel(input: {
     status: input.status,
     thread: input.thread,
     activeTurn: input.activeTurn,
+    activeOperation: input.activeOperation,
     messages,
     planDrafts,
     pendingActions,
-    running: input.status === "running" || input.activeTurn?.status === "running",
+    running: operationIsThreadRunning(input.activeOperation),
     failed: input.status === "error" || input.activeTurn?.status === "failed" || inspectable.some((item) => item.kind === "error"),
     interrupted: input.activeTurn?.status === "interrupted",
     error: input.error,
@@ -343,6 +371,7 @@ export function buildCodexProjection(input: {
   status: CodexRuntimeStatus;
   thread: CodexThread | null;
   activeTurn: CodexTurn | null;
+  activeOperation?: RuntimeOperation | null;
   items: CodexItem[];
   error?: string;
 }): CodexRuntimeProjection {

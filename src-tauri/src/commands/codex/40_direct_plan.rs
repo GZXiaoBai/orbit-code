@@ -6,13 +6,16 @@ enum DirectPlanProviderKind {
     Ollama,
 }
 
-fn direct_plan_provider_kind(provider_id: &str) -> Result<DirectPlanProviderKind, String> {
+fn direct_plan_provider_kind(
+    provider_id: &str,
+    base_url: Option<&str>,
+) -> Result<DirectPlanProviderKind, String> {
     match provider_id {
         "anthropic" => Ok(DirectPlanProviderKind::Anthropic),
         "google" => Ok(DirectPlanProviderKind::Google),
         "ollama" => Ok(DirectPlanProviderKind::Ollama),
         _ => {
-            openai_compatible_chat_url(provider_id)?;
+            openai_compatible_chat_url(provider_id, base_url)?;
             Ok(DirectPlanProviderKind::OpenAiCompatible)
         }
     }
@@ -33,32 +36,68 @@ fn provider_plan_label(provider_id: &str) -> &'static str {
         "ollama" => "Ollama",
         "siliconflow" => "SiliconFlow",
         "zhipu" => "Zhipu",
+        "together" => "Together AI",
+        "fireworks" => "Fireworks AI",
+        "cerebras" => "Cerebras",
+        "nvidia" => "NVIDIA NIM",
+        "azure-openai" => "Azure OpenAI",
+        "custom-openai" => "Custom OpenAI-compatible",
         _ => "Provider",
+    }
+}
+
+fn provider_stream_error_message(event: &Value) -> Option<String> {
+    let error = event.get("error")?;
+    if error.is_string() {
+        return error.as_str().map(str::to_string);
+    }
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| error.get("msg").and_then(Value::as_str))
+        .or_else(|| error.get("code").and_then(Value::as_str));
+    Some(message.map(str::to_string).unwrap_or_else(|| error.to_string()))
+}
+
+fn direct_plan_api_model(provider_id: &str, model: &str) -> String {
+    match (provider_id, model) {
+        ("deepseek", "deepseek-v4-pro") => "deepseek-reasoner".to_string(),
+        ("deepseek", "deepseek-v4-flash") => "deepseek-chat".to_string(),
+        _ => model.to_string(),
     }
 }
 
 fn post_deepseek_chat_streaming(
     app: &AppHandle,
     provider_id: &str,
+    base_url: Option<&str>,
     api_key: &str,
     payload: &Value,
     thread_id: &str,
     turn_id: &str,
 ) -> Result<Vec<CodexItem>, String> {
-    let api_url = openai_compatible_chat_url(provider_id)?;
+    let api_url = openai_compatible_chat_url(provider_id, base_url)?;
     let response = reqwest::blocking::Client::new()
-        .post(api_url)
+        .post(&api_url)
         .header("content-type", "application/json")
         .bearer_auth(api_key)
         .json(payload)
         .send()
-        .map_err(|e| format!("{provider_id} request failed: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "{provider_id} request failed: {}",
+                redact_provider_secret(&e.to_string(), api_key)
+            )
+        })?;
     let status = response.status();
     if !status.is_success() {
         let text = response
             .text()
             .unwrap_or_else(|_| "<failed to read provider error body>".to_string());
-        return Err(format!("{provider_id} returned {status}: {text}"));
+        return Err(format!(
+            "{provider_id} returned {status}: {}",
+            redact_provider_secret(&text, api_key)
+        ));
     }
 
     let assistant_id = id("codex-assistant");
@@ -91,6 +130,12 @@ fn post_deepseek_chat_streaming(
         }
         let event = serde_json::from_str::<Value>(data)
             .map_err(|e| format!("Invalid {provider_id} stream JSON: {e}"))?;
+        if let Some(error) = provider_stream_error_message(&event) {
+            return Err(format!(
+                "{provider_id} stream error: {}",
+                redact_provider_secret(&error, api_key)
+            ));
+        }
         if let Some(event_usage) = event.get("usage").filter(|value| !value.is_null()) {
             usage = Some(event_usage.clone());
         }
@@ -244,13 +289,21 @@ fn post_anthropic_messages_streaming(
         .header("x-api-key", api_key)
         .json(payload)
         .send()
-        .map_err(|e| format!("anthropic request failed: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "anthropic request failed: {}",
+                redact_provider_secret(&e.to_string(), api_key)
+            )
+        })?;
     let status = response.status();
     if !status.is_success() {
         let text = response
             .text()
             .unwrap_or_else(|_| "<failed to read provider error body>".to_string());
-        return Err(format!("anthropic returned {status}: {text}"));
+        return Err(format!(
+            "anthropic returned {status}: {}",
+            redact_provider_secret(&text, api_key)
+        ));
     }
 
     let assistant_id = id("codex-assistant");
@@ -282,6 +335,12 @@ fn post_anthropic_messages_streaming(
         }
         let event = serde_json::from_str::<Value>(data)
             .map_err(|e| format!("Invalid anthropic stream JSON: {e}"))?;
+        if let Some(error) = provider_stream_error_message(&event) {
+            return Err(format!(
+                "anthropic stream error: {}",
+                redact_provider_secret(&error, api_key)
+            ));
+        }
         if event.get("type").and_then(Value::as_str) == Some("message_stop") {
             break;
         }
@@ -444,16 +503,18 @@ fn post_google_generate_content_streaming(
         .map_err(|e| {
             format!(
                 "google request failed: {}",
-                e.to_string().replace(api_key, "<redacted>")
+                redact_provider_secret(&e.to_string(), api_key)
             )
         })?;
     let status = response.status();
     if !status.is_success() {
         let text = response
             .text()
-            .unwrap_or_else(|_| "<failed to read provider error body>".to_string())
-            .replace(api_key, "<redacted>");
-        return Err(format!("google returned {status}: {text}"));
+            .unwrap_or_else(|_| "<failed to read provider error body>".to_string());
+        return Err(format!(
+            "google returned {status}: {}",
+            redact_provider_secret(&text, api_key)
+        ));
     }
 
     let assistant_id = id("codex-assistant");
@@ -477,8 +538,17 @@ fn post_google_generate_content_streaming(
             continue;
         }
         let data = trimmed.trim_start_matches("data:").trim();
+        if data == "[DONE]" {
+            break;
+        }
         let event = serde_json::from_str::<Value>(data)
             .map_err(|e| format!("Invalid google stream JSON: {e}"))?;
+        if let Some(error) = provider_stream_error_message(&event) {
+            return Err(format!(
+                "google stream error: {}",
+                redact_provider_secret(&error, api_key)
+            ));
+        }
         if let Some(event_usage) = event.get("usageMetadata").filter(|value| !value.is_null()) {
             usage = Some(event_usage.clone());
         }
@@ -617,7 +687,7 @@ fn post_ollama_chat_streaming(
         }
         let event = serde_json::from_str::<Value>(trimmed)
             .map_err(|e| format!("Invalid ollama stream JSON: {e}"))?;
-        if let Some(error) = event.get("error").and_then(Value::as_str) {
+        if let Some(error) = provider_stream_error_message(&event) {
             return Err(format!("ollama stream error: {error}"));
         }
         if let Some(content_delta) = event
@@ -884,61 +954,137 @@ pub fn codex_sidecar_status() -> CodexSidecarStatus {
 }
 
 #[tauri::command]
-pub fn codex_runtime_restart(app: AppHandle, provider_id: Option<String>) -> RuntimeRestartResult {
-    let provider_id = provider_id.unwrap_or_else(|| "deepseek".to_string());
-    if let Err(error) = stop_all_codex_processes() {
+pub fn codex_runtime_restart(
+    app: AppHandle,
+    _provider_id: Option<String>,
+    operation_id: Option<String>,
+) -> RuntimeRestartResult {
+    if let Some(operation) = active_restart_operation() {
+        let status = codex_sidecar_status();
         return RuntimeRestartResult {
-            status: CodexSidecarStatus {
-                running: false,
-                pid: None,
-                bridge_base_url: None,
-                codex_home: None,
-                last_error: Some(error.clone()),
-                last_stderr_tail: None,
-                last_exit_code: None,
-            },
-            pid: None,
-            error: Some(error),
+            pid: status.pid,
+            error: Some(format!(
+                "Codex runtime restart is already running ({})",
+                operation.id
+            )),
+            status,
         };
     }
-    let status = match ensure_persistent_app_server(&app, &provider_id) {
-        Ok(status) => status,
-        Err(error) => CodexSidecarStatus {
-            running: false,
-            pid: None,
-            bridge_base_url: state()
-                .lock()
-                .ok()
-                .and_then(|guard| guard.bridge_base_url.clone()),
-            codex_home: state()
-                .lock()
-                .ok()
-                .and_then(|guard| guard.codex_home.clone()),
-            last_error: Some(error),
-            last_stderr_tail: state()
-                .lock()
-                .ok()
-                .and_then(|guard| guard.last_stderr_tail.clone()),
-            last_exit_code: state().lock().ok().and_then(|guard| guard.last_exit_code),
-        },
-    };
+    let operation_id = operation_id.unwrap_or_else(|| id("codex-operation-restart"));
+    cleanup_active_app_server();
+    begin_runtime_operation(
+        Some(operation_id.clone()),
+        "restart",
+        None,
+        None,
+        Duration::from_secs(25),
+    );
+    if let Ok(mut guard) = state().lock() {
+        guard.last_error = None;
+        guard.last_exit_code = None;
+    }
+    patch_runtime_operation_status("completed", Some("completed"), None);
+    emit_runtime_status(
+        &app,
+        "ready",
+        None,
+        Some(operation_id),
+        Some("restart".to_string()),
+    );
+    let status = codex_sidecar_status();
     RuntimeRestartResult {
         pid: status.pid,
-        error: status.last_error.clone(),
+        error: None,
         status,
     }
+}
+
+#[tauri::command]
+pub fn codex_runtime_diagnostics() -> CodexRuntimeDiagnostics {
+    let (
+        pending_response_count,
+        pending_request_count,
+        active_operation,
+        last_event_at,
+        stale_event_count,
+    ) = active_app_server()
+        .lock()
+        .map(|guard| {
+            (
+                guard.pending_responses.len(),
+                guard.pending_requests.len(),
+                guard.active_operation.clone(),
+                guard.last_event_at.clone(),
+                guard.stale_event_count,
+            )
+        })
+        .unwrap_or((0, 0, None, None, 0));
+    let status = codex_sidecar_status();
+    let sidecar_info = codex_sidecar_version_info();
+    CodexRuntimeDiagnostics {
+        pid: status.pid,
+        sidecar_path: sidecar_info.path.or(Some(sidecar_info.source)),
+        stderr_tail: status.last_stderr_tail.clone(),
+        exit_code: status.last_exit_code,
+        pending_response_count,
+        pending_request_count,
+        active_operation,
+        last_event_at,
+        stale_event_count: Some(stale_event_count),
+        last_error: status.last_error,
+    }
+}
+
+#[tauri::command]
+pub fn codex_runtime_recover(app: AppHandle) -> CodexRuntimeDiagnostics {
+    cleanup_active_app_server();
+    if let Ok(mut guard) = state().lock() {
+        guard.last_error = None;
+        guard.last_exit_code = None;
+    }
+    emit_runtime_status(&app, "ready", None, None, Some("recover".to_string()));
+    codex_runtime_diagnostics()
+}
+
+#[tauri::command]
+pub fn codex_operation_cancel(app: AppHandle, operation_id: String) -> CodexSidecarStatus {
+    cleanup_active_app_server();
+    if let Ok(mut guard) = state().lock() {
+        guard.last_error = Some(format!("Codex operation {operation_id} was cancelled"));
+    }
+    let status = codex_sidecar_status();
+    emit_runtime_status(
+        &app,
+        "error",
+        Some(format!("Codex operation {operation_id} was cancelled")),
+        Some(operation_id),
+        None,
+    );
+    status
 }
 
 #[tauri::command]
 pub fn orbit_bridge_provider_catalog() -> Vec<CodexBridgeProvider> {
     vec![
         ("deepseek", "DeepSeek", "https://api.deepseek.com/v1", true, None),
+        ("openai", "OpenAI", "https://api.openai.com/v1", false, Some("Build blocked until the OpenAI Responses bridge adapter is verified")),
+        ("anthropic", "Anthropic", "https://api.anthropic.com/v1", false, Some("Build blocked until the Anthropic Responses bridge adapter is verified")),
+        ("google", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta", false, Some("Build blocked until the Gemini Responses bridge adapter is verified")),
         ("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", false, Some("Build blocked until the OpenRouter Responses bridge adapter is verified")),
-        ("qwen", "Qwen / DashScope", "https://dashscope.aliyuncs.com/compatible-mode/v1", false, Some("Build blocked until the Qwen Responses bridge adapter is verified")),
-        ("siliconflow", "SiliconFlow", "https://api.siliconflow.cn/v1", false, Some("Build blocked until the SiliconFlow Responses bridge adapter is verified")),
-        ("kimi", "Kimi / Moonshot", "https://api.moonshot.cn/v1", false, Some("Build blocked until the Kimi Responses bridge adapter is verified")),
+        ("xai", "xAI", "https://api.x.ai/v1", false, Some("Build blocked until the xAI Responses bridge adapter is verified")),
+        ("mistral", "Mistral", "https://api.mistral.ai/v1", false, Some("Build blocked until the Mistral Responses bridge adapter is verified")),
         ("groq", "Groq", "https://api.groq.com/openai/v1", false, Some("Build blocked until the Groq Responses bridge adapter is verified")),
-        ("openai-compatible", "OpenAI-compatible", "", false, Some("Build blocked until this custom OpenAI-compatible endpoint is verified for Responses bridge semantics")),
+        ("qwen", "Qwen / DashScope", "https://dashscope.aliyuncs.com/compatible-mode/v1", false, Some("Build blocked until the Qwen Responses bridge adapter is verified")),
+        ("kimi", "Kimi / Moonshot", "https://api.moonshot.cn/v1", false, Some("Build blocked until the Kimi Responses bridge adapter is verified")),
+        ("siliconflow", "SiliconFlow", "https://api.siliconflow.cn/v1", false, Some("Build blocked until the SiliconFlow Responses bridge adapter is verified")),
+        ("zhipu", "Zhipu / GLM", "https://open.bigmodel.cn/api/paas/v4", false, Some("Build blocked until the Zhipu Responses bridge adapter is verified")),
+        ("together", "Together AI", "https://api.together.ai/v1", false, Some("Build blocked until the Together AI Responses bridge adapter is verified")),
+        ("fireworks", "Fireworks AI", "https://api.fireworks.ai/inference/v1", false, Some("Build blocked until the Fireworks AI Responses bridge adapter is verified")),
+        ("cerebras", "Cerebras", "https://api.cerebras.ai/v1", false, Some("Build blocked until the Cerebras Responses bridge adapter is verified")),
+        ("nvidia", "NVIDIA NIM", "https://integrate.api.nvidia.com/v1", false, Some("Build blocked until the NVIDIA NIM Responses bridge adapter is verified")),
+        ("azure-openai", "Azure OpenAI", "", false, Some("Build blocked until the Azure OpenAI Responses bridge adapter is verified")),
+        ("ollama", "Ollama", "http://127.0.0.1:11434", false, Some("Build blocked until the local Ollama adapter is verified for Codex bridge semantics")),
+        ("custom-openai", "Custom OpenAI-compatible", "", false, Some("Build blocked until this custom OpenAI-compatible endpoint is verified for Responses bridge semantics")),
     ]
     .into_iter()
     .map(|(id, label, base_url, supported, blocked_reason)| CodexBridgeProvider {

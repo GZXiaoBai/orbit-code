@@ -83,6 +83,8 @@ pub struct CodexItemEvent {
     pub metadata: Option<serde_json::Value>,
     pub error: Option<String>,
     pub created_at: Option<String>,
+    pub operation_id: Option<String>,
+    pub connection_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,7 +115,9 @@ pub struct CodexTurnStartInput {
     pub runtime_mode: Option<String>,
     pub provider_id: String,
     pub model: String,
+    pub base_url: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub operation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,4 +169,36 @@ pub struct RuntimeRestartResult {
     pub status: CodexSidecarStatus,
     pub pid: Option<u32>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeOperationSnapshot {
+    pub id: String,
+    pub connection_id: Option<String>,
+    pub kind: String,
+    pub status: String,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub started_at: String,
+    pub deadline_at: String,
+    pub last_event_at: Option<String>,
+    pub cancelled: Option<bool>,
+    pub final_state: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexRuntimeDiagnostics {
+    pub pid: Option<u32>,
+    pub sidecar_path: Option<String>,
+    pub stderr_tail: Option<String>,
+    pub exit_code: Option<i32>,
+    pub pending_response_count: usize,
+    pub pending_request_count: usize,
+    pub active_operation: Option<RuntimeOperationSnapshot>,
+    pub last_event_at: Option<String>,
+    pub stale_event_count: Option<u64>,
+    pub last_error: Option<String>,
 }

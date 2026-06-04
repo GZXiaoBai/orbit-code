@@ -7,8 +7,8 @@ import { createDeepSeekSmokeRunRecord } from "../runtime/deepSeekSmokeHarness";
 import { buildEffectiveSecurityPolicy } from "../runtime/securityPolicy";
 import { ContextProviderRegistry, type ContextInspectorModel } from "../runtime/contextProviders";
 import { invokeDesktop, isDesktopRuntime } from "../runtime/desktopGateway";
-import { buildUsageSnapshot } from "./usageSnapshot";
-import { codexBuildRuntimeBlockedMessage, codexBuildRuntimeReady, codexComposerSubmitLocked, useCodexSession } from "./useCodexSession";
+import { buildUsageSnapshot, codexUsageTokenRecords } from "./usageSnapshot";
+import { codexComposerSubmitLocked, useCodexSession } from "./useCodexSession";
 import { useFileSystem } from "./useFileSystem";
 import { useLayoutPreferences } from "./useLayoutPreferences";
 import { useProjectActions } from "./useProjectActions";
@@ -51,16 +51,10 @@ export function buildEffectiveWorkspaceBuildGate(input: {
   sidecarStatus: CodexSidecarStatus;
   desktopRuntime: boolean;
 }): ProviderBuildGate {
-  const requiresSidecar = input.desktopRuntime
-    && input.gate.canBuild
-    && input.providerId !== "fixture";
-  if (!requiresSidecar || codexBuildRuntimeReady(input.sidecarStatus)) return input.gate;
-  return {
-    ...input.gate,
-    canBuild: false,
-    bridgeStatus: "blocked",
-    blockedReason: codexBuildRuntimeBlockedMessage(input.sidecarStatus),
-  };
+  void input.providerId;
+  void input.sidecarStatus;
+  void input.desktopRuntime;
+  return input.gate;
 }
 
 export function useWorkspace() {
@@ -144,13 +138,14 @@ export function useWorkspace() {
       mode,
       providerId: runControls.selection.providerId,
       model: runControls.selection.model,
+      baseUrl: session.providerSettings.configs[runControls.selection.providerId]?.baseUrl,
       threadId: threadUi.threadId,
       reasoningEffort: runControls.selection.reasoningEffort,
       buildBlockedReason: mode === "build" && !effectiveBuildGate.canBuild && runControls.selection.providerId && runControls.selection.model
         ? effectiveBuildGate.blockedReason || "Build is blocked until the selected provider passes Orbit's Codex bridge checks."
         : undefined,
     });
-  }, [codex, effectiveBuildGate.blockedReason, effectiveBuildGate.canBuild, fs.workspaceRoot, runControls.mode, runControls.selection, threadUi.threadId]);
+  }, [codex, effectiveBuildGate.blockedReason, effectiveBuildGate.canBuild, fs.workspaceRoot, runControls.mode, runControls.selection, session.providerSettings.configs, threadUi.threadId]);
 
   const startAgentLoop = useCallback(async () => {
     const task = session.importedPlan?.plan.tasks.find((item) => item.status !== "done" && item.status !== "verified");
@@ -217,7 +212,7 @@ export function useWorkspace() {
   }, [collectRuntimeContext, fs]);
 
   const codexThreadModel = codex.projection.threadModel;
-  const composerSubmitLocked = codexComposerSubmitLocked(codex.status, codex.activeTurn);
+  const composerSubmitLocked = codexComposerSubmitLocked(codex.status, codex.activeTurn, codex.activeOperation);
   const codexInspectorModel = useMemo(() => ({
     ...codex.projection.inspectorModel,
     terminalRuns: [...codex.projection.inspectorModel.terminalRuns, ...fs.terminalRuns],
@@ -365,6 +360,8 @@ export function useWorkspace() {
     codexInspectorModel,
     codexRuntimeSettings: codex.runtimeSettings,
     restartCodexRuntime: codex.restartRuntime,
+    recoverCodexRuntime: codex.recoverRuntime,
+    freezeDiagnosticsReport: codex.freezeDiagnosticsReport,
     providerBuildGate: effectiveBuildGate,
     composerSubmitLocked,
     sessionBrowserModel,
@@ -404,7 +401,7 @@ export function useWorkspace() {
     layoutPreferences: layout.layoutPreferences,
     updateLayoutPreferences: layout.updateLayoutPreferences,
     toggleReviewDock: layout.toggleReviewDock,
-    usageSnapshot: buildUsageSnapshot(terminalRuns),
+    usageSnapshot: buildUsageSnapshot(terminalRuns, codexUsageTokenRecords(codex.projection.inspectorModel.usage)),
     threadId: threadUi.threadId,
     threadUiState: threadUi.threadUiState,
     threadList: threadUi.threadList,

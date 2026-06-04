@@ -8,6 +8,7 @@ import { timestampId, writeSmokeReport } from "./smoke-report.mjs";
 const TAURI_WEBDRIVER_DOC = "https://v2.tauri.app/develop/tests/webdriver/";
 const DEFAULT_TIMEOUT_MS = Number(process.env.ORBIT_DESKTOP_PLAN_TIMEOUT_MS || 45_000);
 const REQUEST_TIMEOUT_MS = Number(process.env.ORBIT_WEBDRIVER_REQUEST_TIMEOUT_MS || 15_000);
+const SESSION_TIMEOUT_MS = Number(process.env.ORBIT_WEBDRIVER_SESSION_TIMEOUT_MS || Math.max(DEFAULT_TIMEOUT_MS, 60_000));
 const LIVE_PLAN_ENABLED = process.env.ORBIT_DESKTOP_PLAN_LIVE === "1";
 
 function reportId() {
@@ -58,9 +59,9 @@ function discoverAppPath() {
   return candidates.map((candidate) => path.resolve(candidate)).find((candidate) => fs.existsSync(candidate)) || "";
 }
 
-async function requestJson(baseUrl, method, route, body) {
+async function requestJson(baseUrl, method, route, body, timeoutMs = REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${baseUrl}${route}`, {
       method,
@@ -69,7 +70,7 @@ async function requestJson(baseUrl, method, route, body) {
       signal: controller.signal,
     }).catch((error) => {
       if (error?.name === "AbortError") {
-        throw new Error(`${method} ${route} timed out after ${REQUEST_TIMEOUT_MS}ms`);
+        throw new Error(`${method} ${route} timed out after ${timeoutMs}ms`);
       }
       throw error;
     });
@@ -132,7 +133,7 @@ async function createSession(baseUrl, appPath) {
         },
       },
     },
-  });
+  }, SESSION_TIMEOUT_MS);
   const sessionId = response?.value?.sessionId || response?.sessionId;
   if (!sessionId) throw new Error(`tauri-driver did not return a session id: ${JSON.stringify(response)}`);
   return {
@@ -350,6 +351,11 @@ async function main() {
     completedAt: new Date().toISOString(),
     result,
     livePlanEnabled: LIVE_PLAN_ENABLED,
+    timeouts: {
+      requestMs: REQUEST_TIMEOUT_MS,
+      sessionMs: SESSION_TIMEOUT_MS,
+      overallMs: DEFAULT_TIMEOUT_MS,
+    },
     criteria,
   };
   writeSmokeReport("tauri-webdriver-plan-smoke", report, "Tauri WebDriver Plan smoke report");

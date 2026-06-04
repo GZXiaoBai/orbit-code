@@ -116,18 +116,68 @@ describe("run controls", () => {
     expect(options[0]?.capability?.maxContextTokens).toBeGreaterThanOrEqual(400_000);
   });
 
+  it("persists API-discovered model capability metadata without bypassing Build gate", () => {
+    const settings = setImportedModels(emptySettings, "openrouter", [{
+      id: "openai/gpt-5.1-codex",
+      capability: {
+        streaming: true,
+        reasoningLevels: ["auto", "high"],
+        toolCalls: true,
+        local: false,
+        buildSupported: true,
+        maxContextTokens: 400_000,
+        maxOutputTokens: 32_768,
+        capabilitySource: "api",
+      },
+    }]);
+    const options = buildRunModelOptions(settings, { openrouter: "sk-test" });
+
+    expect(options[0]?.capability).toMatchObject({
+      maxContextTokens: 400_000,
+      maxOutputTokens: 32_768,
+      toolCalls: true,
+      capabilitySource: "api",
+      buildSupported: false,
+    });
+  });
+
+  it("supports custom OpenAI-compatible model import while blocking Build until bridge verification", () => {
+    const imported = setImportedModels(emptySettings, "custom-openai", ["private-coder"]);
+    const settings = {
+      ...imported,
+      configs: {
+        ...imported.configs,
+        "custom-openai": {
+          ...imported.configs["custom-openai"],
+          baseUrl: "https://gateway.example/v1",
+        },
+      },
+    };
+    const options = buildRunModelOptions(settings, { "custom-openai": "sk-test" });
+    const gate = buildProviderBuildGate({
+      providerId: "custom-openai",
+      model: "private-coder",
+      settings,
+      apiKeys: { "custom-openai": "sk-test" },
+    });
+
+    expect(options.map((option) => option.id)).toEqual(["custom-openai:private-coder"]);
+    expect(options[0]?.capability?.buildSupported).toBe(false);
+    expect(gate).toMatchObject({ canBuild: false, bridgeStatus: "blocked" });
+  });
+
   it("gates Build to verified Codex bridge providers", () => {
     for (const providerId of ["deepseek", "fixture"]) {
       expect(inferModelCapability(providerId, `${providerId}-model`).buildSupported).toBe(true);
     }
-    for (const providerId of ["openai", "xai", "mistral", "groq", "qwen", "kimi", "siliconflow", "zhipu", "openrouter"]) {
+    for (const providerId of ["openai", "anthropic", "google", "ollama", "openrouter", "xai", "mistral", "groq", "qwen", "kimi", "siliconflow", "zhipu", "together", "fireworks", "cerebras", "nvidia", "azure-openai", "custom-openai"]) {
       expect(inferModelCapability(providerId, `${providerId}-model`).buildSupported).toBe(false);
     }
   });
 
-  it("requires a passing DeepSeek bridge smoke before Build", () => {
+  it("does not require a persisted smoke record before DeepSeek Build submit", () => {
     const imported = setImportedModels(emptySettings, "deepseek", ["deepseek-v4-pro"]);
-    const locked = buildProviderBuildGate({
+    const missingSmoke = buildProviderBuildGate({
       providerId: "deepseek",
       model: "deepseek-v4-pro",
       settings: imported,
@@ -145,11 +195,11 @@ describe("run controls", () => {
       apiKeys: { deepseek: "sk-test" },
     });
 
-    expect(locked).toMatchObject({ canBuild: false, bridgeStatus: "smokeFailed" });
+    expect(missingSmoke).toMatchObject({ canBuild: true, bridgeStatus: "ready" });
     expect(passed).toMatchObject({ canBuild: true, bridgeStatus: "ready" });
   });
 
-  it("blocks Build when the Codex sidecar is not ready even after DeepSeek smoke passes", () => {
+  it("enables real DeepSeek Build after bridge smoke passes", () => {
     const imported = setImportedModels(emptySettings, "deepseek", ["deepseek-v4-pro"]);
     const gate = buildProviderBuildGate({
       providerId: "deepseek",
@@ -167,14 +217,10 @@ describe("run controls", () => {
       },
     });
 
-    expect(gate).toMatchObject({
-      canBuild: false,
-      bridgeStatus: "blocked",
-      blockedReason: "Codex sidecar is not ready: Codex app-server stdin unavailable",
-    });
+    expect(gate).toMatchObject({ canBuild: true, bridgeStatus: "ready" });
   });
 
-  it("applies desktop sidecar readiness to the workspace Build gate without blocking fixtures", () => {
+  it("does not require an already-running sidecar before enabling Build submit", () => {
     const readyGate = {
       providerId: "deepseek",
       model: "deepseek-v4-pro",
@@ -183,32 +229,26 @@ describe("run controls", () => {
       bridgeStatus: "ready" as const,
     };
 
-    const blocked = buildEffectiveWorkspaceBuildGate({
+    const deepseek = buildEffectiveWorkspaceBuildGate({
       gate: readyGate,
       providerId: "deepseek",
       sidecarStatus: { running: false, lastError: "No active Codex app-server stdin is available" },
       desktopRuntime: true,
     });
     const fixture = buildEffectiveWorkspaceBuildGate({
-      gate: { ...readyGate, providerId: "fixture", model: "fixture-coder" },
+      gate: {
+        providerId: "fixture",
+        model: "fixture-coder",
+        canBuild: true,
+        canStream: true,
+        bridgeStatus: "ready" as const,
+      },
       providerId: "fixture",
       sidecarStatus: { running: false, lastError: "No active Codex app-server stdin is available" },
       desktopRuntime: true,
     });
-    const web = buildEffectiveWorkspaceBuildGate({
-      gate: readyGate,
-      providerId: "deepseek",
-      sidecarStatus: { running: false, lastError: "No active Codex app-server stdin is available" },
-      desktopRuntime: false,
-    });
-
-    expect(blocked).toMatchObject({
-      canBuild: false,
-      bridgeStatus: "blocked",
-    });
-    expect(blocked.blockedReason).toContain("No active Codex app-server stdin is available");
+    expect(deepseek).toMatchObject({ canBuild: true, bridgeStatus: "ready" });
     expect(fixture.canBuild).toBe(true);
-    expect(web.canBuild).toBe(true);
   });
 
   it("validates reasoning effort values", () => {

@@ -66,6 +66,7 @@ struct PendingServerRequest {
 }
 
 struct ActiveAppServerState {
+    connection_id: Option<String>,
     stdin: Option<ChildStdin>,
     child: Option<Child>,
     pending_requests: HashMap<String, PendingServerRequest>,
@@ -77,7 +78,10 @@ struct ActiveAppServerState {
     orbit_to_app_thread: HashMap<String, String>,
     app_to_orbit_thread: HashMap<String, String>,
     active_context: Option<AppServerRunContext>,
+    active_operation: Option<RuntimeOperationSnapshot>,
     sequence: u64,
+    last_event_at: Option<String>,
+    stale_event_count: u64,
 }
 
 static CODEX_STATE: OnceLock<Mutex<CodexSidecarState>> = OnceLock::new();
@@ -115,6 +119,7 @@ fn active_app_server() -> &'static Mutex<ActiveAppServerState> {
     ACTIVE_APP_SERVER.get_or_init(|| {
         Mutex::new(ActiveAppServerState {
             stdin: None,
+            connection_id: None,
             child: None,
             pending_requests: HashMap::new(),
             app_thread_id: None,
@@ -125,9 +130,36 @@ fn active_app_server() -> &'static Mutex<ActiveAppServerState> {
             orbit_to_app_thread: HashMap::new(),
             app_to_orbit_thread: HashMap::new(),
             active_context: None,
+            active_operation: None,
             sequence: 0,
+            last_event_at: None,
+            stale_event_count: 0,
         })
     })
+}
+
+fn active_connection_id() -> Option<String> {
+    active_app_server()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.connection_id.clone())
+}
+
+fn active_operation_id() -> Option<String> {
+    active_app_server()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.active_operation.as_ref().map(|operation| operation.id.clone()))
+}
+
+fn mark_runtime_event_sent() {
+    if let Ok(mut guard) = active_app_server().lock() {
+        let at = now_iso();
+        guard.last_event_at = Some(at.clone());
+        if let Some(operation) = guard.active_operation.as_mut() {
+            operation.last_event_at = Some(at);
+        }
+    }
 }
 
 fn trim_runtime_tail(text: &str, max_chars: usize) -> String {
@@ -209,6 +241,7 @@ fn numeric_request_id() -> u64 {
 }
 
 fn emit_codex_item_event(app: &AppHandle, event: CodexItemEvent) {
+    mark_runtime_event_sent();
     let _ = app.emit(CODEX_EVENT_ITEM, event);
 }
 
@@ -229,6 +262,8 @@ fn emit_codex_item_upsert(app: &AppHandle, item: CodexItem) {
             metadata: None,
             error: None,
             created_at: None,
+            operation_id: active_operation_id(),
+            connection_id: active_connection_id(),
         },
     );
 }
@@ -262,6 +297,8 @@ fn emit_codex_delta(
             metadata: None,
             error: None,
             created_at: Some(now_iso()),
+            operation_id: active_operation_id(),
+            connection_id: active_connection_id(),
         },
     );
 }
@@ -283,12 +320,49 @@ fn emit_codex_complete(app: &AppHandle, item: &CodexItem) {
             metadata: item.metadata.clone(),
             error: None,
             created_at: Some(item.created_at.clone()),
+            operation_id: active_operation_id(),
+            connection_id: active_connection_id(),
         },
     );
 }
 
 fn emit_codex_turn(app: &AppHandle, turn: &CodexTurn) {
-    let _ = app.emit(CODEX_EVENT_TURN, turn.clone());
+    mark_runtime_event_sent();
+    let _ = app.emit(
+        CODEX_EVENT_TURN,
+        json!({
+            "id": &turn.id,
+            "threadId": &turn.thread_id,
+            "status": &turn.status,
+            "mode": &turn.mode,
+            "startedAt": &turn.started_at,
+            "completedAt": &turn.completed_at,
+            "operationId": active_operation_id(),
+            "connectionId": active_connection_id(),
+        }),
+    );
+}
+
+fn emit_runtime_status(
+    app: &AppHandle,
+    status: &str,
+    error: Option<String>,
+    operation_id: Option<String>,
+    operation_kind: Option<String>,
+) {
+    mark_runtime_event_sent();
+    let sidecar_status = codex_sidecar_status();
+    let _ = app.emit(
+        CODEX_EVENT_STATUS,
+        json!({
+            "status": status,
+            "error": error,
+            "operationId": operation_id,
+            "connectionId": active_connection_id(),
+            "operationKind": operation_kind,
+            "sidecarStatus": sidecar_status,
+        }),
+    );
 }
 
 fn process_running(child: &mut Child) -> bool {

@@ -1,5 +1,5 @@
 import { invokeDesktop } from "./desktopGateway";
-import type { CodexBridgeProvider, CodexItem, CodexItemEvent, CodexRuntimeStatus, CodexSidecarStatus, CodexSidecarVersionInfo, CodexThread, CodexTurn, DesktopBuildSmokeResult, RuntimeRestartResult, RuntimeRoute } from "../domain/codex";
+import type { CodexBridgeProvider, CodexItem, CodexItemEvent, CodexRuntimeDiagnostics, CodexRuntimeStatus, CodexSidecarStatus, CodexSidecarVersionInfo, CodexThread, CodexTurn, DesktopBuildSmokeResult, RuntimeRestartResult, RuntimeRoute } from "../domain/codex";
 
 export interface CodexStartThreadInput {
   workspacePath: string;
@@ -18,7 +18,9 @@ export interface CodexStartTurnInput {
   runtimeMode?: RuntimeRoute;
   providerId: string;
   model: string;
+  baseUrl?: string;
   reasoningEffort?: string;
+  operationId?: string;
 }
 
 export interface CodexThreadStartResult {
@@ -34,14 +36,17 @@ export interface CodexTurnStartResult {
 export type AgentRuntimeEvent =
   | { type: "item"; payload: CodexItemEvent | CodexItem }
   | { type: "turn"; payload: CodexTurn }
-  | { type: "status"; payload: { status: CodexRuntimeStatus; error?: string } }
+  | { type: "status"; payload: { status: CodexRuntimeStatus; error?: string; operationId?: string; connectionId?: string; operationKind?: string; sidecarStatus?: CodexSidecarStatus } }
   | { type: "error"; payload: { message: string } };
 
 export interface AgentRuntimePort {
   status(): Promise<CodexSidecarStatus>;
   sidecarInfo(): Promise<CodexSidecarVersionInfo>;
   desktopBuildSmokeReport(): Promise<DesktopBuildSmokeResult | null>;
-  restart(providerId?: string): Promise<RuntimeRestartResult>;
+  diagnostics(): Promise<CodexRuntimeDiagnostics>;
+  cancelOperation(operationId: string): Promise<CodexSidecarStatus>;
+  recoverRuntime(): Promise<CodexRuntimeDiagnostics>;
+  restart(providerId?: string, operationId?: string): Promise<RuntimeRestartResult>;
   providers(): Promise<CodexBridgeProvider[]>;
   startThread(input: CodexStartThreadInput): Promise<CodexThreadStartResult>;
   startTurn(input: CodexStartTurnInput): Promise<CodexTurnStartResult>;
@@ -60,8 +65,17 @@ export const codexAgentRuntimePort: AgentRuntimePort = {
   desktopBuildSmokeReport() {
     return invokeDesktop<DesktopBuildSmokeResult | null>("codex_desktop_build_smoke_report");
   },
-  restart(providerId = "deepseek") {
-    return invokeDesktop<RuntimeRestartResult>("codex_runtime_restart", { providerId });
+  diagnostics() {
+    return invokeDesktop<CodexRuntimeDiagnostics>("codex_runtime_diagnostics");
+  },
+  cancelOperation(operationId) {
+    return invokeDesktop<CodexSidecarStatus>("codex_operation_cancel", { operationId });
+  },
+  recoverRuntime() {
+    return invokeDesktop<CodexRuntimeDiagnostics>("codex_runtime_recover");
+  },
+  restart(providerId = "deepseek", operationId) {
+    return invokeDesktop<RuntimeRestartResult>("codex_runtime_restart", { providerId, operationId });
   },
   providers() {
     return invokeDesktop<CodexBridgeProvider[]>("orbit_bridge_provider_catalog");
@@ -88,7 +102,7 @@ export const codexAgentRuntimePort: AgentRuntimePort = {
       cleanups.push(await listen<CodexTurn>("codex://turn", (event) => {
         if (!disposed) listener({ type: "turn", payload: event.payload });
       }));
-      cleanups.push(await listen<{ status: CodexRuntimeStatus; error?: string }>("codex://status", (event) => {
+      cleanups.push(await listen<{ status: CodexRuntimeStatus; error?: string; operationId?: string; connectionId?: string; operationKind?: string; sidecarStatus?: CodexSidecarStatus }>("codex://status", (event) => {
         if (!disposed) listener({ type: "status", payload: event.payload });
       }));
       cleanups.push(await listen<{ message: string }>("codex://error", (event) => {

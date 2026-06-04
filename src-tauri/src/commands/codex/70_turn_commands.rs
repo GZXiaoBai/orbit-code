@@ -112,6 +112,18 @@ fn codex_turn_start_blocking(app: AppHandle, input: CodexTurnStartInput) -> Code
         completed_at: None,
     };
     if input.mode == "build" && input.provider_id != "deepseek" {
+        begin_runtime_operation(
+            input.operation_id.clone(),
+            "build",
+            Some(input.thread_id.clone()),
+            Some(running_turn.id.clone()),
+            Duration::from_secs(25),
+        );
+        patch_runtime_operation_status(
+            "failed",
+            Some("failed"),
+            Some(format!("{} is discovery-only until its Codex bridge adapter is verified", input.provider_id)),
+        );
         return emit_failed_turn_start(
             &app,
             &running_turn,
@@ -129,6 +141,13 @@ fn codex_turn_start_blocking(app: AppHandle, input: CodexTurnStartInput) -> Code
         );
     }
     if codex_turn_route(&input) == CodexTurnRoute::DirectProviderPlan {
+        begin_runtime_operation(
+            input.operation_id.clone(),
+            "plan",
+            Some(input.thread_id.clone()),
+            Some(running_turn.id.clone()),
+            Duration::from_secs(25),
+        );
         emit_codex_turn(&app, &running_turn);
         let background_app = app.clone();
         let background_input = input.clone();
@@ -139,22 +158,33 @@ fn codex_turn_start_blocking(app: AppHandle, input: CodexTurnStartInput) -> Code
                 &background_input,
                 &background_turn.id,
             ) {
-                Ok(_) => emit_codex_turn(
-                    &background_app,
-                    &CodexTurn {
+                Ok(_) => {
+                    patch_runtime_operation_status("completed", Some("completed"), None);
+                    emit_codex_turn(
+                        &background_app,
+                        &CodexTurn {
                         status: "completed".to_string(),
                         completed_at: Some(now_iso()),
                         ..background_turn
-                    },
-                ),
+                        },
+                    );
+                    emit_runtime_status(
+                        &background_app,
+                        "ready",
+                        None,
+                        background_input.operation_id.clone(),
+                        Some("plan".to_string()),
+                    );
+                }
                 Err(error) => {
+                    patch_runtime_operation_status("failed", Some("failed"), Some(error.clone()));
                     let item = CodexItem {
                         id: id("codex-error"),
                         thread_id: background_input.thread_id.clone(),
                         turn_id: Some(background_turn.id.clone()),
                         kind: "error".to_string(),
                         title: "Plan Failed".to_string(),
-                        text: error,
+                        text: error.clone(),
                         status: "failed".to_string(),
                         created_at: background_turn.started_at.clone(),
                         metadata: Some(json!({
@@ -173,6 +203,13 @@ fn codex_turn_start_blocking(app: AppHandle, input: CodexTurnStartInput) -> Code
                             ..background_turn
                         },
                     );
+                    emit_runtime_status(
+                        &background_app,
+                        "error",
+                        Some(error),
+                        background_input.operation_id.clone(),
+                        Some("plan".to_string()),
+                    );
                 }
             }
         });
@@ -184,6 +221,14 @@ fn codex_turn_start_blocking(app: AppHandle, input: CodexTurnStartInput) -> Code
     if let Err(error) = super::get_provider_credential("deepseek").and_then(|credential| {
         credential.ok_or_else(|| deepseek_missing_credential_error("deepseek").message)
     }) {
+        begin_runtime_operation(
+            input.operation_id.clone(),
+            "build",
+            Some(input.thread_id.clone()),
+            Some(running_turn.id.clone()),
+            Duration::from_secs(25),
+        );
+        patch_runtime_operation_status("failed", Some("failed"), Some(error.clone()));
         return emit_failed_turn_start(
             &app,
             &running_turn,
@@ -197,35 +242,29 @@ fn codex_turn_start_blocking(app: AppHandle, input: CodexTurnStartInput) -> Code
             }),
         );
     }
-    if let Err(error) = ensure_persistent_app_server(&app, &input.provider_id) {
-        return emit_failed_turn_start(
-            &app,
-            &running_turn,
-            "Codex Build blocked",
-            error,
-            json!({
-                "code": "codex_build_runtime_not_ready",
-                "providerId": input.provider_id,
-                "model": input.model,
-                "runtimeMode": runtime_mode
-            }),
-        );
-    }
     emit_codex_turn(&app, &running_turn);
     let background_app = app.clone();
     let background_input = input.clone();
     let background_turn = running_turn.clone();
     thread::spawn(move || {
+        begin_runtime_operation(
+            background_input.operation_id.clone(),
+            "build",
+            Some(background_input.thread_id.clone()),
+            Some(background_turn.id.clone()),
+            Duration::from_secs(25),
+        );
         let result = persistent_start_turn(&background_app, &background_input, &background_turn.id)
             .map(|_| ());
         if let Err(error) = result {
+            patch_runtime_operation_status("failed", Some("failed"), Some(error.clone()));
             let item = CodexItem {
                 id: id("codex-error"),
                 thread_id: background_input.thread_id.clone(),
                 turn_id: Some(background_turn.id.clone()),
                 kind: "error".to_string(),
                 title: "Codex Turn Failed".to_string(),
-                text: error,
+                text: error.clone(),
                 status: "failed".to_string(),
                 created_at: background_turn.started_at.clone(),
                 metadata: Some(json!({
@@ -242,6 +281,13 @@ fn codex_turn_start_blocking(app: AppHandle, input: CodexTurnStartInput) -> Code
                     completed_at: Some(now_iso()),
                     ..background_turn
                 },
+            );
+            emit_runtime_status(
+                &background_app,
+                "error",
+                Some(error),
+                background_input.operation_id.clone(),
+                Some("build".to_string()),
             );
         }
     });
@@ -414,7 +460,8 @@ fn run_codex_turn_through_orbit_bridge(
     input: &CodexTurnStartInput,
     turn_id: &str,
 ) -> Result<Vec<CodexItem>, String> {
-    let provider_kind = direct_plan_provider_kind(&input.provider_id)?;
+    let provider_kind =
+        direct_plan_provider_kind(&input.provider_id, input.base_url.as_deref())?;
     let api_key = if provider_kind == DirectPlanProviderKind::Ollama {
         None
     } else {
@@ -440,8 +487,9 @@ fn run_codex_turn_through_orbit_bridge(
     );
     let mut items = match provider_kind {
         DirectPlanProviderKind::OpenAiCompatible => {
+            let api_model = direct_plan_api_model(&input.provider_id, &input.model);
             let payload = json!({
-                "model": input.model,
+                "model": api_model,
                 "messages": [
                     { "role": "system", "content": system },
                     { "role": "user", "content": user_content }
@@ -452,6 +500,7 @@ fn run_codex_turn_through_orbit_bridge(
             post_deepseek_chat_streaming(
                 app,
                 &input.provider_id,
+                input.base_url.as_deref(),
                 api_key.as_deref().unwrap_or_default(),
                 &payload,
                 &input.thread_id,

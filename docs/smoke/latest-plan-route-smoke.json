@@ -1,10 +1,10 @@
 {
-  "id": "plan-route-smoke-2026-06-01T07-51-22-039Z",
+  "id": "plan-route-smoke-2026-06-04T06-28-32-288Z",
   "runtime": "codex-sidecar.v1",
   "provider": "deepseek",
   "scope": "Focused workbench smoke for ordinary Plan/chat submissions. It verifies the desktop invoke route sends direct-deepseek-plan to codex_turn_start and does not preflight or restart Codex app-server after submit.",
-  "startedAt": "2026-06-01T07:51:12.066Z",
-  "completedAt": "2026-06-01T07:51:22.039Z",
+  "startedAt": "2026-06-04T06:28:25.605Z",
+  "completedAt": "2026-06-04T06:28:32.288Z",
   "result": "verified",
   "acceptanceCriteria": [
     {
@@ -12,7 +12,7 @@
       "label": "Focused Playwright route test executed.",
       "status": "verified",
       "evidence": {
-        "testFile": "e2e/run-controls.spec.ts:403",
+        "testFile": "e2e/run-controls.spec.ts",
         "testName": "desktop Plan submission uses direct DeepSeek route without app-server preflight"
       }
     },
@@ -42,10 +42,12 @@
     "args": [
       "playwright",
       "test",
-      "e2e/run-controls.spec.ts:403"
+      "e2e/run-controls.spec.ts",
+      "-g",
+      "desktop Plan submission uses direct DeepSeek route without app-server preflight"
     ],
     "status": 0,
-    "stdoutTail": "\nRunning 1 test using 1 worker\n\n  ✓  1 e2e/run-controls.spec.ts:403:3 › Orbit Code — Run Controls › desktop Plan submission uses direct DeepSeek route without app-server preflight (4.2s)\n\n  1 passed (9.0s)\n",
-    "stderrTail": "(node:20111) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n(node:20111) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n"
+    "stdoutTail": "\nRunning 1 test using 1 worker\n\n  ✓  1 e2e/run-controls.spec.ts:447:3 › Orbit Code — Run Controls › desktop Plan submission uses direct DeepSeek route without app-server preflight (2.2s)\n\n  1 passed (5.5s)\n",
+    "stderrTail": "\u001b[2m[WebServer] \u001b[22m(node:88686) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n\u001b[2m[WebServer] \u001b[22m(Use `node --trace-warnings ...` to show where the warning was created)\n(node:88689) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n(node:88689) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n"
   }
 }

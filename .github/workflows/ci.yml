@@ -80,20 +80,25 @@ jobs:
       - name: Install Linux WebDriver dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y sqlite3 webkit2gtk-driver xvfb libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+          sudo apt-get install -y dbus-x11 sqlite3 webkit2gtk-driver xvfb libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
       - run: npm ci
       - name: Install tauri-driver
         run: cargo install tauri-driver --locked
       - name: Verify desktop WebDriver readiness
         run: npm run smoke:desktop-readiness
       - name: Build debug Tauri app for desktop smoke
-        run: npm run tauri build -- --debug
+        timeout-minutes: 20
+        run: |
+          npm run prepare:codex-sidecar
+          npm run build
+          cargo build --manifest-path src-tauri/Cargo.toml
+          test -x src-tauri/target/debug/orbit-code
       - name: Verify packaged desktop window smoke
         timeout-minutes: 5
-        run: xvfb-run -a npm run smoke:desktop-plan
+        run: dbus-run-session -- xvfb-run -a npm run smoke:desktop-plan
       - name: Verify packaged desktop Build smoke readiness
         timeout-minutes: 5
-        run: xvfb-run -a npm run smoke:desktop-build
+        run: dbus-run-session -- xvfb-run -a npm run smoke:desktop-build
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -119,30 +124,35 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
+      - name: Bootstrap encrypted Orbit live vault
+        run: npm run smoke:live-vault:bootstrap
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Install Linux WebDriver dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y webkit2gtk-driver xvfb libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+          sudo apt-get install -y dbus-x11 sqlite3 webkit2gtk-driver xvfb libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
       - run: npm ci
       - name: Install tauri-driver
         run: cargo install tauri-driver --locked
-      - name: Bootstrap encrypted Orbit live vault
-        run: npm run smoke:live-vault:bootstrap
       - name: Build debug Tauri app for live desktop Build smoke
-        run: npm run tauri build -- --debug
+        timeout-minutes: 20
+        run: |
+          npm run prepare:codex-sidecar
+          npm run build
+          cargo build --manifest-path src-tauri/Cargo.toml
+          test -x src-tauri/target/debug/orbit-code
       - name: Verify live vault and DeepSeek readiness
         run: npm run smoke:deepseek:live-readiness
       - name: Run approved desktop Build live smoke
         run: |
-          xvfb-run -a npm run smoke:desktop-build
+          dbus-run-session -- xvfb-run -a npm run smoke:desktop-build
           cp docs/smoke/latest-tauri-webdriver-build-smoke.json docs/smoke/latest-tauri-webdriver-build-approve-smoke.json
       - name: Run denied desktop Build live smoke
         env:
           ORBIT_DESKTOP_BUILD_DENY: '1'
         run: |
-          xvfb-run -a npm run smoke:desktop-build
+          dbus-run-session -- xvfb-run -a npm run smoke:desktop-build
           cp docs/smoke/latest-tauri-webdriver-build-smoke.json docs/smoke/latest-tauri-webdriver-build-deny-smoke.json
       - uses: actions/upload-artifact@v4
         if: always()
@@ -152,6 +162,7 @@ jobs:
             docs/smoke/latest-tauri-webdriver-build-smoke.json
             docs/smoke/latest-tauri-webdriver-build-approve-smoke.json
             docs/smoke/latest-tauri-webdriver-build-deny-smoke.json
+            docs/smoke/latest-live-vault-bootstrap.json
             docs/smoke/latest-codex-live-readiness.json
 
   build:

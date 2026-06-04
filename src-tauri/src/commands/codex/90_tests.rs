@@ -23,28 +23,40 @@ mod tests {
         let ids: Vec<String> = catalog.iter().map(|provider| provider.id.clone()).collect();
         for required in [
             "deepseek",
+            "openai",
+            "anthropic",
+            "google",
             "openrouter",
-            "qwen",
-            "siliconflow",
-            "kimi",
+            "xai",
+            "mistral",
             "groq",
+            "qwen",
+            "kimi",
+            "siliconflow",
+            "zhipu",
+            "together",
+            "fireworks",
+            "cerebras",
+            "nvidia",
+            "azure-openai",
+            "ollama",
+            "custom-openai",
         ] {
             assert!(ids.contains(&required.to_string()));
         }
-        assert!(
-            catalog
-                .iter()
-                .find(|provider| provider.id == "deepseek")
-                .unwrap()
-                .supported
-        );
-        assert!(
-            !catalog
-                .iter()
-                .find(|provider| provider.id == "openrouter")
-                .unwrap()
-                .supported
-        );
+        let supported: Vec<String> = catalog
+            .iter()
+            .filter(|provider| provider.supported)
+            .map(|provider| provider.id.clone())
+            .collect();
+        assert_eq!(supported, vec!["deepseek".to_string()]);
+        for provider in catalog.iter().filter(|provider| !provider.supported) {
+            assert!(provider
+                .blocked_reason
+                .as_deref()
+                .unwrap_or("")
+                .contains("Build blocked"));
+        }
     }
 
     #[test]
@@ -69,6 +81,10 @@ mod tests {
             .request("thread/start", json!({ "workspace": "/tmp" }))
             .unwrap();
         assert!(first_raw.contains("\"method\":\"initialize\""));
+        assert_eq!(
+            serde_json::from_str::<Value>(&first_raw).unwrap()["jsonrpc"],
+            "2.0"
+        );
         assert_eq!(client.pending_len(), 2);
 
         let notification = client
@@ -115,6 +131,170 @@ mod tests {
             }
         );
         assert_eq!(client.pending_len(), 0);
+    }
+
+    #[test]
+    fn outbound_app_server_payloads_are_json_rpc_2_0() {
+        assert_eq!(
+            app_server_json_rpc_payload(&json!({ "method": "initialized" }))["jsonrpc"],
+            "2.0"
+        );
+        assert_eq!(
+            app_server_json_rpc_payload(&json!({ "id": 7, "result": { "decision": "accept" } }))["jsonrpc"],
+            "2.0"
+        );
+        assert_eq!(
+            app_server_json_rpc_payload(&json!({
+                "id": 8,
+                "error": { "code": "not_ready", "message": "No active turn" }
+            }))["jsonrpc"],
+            "2.0"
+        );
+        assert_eq!(
+            app_server_json_rpc_payload(&json!({ "jsonrpc": "2.0", "id": 9, "result": true }))["jsonrpc"],
+            "2.0"
+        );
+        assert_eq!(app_server_json_rpc_payload(&json!({ "plain": true }))["plain"], true);
+    }
+
+    #[test]
+    fn codex_app_server_notification_protocol_methods_are_classified() {
+        for method in [
+            "item/started",
+            "item/completed",
+            "rawResponseItem/completed",
+            "item/agentMessage/delta",
+            "item/plan/delta",
+            "item/reasoning/textDelta",
+            "item/reasoning/summaryTextDelta",
+            "item/commandExecution/outputDelta",
+            "command/exec/outputDelta",
+            "process/outputDelta",
+            "item/fileChange/outputDelta",
+            "item/fileChange/patchUpdated",
+            "thread/tokenUsage/updated",
+            "error",
+            "warning",
+            "guardianWarning",
+            "configWarning",
+        ] {
+            assert_eq!(
+                codex_event_for_notification(method),
+                CODEX_EVENT_ITEM,
+                "{method} should project to Orbit item events"
+            );
+        }
+
+        for method in [
+            "turn/started",
+            "turn/completed",
+            "thread/status/changed",
+        ] {
+            assert_eq!(
+                codex_event_for_notification(method),
+                CODEX_EVENT_TURN,
+                "{method} should project to Orbit turn events"
+            );
+        }
+
+        assert_eq!(
+            codex_event_for_notification("thread/started"),
+            CODEX_EVENT_STATUS
+        );
+    }
+
+    #[test]
+    fn fake_app_server_lifecycle_interleaves_responses_notifications_and_server_requests() {
+        let mut client = CodexJsonRpcClient::new();
+        let (initialize_id, _) = client.request("initialize", json!({})).unwrap();
+        let (thread_start_id, _) = client
+            .request("thread/start", json!({ "cwd": "/tmp/orbit" }))
+            .unwrap();
+        let (turn_start_id, _) = client
+            .request("turn/start", json!({ "threadId": "app-thread-1" }))
+            .unwrap();
+        assert_eq!(client.pending_len(), 3);
+
+        let lifecycle = [
+            (
+                format!(r#"{{"id":{initialize_id},"result":{{"serverInfo":{{"name":"codex-app-server"}}}}}}"#),
+                "initialize response",
+            ),
+            (
+                r#"{"method":"thread/started","params":{"thread":{"id":"app-thread-1"}}}"#.to_string(),
+                "thread started notification",
+            ),
+            (
+                format!(r#"{{"id":{thread_start_id},"result":{{"thread":{{"id":"app-thread-1"}}}}}}"#),
+                "thread/start response",
+            ),
+            (
+                format!(r#"{{"id":{turn_start_id},"result":{{"turn":{{"id":"app-turn-1","threadId":"app-thread-1"}}}}}}"#),
+                "turn/start response",
+            ),
+            (
+                r#"{"method":"turn/started","params":{"turn":{"id":"app-turn-1","threadId":"app-thread-1"}}}"#.to_string(),
+                "turn started notification",
+            ),
+            (
+                r#"{"method":"item/agentMessage/delta","params":{"itemId":"msg-1","delta":"hello"}}"#.to_string(),
+                "assistant delta notification",
+            ),
+            (
+                r#"{"id":51,"method":"item/commandExecution/requestApproval","params":{"itemId":"cmd-1","command":"npm test","cwd":"/tmp/orbit"}}"#.to_string(),
+                "approval server request",
+            ),
+            (
+                r#"{"method":"thread/tokenUsage/updated","params":{"inputTokens":10,"outputTokens":5,"totalTokens":15}}"#.to_string(),
+                "usage notification",
+            ),
+            (
+                r#"{"method":"turn/completed","params":{"turn":{"id":"app-turn-1","threadId":"app-thread-1","status":"completed","items":[{"type":"agentMessage","id":"msg-1","text":"hello"}]}}}"#.to_string(),
+                "turn completed notification",
+            ),
+        ];
+
+        let mut notification_events = Vec::new();
+        let mut server_requests = Vec::new();
+        for (line, label) in lifecycle {
+            match client.handle_line(&line) {
+                CodexJsonRpcDispatch::Response { id, .. } => {
+                    assert!(
+                        [initialize_id, thread_start_id, turn_start_id].contains(&id),
+                        "unexpected response id from {label}"
+                    );
+                }
+                CodexJsonRpcDispatch::Notification { method, .. } => {
+                    notification_events.push(codex_event_for_notification(&method));
+                }
+                CodexJsonRpcDispatch::ServerRequest { id, method, params } => {
+                    server_requests.push((id, method, params));
+                }
+                other => panic!("{label} produced unexpected dispatch: {other:?}"),
+            }
+        }
+
+        assert_eq!(client.pending_len(), 0);
+        assert_eq!(
+            notification_events,
+            vec![
+                CODEX_EVENT_STATUS,
+                CODEX_EVENT_TURN,
+                CODEX_EVENT_ITEM,
+                CODEX_EVENT_ITEM,
+                CODEX_EVENT_TURN,
+            ]
+        );
+        assert_eq!(server_requests.len(), 1);
+        assert_eq!(server_requests[0].0, 51);
+        assert_eq!(
+            server_requests[0].1,
+            "item/commandExecution/requestApproval"
+        );
+        assert_eq!(
+            server_requests[0].2.as_ref().unwrap()["command"],
+            "npm test"
+        );
     }
 
     #[test]
@@ -208,6 +388,56 @@ mod tests {
         assert!(guard.active_context.is_none());
         drop(guard);
         cleanup_active_app_server();
+    }
+
+    #[test]
+    fn restart_cleanup_releases_pending_responses() {
+        let _lock = test_runtime_state_lock();
+        cleanup_active_app_server();
+        let (tx, rx) = mpsc::channel::<Result<Value, String>>();
+        {
+            let mut guard = active_app_server().lock().unwrap();
+            guard.pending_responses.insert(99, tx);
+            guard.pending_requests.insert(
+                "approval-1".to_string(),
+                PendingServerRequest {
+                    request_id: 101,
+                    method: "item/commandExecution/requestApproval".to_string(),
+                    params: Some(json!({ "command": "npm test" })),
+                    action_id: "approval-1".to_string(),
+                    orbit_thread_id: "orbit-thread".to_string(),
+                    orbit_turn_id: Some("orbit-turn".to_string()),
+                },
+            );
+            guard.provider_id = Some("deepseek".to_string());
+            guard.app_thread_id = Some("app-thread".to_string());
+            guard.app_turn_id = Some("turn-1".to_string());
+            guard
+                .orbit_to_app_thread
+                .insert("orbit-thread".to_string(), "app-thread".to_string());
+            guard.active_context = Some(AppServerRunContext {
+                orbit_thread_id: "orbit-thread".to_string(),
+                orbit_turn_id: Some("orbit-turn".to_string()),
+                app_thread_id: "app-thread".to_string(),
+                app_turn_id: Some("turn-1".to_string()),
+                mode: "build".to_string(),
+            });
+        }
+
+        cleanup_active_app_server();
+
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap().unwrap_err(),
+            "Codex app-server stopped"
+        );
+        let guard = active_app_server().lock().unwrap();
+        assert!(guard.pending_responses.is_empty());
+        assert!(guard.pending_requests.is_empty());
+        assert!(guard.provider_id.is_none());
+        assert!(guard.app_thread_id.is_none());
+        assert!(guard.app_turn_id.is_none());
+        assert!(guard.orbit_to_app_thread.is_empty());
+        assert!(guard.active_context.is_none());
     }
 
     #[test]
@@ -328,6 +558,20 @@ mod tests {
                 app_turn_id: Some("app-turn".to_string()),
                 mode: "build".to_string(),
             });
+            guard.active_operation = Some(RuntimeOperationSnapshot {
+                id: "op-build".to_string(),
+                connection_id: None,
+                kind: "build".to_string(),
+                status: "running".to_string(),
+                thread_id: Some("orbit-thread".to_string()),
+                turn_id: Some("orbit-turn".to_string()),
+                started_at: "unix-ms:1".to_string(),
+                deadline_at: "unix-ms:2".to_string(),
+                last_event_at: None,
+                cancelled: None,
+                final_state: None,
+                error: None,
+            });
             guard.sequence = 42;
         }
 
@@ -346,7 +590,170 @@ mod tests {
         assert!(guard.orbit_to_app_thread.is_empty());
         assert!(guard.app_to_orbit_thread.is_empty());
         assert!(guard.active_context.is_none());
+        assert_eq!(
+            guard.active_operation.as_ref().map(|operation| operation.status.as_str()),
+            Some("failed")
+        );
+        assert_eq!(
+            guard.active_operation.as_ref().and_then(|operation| operation.final_state.as_deref()),
+            Some("failed")
+        );
         assert_eq!(guard.sequence, 0);
+    }
+
+    #[test]
+    fn stale_app_server_reader_cleanup_does_not_clear_new_connection() {
+        let _lock = test_runtime_state_lock();
+        cleanup_active_app_server();
+        {
+            let mut guard = active_app_server().lock().unwrap();
+            guard.connection_id = Some("new-connection".to_string());
+            guard.app_thread_id = Some("new-app-thread".to_string());
+            guard.provider_id = Some("deepseek".to_string());
+            guard
+                .orbit_to_app_thread
+                .insert("orbit-thread".to_string(), "new-app-thread".to_string());
+        }
+
+        clear_active_app_server_after_failure_for_connection(
+            "old reader eof",
+            false,
+            Some("old-connection"),
+        );
+
+        let guard = active_app_server().lock().unwrap();
+        assert_eq!(guard.connection_id.as_deref(), Some("new-connection"));
+        assert_eq!(guard.app_thread_id.as_deref(), Some("new-app-thread"));
+        assert_eq!(guard.provider_id.as_deref(), Some("deepseek"));
+        assert_eq!(
+            guard.orbit_to_app_thread.get("orbit-thread").map(String::as_str),
+            Some("new-app-thread")
+        );
+    }
+
+    #[test]
+    fn runtime_operation_cancel_marks_operation_and_releases_pending_state() {
+        let _lock = test_runtime_state_lock();
+        cleanup_active_app_server();
+        let (tx, rx) = mpsc::channel::<Result<Value, String>>();
+        begin_runtime_operation(
+            Some("op-cancel".to_string()),
+            "build",
+            Some("orbit-thread".to_string()),
+            Some("orbit-turn".to_string()),
+            Duration::from_secs(25),
+        );
+        {
+            let mut guard = active_app_server().lock().unwrap();
+            guard.pending_responses.insert(111, tx);
+            guard.pending_requests.insert(
+                "approval-1".to_string(),
+                PendingServerRequest {
+                    request_id: 112,
+                    method: "item/commandExecution/requestApproval".to_string(),
+                    params: Some(json!({ "command": "npm test" })),
+                    action_id: "approval-1".to_string(),
+                    orbit_thread_id: "orbit-thread".to_string(),
+                    orbit_turn_id: Some("orbit-turn".to_string()),
+                },
+            );
+        }
+
+        cleanup_active_app_server();
+
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap().unwrap_err(),
+            "Codex app-server stopped"
+        );
+        let guard = active_app_server().lock().unwrap();
+        let operation = guard.active_operation.as_ref().expect("operation snapshot");
+        assert_eq!(operation.id, "op-cancel");
+        assert_eq!(operation.status, "cancelled");
+        assert_eq!(operation.final_state.as_deref(), Some("cancelled"));
+        assert_eq!(operation.cancelled, Some(true));
+        assert!(guard.pending_responses.is_empty());
+        assert!(guard.pending_requests.is_empty());
+    }
+
+    #[test]
+    fn active_build_recover_clears_pending_approval_and_marks_operation_cancelled() {
+        let _lock = test_runtime_state_lock();
+        cleanup_active_app_server();
+        let (tx, rx) = mpsc::channel::<Result<Value, String>>();
+        {
+            let mut guard = active_app_server().lock().unwrap();
+            guard.connection_id = Some("codex-connection-active".to_string());
+            guard.pending_responses.insert(201, tx);
+            guard.pending_requests.insert(
+                "approval-active".to_string(),
+                PendingServerRequest {
+                    request_id: 202,
+                    method: "item/commandExecution/requestApproval".to_string(),
+                    params: Some(json!({ "command": "npm test", "cwd": "/tmp/orbit" })),
+                    action_id: "approval-active".to_string(),
+                    orbit_thread_id: "orbit-thread-active".to_string(),
+                    orbit_turn_id: Some("orbit-turn-active".to_string()),
+                },
+            );
+            guard.provider_id = Some("deepseek".to_string());
+            guard.app_thread_id = Some("app-thread-active".to_string());
+            guard.app_turn_id = Some("app-turn-active".to_string());
+            guard
+                .orbit_to_app_thread
+                .insert("orbit-thread-active".to_string(), "app-thread-active".to_string());
+            guard
+                .app_to_orbit_thread
+                .insert("app-thread-active".to_string(), "orbit-thread-active".to_string());
+            guard.active_context = Some(AppServerRunContext {
+                orbit_thread_id: "orbit-thread-active".to_string(),
+                orbit_turn_id: Some("orbit-turn-active".to_string()),
+                app_thread_id: "app-thread-active".to_string(),
+                app_turn_id: Some("app-turn-active".to_string()),
+                mode: "build".to_string(),
+            });
+            guard.active_operation = Some(RuntimeOperationSnapshot {
+                id: "op-build-active".to_string(),
+                connection_id: Some("codex-connection-active".to_string()),
+                kind: "build".to_string(),
+                status: "running".to_string(),
+                thread_id: Some("orbit-thread-active".to_string()),
+                turn_id: Some("orbit-turn-active".to_string()),
+                started_at: "unix-ms:1".to_string(),
+                deadline_at: "unix-ms:60000".to_string(),
+                last_event_at: None,
+                cancelled: None,
+                final_state: None,
+                error: None,
+            });
+            guard.sequence = 99;
+            guard.last_event_at = Some("unix-ms:10".to_string());
+        }
+
+        cleanup_active_app_server();
+
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap().unwrap_err(),
+            "Codex app-server stopped"
+        );
+        let guard = active_app_server().lock().unwrap();
+        assert!(guard.connection_id.is_none());
+        assert!(guard.pending_responses.is_empty());
+        assert!(guard.pending_requests.is_empty());
+        assert!(guard.provider_id.is_none());
+        assert!(guard.app_thread_id.is_none());
+        assert!(guard.app_turn_id.is_none());
+        assert!(guard.orbit_to_app_thread.is_empty());
+        assert!(guard.app_to_orbit_thread.is_empty());
+        assert!(guard.active_context.is_none());
+        assert_eq!(guard.sequence, 0);
+        assert!(guard.last_event_at.is_some());
+        let operation = guard.active_operation.as_ref().expect("operation snapshot");
+        assert_eq!(operation.id, "op-build-active");
+        assert_eq!(operation.kind, "build");
+        assert_eq!(operation.status, "cancelled");
+        assert_eq!(operation.final_state.as_deref(), Some("cancelled"));
+        assert_eq!(operation.cancelled, Some(true));
+        assert_eq!(operation.turn_id.as_deref(), Some("orbit-turn-active"));
     }
 
     #[test]
@@ -534,20 +941,101 @@ mod tests {
     }
 
     #[test]
+    fn thread_start_is_ui_only_and_does_not_spawn_app_server() {
+        let _lock = test_runtime_state_lock();
+        cleanup_active_app_server();
+        if let Ok(mut guard) = state().lock() {
+            guard.last_error = Some("previous diagnostic".to_string());
+        }
+
+        let result = codex_thread_start_blocking(CodexThreadStartInput {
+            workspace_path: "/tmp/orbit".to_string(),
+            thread_id: Some("orbit-thread".to_string()),
+            title: Some("Orbit thread".to_string()),
+            mode: "build".to_string(),
+            provider_id: "deepseek".to_string(),
+            model: "deepseek-v4-flash".to_string(),
+        });
+
+        assert_eq!(result.thread.id, "orbit-thread");
+        assert!(!result.sidecar.running);
+        let guard = active_app_server().lock().unwrap();
+        assert!(guard.stdin.is_none());
+        assert!(guard.child.is_none());
+        assert!(guard.orbit_to_app_thread.is_empty());
+    }
+
+    #[test]
+    fn direct_plan_operation_tags_runtime_events_without_sidecar() {
+        let _lock = test_runtime_state_lock();
+        cleanup_active_app_server();
+        begin_runtime_operation(
+            Some("op-plan".to_string()),
+            "plan",
+            Some("orbit-thread".to_string()),
+            Some("orbit-turn".to_string()),
+            Duration::from_secs(25),
+        );
+
+        let guard = active_app_server().lock().unwrap();
+        let operation = guard.active_operation.as_ref().expect("operation snapshot");
+        assert_eq!(operation.id, "op-plan");
+        assert_eq!(operation.kind, "plan");
+        assert_eq!(operation.thread_id.as_deref(), Some("orbit-thread"));
+        assert_eq!(operation.turn_id.as_deref(), Some("orbit-turn"));
+        assert!(guard.stdin.is_none());
+        assert!(guard.child.is_none());
+    }
+
+    #[test]
     fn direct_plan_supports_openai_compatible_provider_urls() {
         assert_eq!(
-            openai_compatible_chat_url("openrouter").unwrap(),
+            openai_compatible_chat_url("openrouter", None).unwrap(),
             "https://openrouter.ai/api/v1/chat/completions"
         );
         assert_eq!(
-            openai_compatible_chat_url("qwen").unwrap(),
+            openai_compatible_chat_url("qwen", None).unwrap(),
             "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
         );
         assert_eq!(
-            openai_compatible_chat_url("kimi").unwrap(),
+            openai_compatible_chat_url("kimi", None).unwrap(),
             "https://api.moonshot.cn/v1/chat/completions"
         );
-        assert!(openai_compatible_chat_url("anthropic")
+        assert_eq!(
+            openai_compatible_chat_url("together", None).unwrap(),
+            "https://api.together.ai/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_compatible_chat_url("fireworks", None).unwrap(),
+            "https://api.fireworks.ai/inference/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_compatible_chat_url("cerebras", None).unwrap(),
+            "https://api.cerebras.ai/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_compatible_chat_url("nvidia", None).unwrap(),
+            "https://integrate.api.nvidia.com/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_compatible_chat_url(
+                "azure-openai",
+                Some("https://team-west.openai.azure.com/openai/v1")
+            )
+            .unwrap(),
+            "https://team-west.openai.azure.com/openai/v1/chat/completions"
+        );
+        assert!(openai_compatible_chat_url("azure-openai", None)
+            .unwrap_err()
+            .contains("requires a Base URL"));
+        assert_eq!(
+            openai_compatible_chat_url("custom-openai", Some("https://gateway.example/v1")).unwrap(),
+            "https://gateway.example/v1/chat/completions"
+        );
+        assert!(openai_compatible_chat_url("custom-openai", None)
+            .unwrap_err()
+            .contains("requires a Base URL"));
+        assert!(openai_compatible_chat_url("anthropic", None)
             .unwrap_err()
             .contains("direct Plan streaming"));
     }
@@ -555,20 +1043,40 @@ mod tests {
     #[test]
     fn direct_plan_routes_protocol_specific_providers() {
         assert_eq!(
-            direct_plan_provider_kind("deepseek").unwrap(),
+            direct_plan_provider_kind("deepseek", None).unwrap(),
             DirectPlanProviderKind::OpenAiCompatible
         );
         assert_eq!(
-            direct_plan_provider_kind("anthropic").unwrap(),
+            direct_plan_provider_kind("anthropic", None).unwrap(),
             DirectPlanProviderKind::Anthropic
         );
         assert_eq!(
-            direct_plan_provider_kind("google").unwrap(),
+            direct_plan_provider_kind("google", None).unwrap(),
             DirectPlanProviderKind::Google
         );
         assert_eq!(
-            direct_plan_provider_kind("ollama").unwrap(),
+            direct_plan_provider_kind("ollama", None).unwrap(),
             DirectPlanProviderKind::Ollama
+        );
+    }
+
+    #[test]
+    fn direct_plan_maps_deepseek_display_models_to_chat_api_models() {
+        assert_eq!(
+            direct_plan_api_model("deepseek", "deepseek-v4-pro"),
+            "deepseek-reasoner"
+        );
+        assert_eq!(
+            direct_plan_api_model("deepseek", "deepseek-v4-flash"),
+            "deepseek-chat"
+        );
+        assert_eq!(
+            direct_plan_api_model("deepseek", "deepseek-chat"),
+            "deepseek-chat"
+        );
+        assert_eq!(
+            direct_plan_api_model("openrouter", "deepseek-v4-pro"),
+            "deepseek-v4-pro"
         );
     }
 
@@ -590,6 +1098,49 @@ mod tests {
         assert_eq!(ollama["messages"][0]["role"], "system");
         assert_eq!(ollama["messages"][1]["role"], "user");
         assert_eq!(ollama["stream"], true);
+    }
+
+    #[test]
+    fn direct_plan_extracts_provider_stream_error_frames() {
+        assert_eq!(
+            provider_stream_error_message(&json!({ "error": "rate limit" })),
+            Some("rate limit".to_string())
+        );
+        assert_eq!(
+            provider_stream_error_message(&json!({ "type": "error", "error": { "message": "overloaded" } })),
+            Some("overloaded".to_string())
+        );
+        assert_eq!(
+            provider_stream_error_message(&json!({ "error": { "code": "quota_exceeded" } })),
+            Some("quota_exceeded".to_string())
+        );
+        assert_eq!(
+            provider_stream_error_message(&json!({ "choices": [{ "delta": { "content": "ok" } }] })),
+            None
+        );
+    }
+
+    #[test]
+    fn provider_errors_redact_unlocked_api_keys() {
+        let secret = "sk-orbit-secret-123";
+        let raw = format!("provider returned Authorization Bearer {secret} in diagnostics");
+        let redacted = redact_provider_secret(&raw, secret);
+        assert!(!redacted.contains(secret));
+        assert_eq!(
+            redacted,
+            "provider returned Authorization Bearer <redacted> in diagnostics"
+        );
+
+        let stream_error = provider_stream_error_message(&json!({
+            "error": { "message": format!("request rejected for key {secret}") }
+        }))
+        .unwrap();
+        let final_error = format!(
+            "deepseek stream error: {}",
+            redact_provider_secret(&stream_error, secret)
+        );
+        assert!(!final_error.contains(secret));
+        assert!(final_error.contains("<redacted>"));
     }
 
     #[test]
@@ -711,6 +1262,7 @@ mod tests {
             "tools": [{ "type": "function", "name": "run_command" }]
         });
         let translated = responses_to_deepseek_chat(&payload, "deepseek-chat");
+        assert_eq!(translated["model"], "deepseek-chat");
         assert_eq!(translated["messages"][0]["role"], "system");
         assert_eq!(translated["messages"][1]["content"], "Run tests.");
         assert_eq!(translated["tools"][0]["function"]["name"], "run_command");
@@ -739,6 +1291,51 @@ mod tests {
             .unwrap()
             .contains("Tool result for call-1"));
         assert_eq!(codex_translated["messages"][3]["role"], "user");
+        assert_eq!(
+            codex_translated["messages"][3]["content"],
+            "Tool result:\nlegacy tool output"
+        );
+
+        let tool_result_payload = json!({
+            "model": "deepseek-chat",
+            "input": [
+                { "type": "tool_result", "tool_call_id": "call-2", "content": [{ "type": "output_text", "text": "42" }] },
+                { "type": "tool_call_output", "call_id": "call-3", "output": { "ok": true } },
+                { "type": "message", "role": "unknown-provider-role", "content": "unknown roles become user" }
+            ]
+        });
+        let tool_result_translated = responses_to_deepseek_chat(&tool_result_payload, "deepseek-chat");
+        let tool_messages = tool_result_translated["messages"].as_array().unwrap();
+        assert!(tool_messages
+            .iter()
+            .all(|message| matches!(message["role"].as_str(), Some("system" | "user" | "assistant"))));
+        assert_eq!(
+            tool_result_translated["messages"][0]["content"],
+            "Tool result for call-2:\n42"
+        );
+        assert_eq!(
+            tool_result_translated["messages"][1]["content"],
+            "Tool result for call-3:\n{\"ok\":true}"
+        );
+        assert_eq!(tool_result_translated["messages"][2]["role"], "user");
+        assert_eq!(
+            tool_result_translated["messages"][2]["content"],
+            "unknown roles become user"
+        );
+
+        let pro_payload = json!({
+            "model": "deepseek-v4-pro",
+            "input": "Review this project."
+        });
+        let pro_translated = responses_to_deepseek_chat(&pro_payload, "deepseek-chat");
+        assert_eq!(pro_translated["model"], "deepseek-reasoner");
+
+        let flash_payload = json!({
+            "model": "deepseek-v4-flash",
+            "input": "Say hello."
+        });
+        let flash_translated = responses_to_deepseek_chat(&flash_payload, "deepseek-chat");
+        assert_eq!(flash_translated["model"], "deepseek-chat");
 
         let response = json!({
             "choices": [{
@@ -854,6 +1451,34 @@ mod tests {
             .unwrap()
             .iter()
             .any(|item| item["type"] == "function_call"));
+    }
+
+    #[test]
+    fn deepseek_sse_parser_rejects_mid_stream_error_frames() {
+        let frames = [
+            json!({
+                "id": "chatcmpl-error",
+                "model": "deepseek-chat",
+                "choices": [{ "delta": { "content": "partial" } }]
+            }),
+            json!({
+                "error": {
+                    "message": "rate limit exceeded",
+                    "type": "rate_limit_error"
+                }
+            }),
+        ]
+        .into_iter()
+        .map(|frame| format!("data: {}\n\n", serde_json::to_string(&frame).unwrap()))
+        .collect::<String>();
+
+        let error = deepseek_sse_reader_to_chat_response(
+            std::io::Cursor::new(frames.into_bytes()),
+            "deepseek-chat",
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "DeepSeek stream error: rate limit exceeded");
     }
 
     #[test]

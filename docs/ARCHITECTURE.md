@@ -17,6 +17,23 @@ flowchart LR
   Projection --> UI
 ```
 
+## Agent Runtime Decision
+
+Codex remains the production Build Agent runtime. Plan and ordinary chat stay on the direct provider route, while Build stays on `codex app-server` through the Orbit loopback Responses bridge.
+
+Do not replace Codex with Claude Code, Gemini CLI, OpenCode, or a revived Orbit tool loop by changing provider metadata. A replacement is a runtime architecture change, because the product UI consumes Codex-shaped threads, turns, items, approvals, terminal output, file edits, and usage.
+
+Alternative agents may be explored only as isolated adapters behind `AgentRuntimePort`. They must not be wired to production Build until they pass the conformance checklist encoded in `src/runtime/agentRuntimeConformance.ts`; `src/__tests__/codexRuntimeBoundary.test.ts` enforces that Codex remains the only production Build adapter until that evidence exists.
+
+The checklist covers:
+
+- Emits stable machine events that can be projected into Orbit thread, turn, item, approval, question, terminal, file edit, usage, and error records.
+- Supports interactive approval and user-input requests without bypassing Orbit's review UI.
+- Preserves workspace boundaries, stale-write checks, rollback/checkpoint behavior, and no-secret config generation.
+- Handles interrupt, retry, crash cleanup, pending request release, and session/thread mapping.
+- Has fixture, unit, smoke, and live desktop evidence equivalent to the Codex path.
+- Keeps non-verified runtimes and providers discovery-only or spike-only with explicit blocked reasons.
+
 ## Frontend
 
 - `src/state/useWorkspace.ts` is a workbench facade.
@@ -44,4 +61,4 @@ flowchart LR
 
 The provider registry remains metadata-only: labels, model discovery, capability flags, and vault key mapping. Build entry must be blocked for models that cannot reliably run through the Responses bridge.
 
-DeepSeek is the only Build provider in the current mainline. OpenRouter, Qwen/DashScope, SiliconFlow, Kimi, Groq, and custom OpenAI-compatible providers may be discovered but remain blocked until each adapter has live bridge evidence.
+DeepSeek is the only Build provider in the current mainline. OpenAI, Anthropic, Gemini, OpenRouter, xAI, Mistral, Groq, Qwen/DashScope, Kimi, SiliconFlow, Zhipu, Ollama, and custom OpenAI-compatible providers may be discovered but remain blocked until each adapter has live bridge evidence.

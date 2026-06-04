@@ -1446,10 +1446,10 @@
   border-bottom: 0;
 }
 
-.model-toggle-row span:first-child {
+.model-toggle-main {
   min-width: 0;
   display: grid;
-  gap: 2px;
+  gap: 4px;
 }
 
 .model-toggle-row strong {
@@ -1463,6 +1463,29 @@
 .model-toggle-row small {
   color: var(--text-muted);
   font-size: var(--font-size-xs);
+}
+
+.model-capability-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.model-capability-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 20px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-secondary) 74%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.3;
+  white-space: nowrap;
 }
 
 .model-switch {

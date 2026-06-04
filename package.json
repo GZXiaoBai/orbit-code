@@ -16,6 +16,7 @@
     "smoke:desktop-plan": "node scripts/run-tauri-webdriver-plan-smoke.mjs",
     "smoke:desktop-build": "node scripts/run-tauri-webdriver-build-smoke.mjs",
     "smoke:desktop-build:deny": "ORBIT_DESKTOP_BUILD_DENY=1 node scripts/run-tauri-webdriver-build-smoke.mjs",
+    "smoke:live-vault:export": "node scripts/export-live-vault-bundle.mjs",
     "smoke:live-vault:bootstrap": "node scripts/bootstrap-live-vault.mjs",
     "smoke:plan": "node scripts/run-plan-stability-smoke.mjs",
     "smoke:plan-route": "node scripts/run-plan-route-smoke.mjs",

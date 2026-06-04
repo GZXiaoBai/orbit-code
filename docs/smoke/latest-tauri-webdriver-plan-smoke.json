@@ -1,10 +1,15 @@
 {
-  "id": "tauri-webdriver-plan-smoke-2026-05-31T13-12-59-615Z",
+  "id": "tauri-webdriver-plan-smoke-2026-06-03T11-44-05-202Z",
   "scope": "Packaged-window smoke for Orbit Code through tauri-driver/WebDriver. Default mode verifies launch and workbench render; live Plan submit requires ORBIT_DESKTOP_PLAN_LIVE=1.",
-  "startedAt": "2026-05-31T13:12:59.614Z",
-  "completedAt": "2026-05-31T13:12:59.615Z",
+  "startedAt": "2026-06-03T11:44:05.197Z",
+  "completedAt": "2026-06-03T11:44:05.202Z",
   "result": "blocked",
   "livePlanEnabled": false,
+  "timeouts": {
+    "requestMs": 15000,
+    "sessionMs": 60000,
+    "overallMs": 45000
+  },
   "criteria": [
     {
       "id": "desktop-webdriver-platform",

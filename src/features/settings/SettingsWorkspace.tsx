@@ -26,6 +26,13 @@ import { discoverProviderModels } from "../../services/modelDiscovery";
 import type { CodexRuntimeSettingsModel, ProviderBridgeStatus, ProviderBuildGate } from "../../domain/codex";
 import { addCustomModel, buildProviderBuildGate, getProviderConfig, setImportedModels, setModelEnabled } from "../../state/modelSettings";
 import { getProviderSmokeRecord, setProviderSmokeRecord } from "../../state/providerSmoke";
+import {
+  AGENT_RUNTIME_ADAPTER_DECISIONS,
+  AGENT_RUNTIME_PROMOTION_REQUIREMENTS,
+  PRODUCTION_AGENT_RUNTIME_ADAPTER_ID,
+  agentRuntimeEvidenceSummary,
+} from "../../runtime/agentRuntimeConformance";
+import type { AgentRuntimeEvidenceStatus } from "../../runtime/agentRuntimeConformance";
 import type { WorkspaceProject } from "../../state/useProjectStore";
 import type { ProviderSettings } from "../../state/useWorkspace";
 import type {
@@ -38,6 +45,7 @@ import type {
   Theme,
   UsageSnapshot,
   ContextRule,
+  ModelCapability,
 } from "../../domain/types";
 import { SelectMenu } from "../../ui/primitives";
 
@@ -52,6 +60,7 @@ interface SettingsWorkspaceProps {
   codexRuntimeSettings: CodexRuntimeSettingsModel;
   providerBuildGate: ProviderBuildGate;
   onRestartRuntime?: (providerId?: string) => Promise<unknown> | unknown;
+  onRecoverRuntime?: () => Promise<unknown> | unknown;
   usageSnapshot: UsageSnapshot;
   theme: Theme;
   layoutPreferences: LayoutPreferences;
@@ -104,6 +113,7 @@ export function SettingsWorkspace({
   credentialVaultAutoUnlock,
   codexRuntimeSettings,
   onRestartRuntime,
+  onRecoverRuntime,
   usageSnapshot,
   theme,
   layoutPreferences,
@@ -174,6 +184,12 @@ export function SettingsWorkspace({
 
   const activeProvider = providerRegistry.find((provider) => provider.id === activeProviderId) || providerRegistry[0];
   const activeConfig = getProviderConfig(draftSettings, activeProvider.id);
+  const activeProviderBaseUrl = activeConfig.baseUrl || activeProvider.baseUrl || "";
+  const activeProviderBaseUrlRequired = activeProvider.id === "custom-openai" || activeProvider.id === "azure-openai";
+  const activeProviderBaseUrlMissing = activeProviderBaseUrlRequired && !activeProviderBaseUrl.trim();
+  const activeProviderApiKeyInputId = `provider-${activeProvider.id}-api-key`;
+  const activeProviderVaultPassphraseInputId = `provider-${activeProvider.id}-vault-passphrase`;
+  const activeProviderBaseUrlInputId = `provider-${activeProvider.id}-base-url`;
   const activeProviderHasVaultCredential = credentialVaultProviders.includes(activeProvider.id);
   const activeProviderHasDetectedKey = Boolean(apiKeys[activeProvider.id] || localApiKeys[activeProvider.id] || activeProviderHasVaultCredential);
   const activeModelForGate = activeConfig.defaultModel || activeConfig.enabledModels[0] || activeConfig.importedModels[0] || activeConfig.customModels[0] || "";
@@ -307,6 +323,12 @@ export function SettingsWorkspace({
   const importProviderModels = async (providerId: string) => {
     const provider = providerRegistry.find((item) => item.id === providerId);
     if (!provider) return;
+    const providerBaseUrl = draftSettings.configs[providerId]?.baseUrl || provider.baseUrl || "";
+    if ((providerId === "custom-openai" || providerId === "azure-openai") && !providerBaseUrl.trim()) {
+      const message = copy.language === "中" ? "请先填写 Base URL。" : "Enter a Base URL first.";
+      setImportStates((prev) => ({ ...prev, [providerId]: { state: "error", message } }));
+      return;
+    }
     const hasCredential = await ensureProviderCredential(providerId);
     if (!provider.capabilities.local && !hasCredential) {
       setImportStates((prev) => ({ ...prev, [providerId]: { state: "error", message: copy.settingsModal.importMissingKey } }));
@@ -333,6 +355,12 @@ export function SettingsWorkspace({
   const smokeProvider = async (providerId: string) => {
     const provider = providerRegistry.find((item) => item.id === providerId);
     if (!provider) return;
+    const providerBaseUrl = draftSettings.configs[providerId]?.baseUrl || provider.baseUrl || "";
+    if ((providerId === "custom-openai" || providerId === "azure-openai") && !providerBaseUrl.trim()) {
+      const message = copy.language === "中" ? "请先填写 Base URL。" : "Enter a Base URL first.";
+      setImportStates((prev) => ({ ...prev, [providerId]: { state: "error", message } }));
+      return;
+    }
     const hasCredential = await ensureProviderCredential(providerId);
     if (!provider.capabilities.local && !hasCredential) {
       commitSettings(setProviderSmokeRecord(draftSettings, providerId, {
@@ -509,14 +537,16 @@ export function SettingsWorkspace({
                 runtime={codexRuntimeSettings}
                 activeGate={activeProviderBuildGate}
                 bridgeStatus={activeProviderBridgeStatus}
-                onRestart={() => void onRestartRuntime?.(activeProvider.id)}
+                onRestart={() => onRestartRuntime?.(activeProvider.id)}
+                onRecover={onRecoverRuntime}
               />
               <section className="provider-credential-panel">
                 {!activeProvider.capabilities.local ? (
                   <>
                     <div className="setting-field">
-                      <label><Key size={14} />{activeProvider.apiKeyName || copy.settingsModal.apiKey}</label>
+                      <label htmlFor={activeProviderApiKeyInputId}><Key size={14} />{activeProvider.apiKeyName || copy.settingsModal.apiKey}</label>
                       <input
+                        id={activeProviderApiKeyInputId}
                         type="password"
                         value={localApiKeys[activeProvider.id] || ""}
                         onChange={(event) => setLocalApiKeys((prev) => ({ ...prev, [activeProvider.id]: event.target.value }))}
@@ -526,8 +556,9 @@ export function SettingsWorkspace({
                       />
                     </div>
                     <div className="setting-field">
-                      <label><ShieldAlert size={14} />{vaultCopy.passphrase}</label>
+                      <label htmlFor={activeProviderVaultPassphraseInputId}><ShieldAlert size={14} />{vaultCopy.passphrase}</label>
                       <input
+                        id={activeProviderVaultPassphraseInputId}
                         type="password"
                         value={vaultPassphrase}
                         onChange={(event) => setVaultPassphrase(event.target.value)}
@@ -567,10 +598,11 @@ export function SettingsWorkspace({
                   </>
                 ) : null}
                 <div className="setting-field">
-                  <label><Globe size={14} />{copy.settingsModal.baseUrl}</label>
+                  <label htmlFor={activeProviderBaseUrlInputId}><Globe size={14} />{copy.settingsModal.baseUrl}</label>
                   <input
+                    id={activeProviderBaseUrlInputId}
                     type="text"
-                    value={activeConfig.baseUrl || activeProvider.baseUrl || ""}
+                    value={activeProviderBaseUrl}
                     onChange={(event) => commitSettings({
                       ...draftSettings,
                       configs: {
@@ -580,9 +612,12 @@ export function SettingsWorkspace({
                     })}
                     placeholder={activeProvider.baseUrl || copy.settingsModal.defaultBaseUrl}
                   />
+                  {activeProviderBaseUrlMissing ? (
+                    <div className="security-notice"><Globe size={12} /><span>{copy.language === "中" ? "自定义 OpenAI-compatible 服务商需要 Base URL。" : "Custom OpenAI-compatible providers require a Base URL."}</span></div>
+                  ) : null}
                 </div>
                 <div className="provider-import-actions">
-                  <button type="button" className="btn btn-save" onClick={() => void importProviderModels(activeProvider.id)}>
+                  <button type="button" className="btn btn-save" onClick={() => void importProviderModels(activeProvider.id)} disabled={activeProviderBaseUrlMissing}>
                     {importStates[activeProvider.id]?.state === "importing" ? <Loader2 size={14} className="spin-icon" /> : <Cpu size={14} />}
                     {activeConfig.importedModels.length > 0
                       ? copy.settingsModal.refreshModels
@@ -590,7 +625,7 @@ export function SettingsWorkspace({
                         ? copy.settingsModal.restoreModels
                         : copy.settingsModal.importProvider}
                   </button>
-                  <button type="button" className="btn" onClick={() => void smokeProvider(activeProvider.id)}>
+                  <button type="button" className="btn" onClick={() => void smokeProvider(activeProvider.id)} disabled={activeProviderBaseUrlMissing}>
                     <ShieldCheck size={14} />
                     {copy.settingsModal.smokeTest}
                   </button>
@@ -923,20 +958,32 @@ function gateLabel(copy: AppCopy, gate: ProviderBuildGate) {
   return copy.language === "中" ? "Build 已阻止" : "Build blocked";
 }
 
+function evidenceStatusLabel(copy: AppCopy, status: AgentRuntimeEvidenceStatus) {
+  if (status === "verified") return copy.language === "中" ? "已验证" : "Verified";
+  if (status === "partial") return copy.language === "中" ? "部分证据" : "Partial";
+  if (status === "design-only") return copy.language === "中" ? "仅设计" : "Design-only";
+  if (status === "blocked") return copy.language === "中" ? "已阻塞" : "Blocked";
+  return copy.language === "中" ? "未开始" : "Not started";
+}
+
 function CodexRuntimePanel({
   copy,
   runtime,
   activeGate,
   bridgeStatus,
   onRestart,
+  onRecover,
 }: {
   copy: AppCopy;
   runtime: CodexRuntimeSettingsModel;
   activeGate: ProviderBuildGate;
   bridgeStatus: ProviderBridgeStatus;
-  onRestart?: () => void;
+  onRestart?: () => Promise<unknown> | unknown;
+  onRecover?: () => Promise<unknown> | unknown;
 }) {
+  const [restartPending, setRestartPending] = useState(false);
   const sidecarReady = runtime.sidecarStatus.running;
+  const restartRunning = restartPending || runtime.bridgeStatus === "starting";
   const discoveryLabel = bridgeStatus.modelDiscovery === "ready"
     ? (copy.language === "中" ? "Model discovery 已完成" : "Model discovery ready")
     : (copy.language === "中" ? "等待模型导入" : "Model discovery pending");
@@ -946,18 +993,78 @@ function CodexRuntimePanel({
       ? (copy.language === "中" ? "Bridge smoke 失败" : "Bridge smoke failed")
       : (copy.language === "中" ? "Bridge smoke 未运行" : "Bridge smoke not run");
   const runtimeFailureDetails = [
+    runtime.diagnostics?.activeOperation
+      ? `operation: ${runtime.diagnostics.activeOperation.kind}/${runtime.diagnostics.activeOperation.status}`
+      : "",
+    runtime.diagnostics
+      ? `pending: responses ${runtime.diagnostics.pendingResponseCount}, requests ${runtime.diagnostics.pendingRequestCount}`
+      : "",
+    runtime.diagnostics?.lastEventAt
+      ? `last event: ${runtime.diagnostics.lastEventAt}`
+      : "",
+    typeof runtime.diagnostics?.staleEventCount === "number" && runtime.diagnostics.staleEventCount > 0
+      ? `stale events: ${runtime.diagnostics.staleEventCount}`
+      : "",
     typeof runtime.sidecarStatus.lastExitCode === "number"
       ? (copy.language === "中" ? `退出码 ${runtime.sidecarStatus.lastExitCode}` : `exit ${runtime.sidecarStatus.lastExitCode}`)
       : "",
-    runtime.sidecarStatus.lastStderrTail
-      ? `stderr: ${runtime.sidecarStatus.lastStderrTail}`
+    runtime.diagnostics?.stderrTail || runtime.sidecarStatus.lastStderrTail
+      ? `stderr: ${runtime.diagnostics?.stderrTail || runtime.sidecarStatus.lastStderrTail}`
       : "",
   ].filter(Boolean).join("\n");
   const desktopBuildSmoke = runtime.latestDesktopBuildSmoke
     ? `${runtime.latestDesktopBuildSmoke.result}${runtime.latestDesktopBuildSmoke.liveBuildEnabled ? " · live" : " · readiness"}${runtime.latestDesktopBuildSmoke.path ? ` · ${runtime.latestDesktopBuildSmoke.path}` : ""}`
     : (copy.language === "中" ? "尚无报告" : "No report yet");
+  const productionRuntime = AGENT_RUNTIME_ADAPTER_DECISIONS.find((adapter) => adapter.id === PRODUCTION_AGENT_RUNTIME_ADAPTER_ID) || AGENT_RUNTIME_ADAPTER_DECISIONS[0];
+  const runtimeEvidenceSummary = agentRuntimeEvidenceSummary(productionRuntime);
+  const missingRuntimeEvidenceLabels = runtimeEvidenceSummary.missing.map((requirement) => requirement.label).join(", ");
+  const alternativeRuntimes = AGENT_RUNTIME_ADAPTER_DECISIONS.filter((adapter) => adapter.id !== productionRuntime.id);
   return (
     <section className="provider-credential-panel codex-runtime-panel">
+      <section className="agent-runtime-summary" aria-label={copy.language === "中" ? "Agent runtime 状态" : "Agent runtime status"}>
+        <header>
+          <div>
+            <strong>{copy.language === "中" ? "Agent runtime" : "Agent runtime"}</strong>
+            <small>
+              {copy.language === "中"
+                ? `Build 核心：${productionRuntime.label}`
+                : `Build core: ${productionRuntime.label}`}
+            </small>
+          </div>
+          <span className="agent-runtime-role">
+            {copy.language === "中" ? "生产核心" : "Production core"}
+          </span>
+        </header>
+        <div className="agent-runtime-evidence-row">
+          {AGENT_RUNTIME_PROMOTION_REQUIREMENTS.map((requirement) => {
+            const status = productionRuntime.evidence[requirement.id];
+            return (
+              <span
+                key={requirement.id}
+                className={`agent-runtime-evidence-dot ${status}`}
+                title={`${requirement.label}: ${evidenceStatusLabel(copy, status)}`}
+                aria-label={`${requirement.label}: ${evidenceStatusLabel(copy, status)}`}
+              />
+            );
+          })}
+        </div>
+        <p>
+          {copy.language === "中"
+            ? `${runtimeEvidenceSummary.verified}/${runtimeEvidenceSummary.total} 项证据已验证；仍需补齐：${missingRuntimeEvidenceLabels}。替代 Agent 在全部证据 verified 前不会进入生产 Build。`
+            : `${runtimeEvidenceSummary.verified}/${runtimeEvidenceSummary.total} evidence checks verified; still missing: ${missingRuntimeEvidenceLabels}. Replacement agents stay out of production Build until every check is verified.`}
+        </p>
+        <div className="agent-runtime-adapter-list">
+          {alternativeRuntimes.map((adapter) => (
+            <article key={adapter.id}>
+              <span>
+                <strong>{adapter.label}</strong>
+                <small>{adapter.blockedReason || (copy.language === "中" ? "等待 conformance 证据" : "Waiting for conformance evidence")}</small>
+              </span>
+              <em>{adapter.role === "blocked" ? (copy.language === "中" ? "blocked" : "blocked") : (copy.language === "中" ? "spike" : "spike")}</em>
+            </article>
+          ))}
+        </div>
+      </section>
       <div className="codex-runtime-grid">
         <InfoCard
           title={copy.language === "中" ? "Codex sidecar" : "Codex sidecar"}
@@ -1003,10 +1110,30 @@ function CodexRuntimePanel({
         {gateLabel(copy, activeGate)}
       </div>
       {onRestart ? (
-        <button type="button" className="btn" onClick={onRestart}>
-          <Loader2 size={14} />
-          {copy.language === "中" ? "重启 Codex runtime" : "Restart Codex runtime"}
-        </button>
+        <div className="codex-runtime-actions">
+          <button
+            type="button"
+            className="btn"
+            disabled={restartRunning}
+            onClick={() => {
+              setRestartPending(true);
+              Promise.resolve()
+                .then(() => onRestart())
+                .finally(() => setRestartPending(false));
+            }}
+          >
+            <Loader2 size={14} className={restartRunning ? "spin-icon" : undefined} />
+            {restartRunning
+              ? (copy.language === "中" ? "正在清理..." : "Resetting...")
+              : (copy.language === "中" ? "清理 Codex runtime" : "Reset Codex runtime")}
+          </button>
+          {onRecover ? (
+            <button type="button" className="btn btn-ghost" onClick={() => void onRecover()}>
+              <Undo2 size={14} />
+              {copy.language === "中" ? "恢复输入状态" : "Recover input state"}
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </section>
   );
@@ -1101,11 +1228,18 @@ function ModelList({
               apiKeys,
               savedCredentialProviders: credentialVaultProviders,
             });
+            const capability = config.modelCapabilities[model];
+            const capabilityBadges = modelCapabilityBadges(copy, capability);
             return (
               <button key={model} type="button" className={`model-toggle-row ${enabled ? "enabled" : ""}`} onClick={() => onToggleModel(provider.id, model, !enabled)}>
-                <span>
+                <span className="model-toggle-main">
                   <strong>{model}</strong>
                   <small>{config.customModels.includes(model) ? copy.settingsModal.customModel : gateLabel(copy, gate)}</small>
+                  {capabilityBadges.length > 0 ? (
+                    <span className="model-capability-badges" aria-label={copy.language === "中" ? "模型能力" : "Model capabilities"}>
+                      {capabilityBadges.map((badge) => <span key={badge} className="model-capability-chip">{badge}</span>)}
+                    </span>
+                  ) : null}
                   {!gate.canBuild && gate.blockedReason ? <small>{gate.blockedReason}</small> : null}
                 </span>
                 <span className="model-switch" aria-hidden="true">{enabled ? <Check size={14} /> : null}</span>
@@ -1116,4 +1250,35 @@ function ModelList({
       </div>
     </section>
   );
+}
+
+export function compactTokenCount(tokens: number | undefined): string | undefined {
+  if (!tokens || !Number.isFinite(tokens) || tokens <= 0) return undefined;
+  if (tokens >= 1_000_000) {
+    const value = tokens / 1_000_000;
+    return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(value >= 10 ? 1 : 2).replace(/0+$/, "").replace(/\.$/, "")}M`;
+  }
+  if (tokens >= 1_000) {
+    const value = tokens / 1_000;
+    return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(value >= 100 ? 0 : 1).replace(/0+$/, "").replace(/\.$/, "")}K`;
+  }
+  return String(tokens);
+}
+
+export function modelCapabilityBadges(copy: AppCopy, capability: ModelCapability | undefined): string[] {
+  if (!capability) return [];
+  const context = compactTokenCount(capability.maxContextTokens);
+  const output = compactTokenCount(capability.maxOutputTokens);
+  const source = capability.capabilitySource === "api"
+    ? "API"
+    : capability.capabilitySource === "manual"
+      ? copy.language === "中" ? "手动" : "Manual"
+      : copy.language === "中" ? "官方" : "Official";
+  return [
+    context ? `${copy.language === "中" ? "上下文" : "Context"} ${context}` : undefined,
+    output ? `${copy.language === "中" ? "输出" : "Output"} ${output}` : undefined,
+    capability.toolCalls ? (copy.language === "中" ? "工具" : "Tools") : undefined,
+    capability.local ? (copy.language === "中" ? "本地" : "Local") : undefined,
+    source,
+  ].filter(Boolean) as string[];
 }

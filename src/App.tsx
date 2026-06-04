@@ -90,6 +90,7 @@ function App() {
           codexRuntimeSettings={workspace.codexRuntimeSettings}
           providerBuildGate={workspace.providerBuildGate}
           onRestartRuntime={workspace.restartCodexRuntime}
+          onRecoverRuntime={workspace.recoverCodexRuntime}
           usageSnapshot={workspace.usageSnapshot}
           theme={theme}
           layoutPreferences={workspace.layoutPreferences}

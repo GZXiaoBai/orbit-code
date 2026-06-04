@@ -1,9 +1,9 @@
 #[tauri::command]
 pub async fn codex_thread_start(
-    app: AppHandle,
+    _app: AppHandle,
     input: CodexThreadStartInput,
 ) -> CodexThreadStartResult {
-    match tauri::async_runtime::spawn_blocking(move || codex_thread_start_blocking(app, input))
+    match tauri::async_runtime::spawn_blocking(move || codex_thread_start_blocking(input))
         .await
     {
         Ok(result) => result,
@@ -33,7 +33,6 @@ pub async fn codex_thread_start(
 }
 
 fn codex_thread_start_blocking(
-    app: AppHandle,
     input: CodexThreadStartInput,
 ) -> CodexThreadStartResult {
     let at = now_iso();
@@ -41,51 +40,7 @@ fn codex_thread_start_blocking(
         .thread_id
         .clone()
         .unwrap_or_else(|| id("codex-thread"));
-    let sidecar = match ensure_persistent_app_server(&app, &input.provider_id) {
-        Ok(status) => {
-            let synthetic_turn_input = CodexTurnStartInput {
-                thread_id: orbit_thread_id.clone(),
-                workspace_path: input.workspace_path.clone(),
-                prompt: String::new(),
-                mode: input.mode.clone(),
-                runtime_mode: None,
-                provider_id: input.provider_id.clone(),
-                model: input.model.clone(),
-                reasoning_effort: None,
-            };
-            if let Err(error) = cached_or_start_app_thread(&synthetic_turn_input) {
-                CodexSidecarStatus {
-                    running: false,
-                    pid: status.pid,
-                    bridge_base_url: status.bridge_base_url,
-                    codex_home: status.codex_home,
-                    last_error: Some(error),
-                    last_stderr_tail: status.last_stderr_tail,
-                    last_exit_code: status.last_exit_code,
-                }
-            } else {
-                status
-            }
-        }
-        Err(error) => CodexSidecarStatus {
-            running: false,
-            pid: None,
-            bridge_base_url: state()
-                .lock()
-                .ok()
-                .and_then(|guard| guard.bridge_base_url.clone()),
-            codex_home: state()
-                .lock()
-                .ok()
-                .and_then(|guard| guard.codex_home.clone()),
-            last_error: Some(error),
-            last_stderr_tail: state()
-                .lock()
-                .ok()
-                .and_then(|guard| guard.last_stderr_tail.clone()),
-            last_exit_code: state().lock().ok().and_then(|guard| guard.last_exit_code),
-        },
-    };
+    let sidecar = codex_sidecar_status();
     CodexThreadStartResult {
         thread: CodexThread {
             id: orbit_thread_id,
@@ -220,16 +175,20 @@ fn spawn_app_server_process(
             }
         });
     }
-    {
+    let previous_child = {
         let mut guard = active_app_server().lock().map_err(|e| e.to_string())?;
-        if let Some(mut previous) = guard.child.take() {
-            let _ = previous.kill();
-        }
+        let previous = guard.child.take();
+        guard.connection_id = Some(id("codex-connection"));
         guard.stdin = Some(stdin);
         guard.child = Some(child);
         guard.pending_requests.clear();
         guard.app_thread_id = None;
         guard.app_turn_id = None;
+        previous
+    };
+    if let Some(mut previous) = previous_child {
+        let _ = previous.kill();
+        let _ = previous.wait();
     }
     {
         let mut guard = state().lock().map_err(|e| e.to_string())?;
@@ -303,11 +262,11 @@ fn spawn_persistent_app_server_process(
             }
         });
     }
-    {
+    let connection_id = id("codex-connection");
+    let previous_child = {
         let mut guard = active_app_server().lock().map_err(|e| e.to_string())?;
-        if let Some(mut previous) = guard.child.take() {
-            let _ = previous.kill();
-        }
+        let previous = guard.child.take();
+        guard.connection_id = Some(connection_id.clone());
         guard.stdin = Some(stdin);
         guard.child = Some(child);
         guard.pending_requests.clear();
@@ -319,6 +278,11 @@ fn spawn_persistent_app_server_process(
         guard.app_to_orbit_thread.clear();
         guard.active_context = None;
         guard.sequence = 0;
+        previous
+    };
+    if let Some(mut previous) = previous_child {
+        let _ = previous.kill();
+        let _ = previous.wait();
     }
     {
         let mut guard = state().lock().map_err(|e| e.to_string())?;
@@ -328,7 +292,9 @@ fn spawn_persistent_app_server_process(
         guard.last_stderr_tail = None;
         guard.last_exit_code = None;
     }
-    thread::spawn(move || persistent_app_server_reader_loop(app, BufReader::new(stdout)));
+    thread::spawn(move || {
+        persistent_app_server_reader_loop(app, BufReader::new(stdout), connection_id)
+    });
     Ok(CodexSidecarStatus {
         running: true,
         pid: Some(pid),
@@ -396,23 +362,36 @@ fn ensure_persistent_app_server(
 fn persistent_app_server_reader_loop(
     app: AppHandle,
     mut reader: BufReader<std::process::ChildStdout>,
+    connection_id: String,
 ) {
     let mut client = CodexJsonRpcClient::new();
     loop {
+        let current_connection = active_connection_id();
+        if current_connection.as_deref() != Some(connection_id.as_str()) {
+            return;
+        }
         let mut line = String::new();
         let bytes = match reader.read_line(&mut line) {
             Ok(bytes) => bytes,
             Err(error) => {
-                persistent_app_server_fail_all(format!(
-                    "Failed reading Codex app-server output: {error}"
-                ));
+                persistent_app_server_fail_all_for_connection(
+                    format!("Failed reading Codex app-server output: {error}"),
+                    &connection_id,
+                );
                 return;
             }
         };
         if bytes == 0 {
-            persistent_app_server_fail_all("Codex app-server exited".to_string());
+            persistent_app_server_fail_all_for_connection(
+                "Codex app-server exited".to_string(),
+                &connection_id,
+            );
             if let Ok(mut guard) = active_app_server().lock() {
+                if guard.connection_id.as_deref() != Some(connection_id.as_str()) {
+                    return;
+                }
                 guard.stdin = None;
+                guard.connection_id = None;
                 guard.child = None;
                 guard.active_context = None;
                 guard.app_turn_id = None;
@@ -455,13 +434,26 @@ fn persistent_app_server_reader_loop(
 }
 
 fn persistent_app_server_fail_all(message: String) {
+    persistent_app_server_fail_all_inner(message, None);
+}
+
+fn persistent_app_server_fail_all_for_connection(message: String, connection_id: &str) {
+    persistent_app_server_fail_all_inner(message, Some(connection_id));
+}
+
+fn persistent_app_server_fail_all_inner(message: String, connection_id: Option<&str>) {
     if let Ok(mut guard) = active_app_server().lock() {
+        if let Some(expected) = connection_id {
+            if guard.connection_id.as_deref() != Some(expected) {
+                return;
+            }
+        }
         let pending = std::mem::take(&mut guard.pending_responses);
         for (_, tx) in pending {
             let _ = tx.send(Err(message.clone()));
         }
     }
-    clear_active_app_server_after_failure(&message, true);
+    clear_active_app_server_after_failure_for_connection(&message, true, connection_id);
 }
 
 fn persistent_emit_context_error(app: &AppHandle, message: String) {
@@ -582,6 +574,7 @@ fn persistent_handle_notification(app: &AppHandle, method: &str, params: Option<
     if let Ok(mut guard) = active_app_server().lock() {
         guard.sequence = sequence;
         if completed {
+            patch_runtime_operation_status("completed", Some("completed"), None);
             guard.active_context = None;
             guard.app_turn_id = None;
             guard

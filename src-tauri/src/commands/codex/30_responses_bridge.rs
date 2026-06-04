@@ -188,7 +188,7 @@ fn write_deepseek_responses_sse_stream(stream: &mut TcpStream, payload: Value) {
     let response = match reqwest::blocking::Client::new()
         .post("https://api.deepseek.com/v1/chat/completions")
         .header("content-type", "application/json")
-        .bearer_auth(api_key)
+        .bearer_auth(&api_key)
         .json(&deepseek_payload)
         .send()
     {
@@ -198,7 +198,10 @@ fn write_deepseek_responses_sse_stream(stream: &mut TcpStream, payload: Value) {
                 stream,
                 "502 Bad Gateway",
                 "provider_request_failed",
-                format!("DeepSeek request failed: {error}"),
+                format!(
+                    "DeepSeek request failed: {}",
+                    redact_provider_secret(&error.to_string(), &api_key)
+                ),
             );
             return;
         }
@@ -212,7 +215,10 @@ fn write_deepseek_responses_sse_stream(stream: &mut TcpStream, payload: Value) {
             stream,
             "502 Bad Gateway",
             "provider_request_failed",
-            format!("DeepSeek returned {status}: {text}"),
+            format!(
+                "DeepSeek returned {status}: {}",
+                redact_provider_secret(&text, &api_key)
+            ),
         );
         return;
     }
@@ -555,13 +561,21 @@ fn post_deepseek_chat(api_key: &str, payload: &Value) -> Result<Value, String> {
         .bearer_auth(api_key)
         .json(payload)
         .send()
-        .map_err(|e| format!("DeepSeek request failed: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "DeepSeek request failed: {}",
+                redact_provider_secret(&e.to_string(), api_key)
+            )
+        })?;
     let status = response.status();
     let text = response
         .text()
         .map_err(|e| format!("Failed to read DeepSeek response: {e}"))?;
     if !status.is_success() {
-        return Err(format!("DeepSeek returned {status}: {text}"));
+        return Err(format!(
+            "DeepSeek returned {status}: {}",
+            redact_provider_secret(&text, api_key)
+        ));
     }
     serde_json::from_str::<Value>(&text).map_err(|e| format!("Invalid DeepSeek JSON: {e}"))
 }
@@ -573,13 +587,21 @@ fn post_deepseek_chat_streamed_response(api_key: &str, payload: &Value) -> Resul
         .bearer_auth(api_key)
         .json(payload)
         .send()
-        .map_err(|e| format!("DeepSeek request failed: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "DeepSeek request failed: {}",
+                redact_provider_secret(&e.to_string(), api_key)
+            )
+        })?;
     let status = response.status();
     if !status.is_success() {
         let text = response
             .text()
             .unwrap_or_else(|_| "<failed to read provider error body>".to_string());
-        return Err(format!("DeepSeek returned {status}: {text}"));
+        return Err(format!(
+            "DeepSeek returned {status}: {}",
+            redact_provider_secret(&text, api_key)
+        ));
     }
 
     let model = payload
@@ -589,6 +611,7 @@ fn post_deepseek_chat_streamed_response(api_key: &str, payload: &Value) -> Resul
         .to_string();
     let reader = BufReader::new(response);
     deepseek_sse_reader_to_chat_response(reader, &model)
+        .map_err(|error| redact_provider_secret(&error, api_key))
 }
 
 fn deepseek_sse_reader_to_chat_response<R: BufRead>(
@@ -621,6 +644,9 @@ fn deepseek_sse_reader_to_chat_response<R: BufRead>(
         }
         let event = serde_json::from_str::<Value>(data)
             .map_err(|e| format!("Invalid DeepSeek stream JSON: {e}: {data}"))?;
+        if let Some(message) = deepseek_stream_error_message(&event) {
+            return Err(format!("DeepSeek stream error: {message}"));
+        }
         if let Some(id) = event.get("id").and_then(Value::as_str) {
             response_id = id.to_string();
         }
@@ -722,18 +748,63 @@ fn deepseek_sse_reader_to_chat_response<R: BufRead>(
     }))
 }
 
-fn openai_compatible_chat_url(provider_id: &str) -> Result<&'static str, String> {
+fn deepseek_stream_error_message(event: &Value) -> Option<String> {
+    let error = event.get("error")?;
+    if error.is_string() {
+        return error.as_str().map(str::to_string);
+    }
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| error.get("msg").and_then(Value::as_str))
+        .or_else(|| error.get("code").and_then(Value::as_str));
+    Some(message.map(str::to_string).unwrap_or_else(|| error.to_string()))
+}
+
+fn append_openai_compatible_path(base_url: &str, path: &str) -> String {
+    let clean = base_url.trim().trim_end_matches('/');
+    if clean.ends_with(path) {
+        clean.to_string()
+    } else {
+        format!("{clean}{path}")
+    }
+}
+
+fn openai_compatible_chat_url(
+    provider_id: &str,
+    base_url: Option<&str>,
+) -> Result<String, String> {
     match provider_id {
-        "openai" => Ok("https://api.openai.com/v1/chat/completions"),
-        "deepseek" => Ok("https://api.deepseek.com/v1/chat/completions"),
-        "openrouter" => Ok("https://openrouter.ai/api/v1/chat/completions"),
-        "xai" => Ok("https://api.x.ai/v1/chat/completions"),
-        "mistral" => Ok("https://api.mistral.ai/v1/chat/completions"),
-        "groq" => Ok("https://api.groq.com/openai/v1/chat/completions"),
-        "qwen" => Ok("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"),
-        "kimi" => Ok("https://api.moonshot.cn/v1/chat/completions"),
-        "siliconflow" => Ok("https://api.siliconflow.cn/v1/chat/completions"),
-        "zhipu" => Ok("https://open.bigmodel.cn/api/paas/v4/chat/completions"),
+        "openai" => Ok("https://api.openai.com/v1/chat/completions".to_string()),
+        "deepseek" => Ok("https://api.deepseek.com/v1/chat/completions".to_string()),
+        "openrouter" => Ok("https://openrouter.ai/api/v1/chat/completions".to_string()),
+        "xai" => Ok("https://api.x.ai/v1/chat/completions".to_string()),
+        "mistral" => Ok("https://api.mistral.ai/v1/chat/completions".to_string()),
+        "groq" => Ok("https://api.groq.com/openai/v1/chat/completions".to_string()),
+        "qwen" => Ok("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions".to_string()),
+        "kimi" => Ok("https://api.moonshot.cn/v1/chat/completions".to_string()),
+        "siliconflow" => Ok("https://api.siliconflow.cn/v1/chat/completions".to_string()),
+        "zhipu" => Ok("https://open.bigmodel.cn/api/paas/v4/chat/completions".to_string()),
+        "together" => Ok("https://api.together.ai/v1/chat/completions".to_string()),
+        "fireworks" => Ok("https://api.fireworks.ai/inference/v1/chat/completions".to_string()),
+        "cerebras" => Ok("https://api.cerebras.ai/v1/chat/completions".to_string()),
+        "nvidia" => Ok("https://integrate.api.nvidia.com/v1/chat/completions".to_string()),
+        "azure-openai" => {
+            let base = base_url
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "Azure OpenAI provider requires a Base URL.".to_string())?;
+            super::ensure_provider_host(provider_id, base)?;
+            Ok(append_openai_compatible_path(base, "/chat/completions"))
+        }
+        "custom-openai" => {
+            let base = base_url
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "Custom OpenAI-compatible provider requires a Base URL.".to_string())?;
+            super::ensure_provider_host(provider_id, base)?;
+            Ok(append_openai_compatible_path(base, "/chat/completions"))
+        }
         _ => Err(format!(
             "{provider_id} is not yet available on Orbit's direct Plan streaming path"
         )),

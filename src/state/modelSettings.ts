@@ -1,4 +1,4 @@
-import type { ModelCapability, ModelProviderConfig, ReasoningEffort } from "../domain/types";
+import type { ImportedModelInfo, ModelCapability, ModelProviderConfig, ReasoningEffort } from "../domain/types";
 import type { CodexSidecarStatus, ProviderBuildGate } from "../domain/codex";
 import { findProvider, providerRegistry } from "../providers/providerRegistry";
 import { fallbackCapability, isOpenAICompatibleProvider } from "../providers/providerAdapters";
@@ -19,6 +19,23 @@ export type NormalizedProviderConfig = Required<Pick<ProviderConfig, "enabledMod
 
 function uniqueModels(models: Array<string | undefined>): string[] {
   return [...new Set(models.map((model) => model?.trim()).filter(Boolean) as string[])];
+}
+
+export type ImportedModelInput = string | ImportedModelInfo;
+
+function importedModelId(model: ImportedModelInput): string {
+  return typeof model === "string" ? model : model.id;
+}
+
+function importedModelCapability(providerId: string, model: string, imported?: ImportedModelInfo): ModelCapability {
+  const inferred = inferModelCapability(providerId, model);
+  if (!imported?.capability) return inferred;
+  return {
+    ...inferred,
+    ...imported.capability,
+    local: inferred.local,
+    buildSupported: inferred.buildSupported,
+  };
 }
 
 export function normalizeProviderConfig(
@@ -164,17 +181,24 @@ export function inferModelCapability(providerId: string, model: string): ModelCa
   };
 }
 
-export function setImportedModels(settings: ProviderSettings, providerId: string, models: string[]): ProviderSettings {
+export function setImportedModels(settings: ProviderSettings, providerId: string, models: ImportedModelInput[]): ProviderSettings {
   const provider = findProvider(providerId);
   if (!provider) return settings;
 
   const current = normalizeProviderConfig(provider, settings.configs[providerId]);
-  const importedModels = uniqueModels(models);
+  const importedInfoById = new Map(
+    models
+      .filter((model): model is ImportedModelInfo => typeof model !== "string")
+      .map((model) => [model.id, model])
+  );
+  const importedModels = uniqueModels(models.map(importedModelId));
   const modelPool = uniqueModels([...importedModels, ...current.customModels]);
   const existingEnabled = current.enabledModels.filter((model) => modelPool.includes(model));
   const enabledModels = existingEnabled.length > 0 ? existingEnabled : modelPool;
   const modelCapabilities = Object.fromEntries(
-    modelPool.map((model) => [model, current.modelCapabilities[model] || inferModelCapability(providerId, model)])
+    modelPool.map((model) => [model, importedInfoById.has(model)
+      ? importedModelCapability(providerId, model, importedInfoById.get(model))
+      : current.modelCapabilities[model] || inferModelCapability(providerId, model)])
   );
 
   return {
@@ -278,31 +302,6 @@ export function buildProviderBuildGate(input: {
         : provider.id === "ollama"
           ? "Ollama 当前仅接入模型发现，Build 尚未接入 Codex Responses bridge。"
         : "Build is blocked until this provider's Responses bridge adapter is verified.",
-    };
-  }
-  const smoke = input.settings.smokeStatus?.[provider.id];
-  if (provider.id === "deepseek" && smoke?.status !== "smokePassed") {
-    return {
-      providerId: provider.id,
-      model: input.model,
-      canBuild: false,
-      canStream: Boolean(capability.streaming),
-      bridgeStatus: "smokeFailed",
-      blockedReason: smoke?.status === "smokeFailed"
-        ? smoke.message || "DeepSeek bridge smoke failed."
-        : "Run the Codex bridge smoke before enabling Build.",
-    };
-  }
-  if (input.sidecarStatus && !input.sidecarStatus.running) {
-    return {
-      providerId: provider.id,
-      model: input.model,
-      canBuild: false,
-      canStream: capability.streaming,
-      bridgeStatus: "blocked",
-      blockedReason: input.sidecarStatus.lastError
-        ? `Codex sidecar is not ready: ${input.sidecarStatus.lastError}`
-        : "Codex sidecar is not ready. Restart the Codex runtime before using Build.",
     };
   }
   return {

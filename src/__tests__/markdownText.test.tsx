@@ -57,4 +57,54 @@ describe("MarkdownText", () => {
     expect(html).toContain("bad");
     expect(html).not.toContain("javascript:");
   });
+
+  it("renders assistant markdown tables as tables instead of collapsed pipe text", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownText
+        text={[
+          "| 问题 | 描述 | 建议 |",
+          "| --- | --- | --- |",
+          "| 全局 ID 冲突 | `nextId` 是模块级变量 | 放进 `createTaskBoard` 闭包 |",
+          "| 缺少 `.gitignore` | `dist/` 可能被提交 | 添加忽略规则 |",
+        ].join("\n")}
+      />,
+    );
+
+    expect(html).toContain("<table>");
+    expect(html).toContain("<th>问题</th>");
+    expect(html).toContain("<td>全局 ID 冲突</td>");
+    expect(html).toContain("<code>nextId</code>");
+    expect(html).not.toContain("| --- | --- | --- |");
+  });
+
+  it("renders all markdown heading levels used by agent reports", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownText
+        text={[
+          "#### 3.2 路由与多页面",
+          "##### 4.1 更新 README.md",
+          "###### 细节",
+        ].join("\n")}
+      />,
+    );
+
+    expect(html).toContain("<h6>3.2 路由与多页面</h6>");
+    expect(html).toContain("<h6>4.1 更新 README.md</h6>");
+    expect(html).toContain("<h6>细节</h6>");
+    expect(html).not.toContain("#### 3.2");
+    expect(html).not.toContain("##### 4.1");
+    expect(html).not.toContain("###### 细节");
+  });
+
+  it("repairs agent table rows that arrive concatenated without newlines", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownText text="| 问题 | 描述 | 建议 ||------|------|------|| 全局 ID 冲突 | `nextId` 是模块变量 | 放进闭包 |" />,
+    );
+
+    expect(html).toContain("<table>");
+    expect(html).toContain("<th>问题</th>");
+    expect(html).toContain("<td>全局 ID 冲突</td>");
+    expect(html).toContain("<code>nextId</code>");
+    expect(html).not.toContain("||------");
+  });
 });

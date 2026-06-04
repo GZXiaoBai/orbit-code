@@ -95,6 +95,7 @@ pub fn run() {
             commands::call_llm_api,
             commands::call_llm_api_streaming,
             commands::list_llm_models,
+            commands::list_llm_model_infos,
             commands::build_workspace_symbol_index,
             commands::build_code_graph,
             commands::build_embeddings,
@@ -102,6 +103,9 @@ pub fn run() {
             commands::resolve_patch_conflict,
             commands::codex::codex_sidecar_status,
             commands::codex::codex_sidecar_version_info,
+            commands::codex::codex_runtime_diagnostics,
+            commands::codex::codex_operation_cancel,
+            commands::codex::codex_runtime_recover,
             commands::codex::codex_runtime_restart,
             commands::codex::orbit_bridge_provider_catalog,
             commands::codex::codex_desktop_build_smoke_report,
@@ -200,6 +204,23 @@ mod tests {
         assert_eq!(fs::read_to_string(file).unwrap(), "disk content");
 
         let _ = fs::remove_file(file);
+    }
+
+    #[test]
+    fn test_apply_workspace_patches_transactional_rejects_missing_target_with_old_content() {
+        let file = "src-tauri/test_missing_stale_write.txt";
+        let _ = fs::remove_file(file);
+
+        let patches = vec![FilePatch {
+            path: file.to_string(),
+            old_content: "expected previous content".to_string(),
+            new_content: "agent content".to_string(),
+        }];
+
+        let res = apply_workspace_patches_transactional("".to_string(), patches);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Stale write detected"));
+        assert!(!std::path::Path::new(file).exists());
     }
 
     #[test]

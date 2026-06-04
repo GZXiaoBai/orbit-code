@@ -82,6 +82,21 @@ async function installDesktopFixture(page: import("@playwright/test").Page) {
         if (command === "run_command_sync") return "Desktop runtime required for command execution.\n[exit_code: 1]";
         if (command === "codex_sidecar_status") return { running: false, lastError: "fixture app-server is intentionally stopped" };
         if (command === "codex_sidecar_version_info") return { source: "fixture" };
+        if (command === "codex_desktop_build_smoke_report") return null;
+        if (command === "codex_runtime_diagnostics") return {
+          pendingResponseCount: 0,
+          pendingRequestCount: 0,
+          staleEventCount: 0,
+          activeOperation: null,
+          lastError: null,
+        };
+        if (command === "codex_runtime_recover") return {
+          pendingResponseCount: 0,
+          pendingRequestCount: 0,
+          staleEventCount: 0,
+          activeOperation: null,
+          lastError: null,
+        };
         if (command === "codex_runtime_restart") return {
           status: { running: false, lastError: "fixture restart must not be called by Plan" },
           error: "fixture restart must not be called by Plan",
@@ -90,6 +105,29 @@ async function installDesktopFixture(page: import("@playwright/test").Page) {
           const input = args?.input as Record<string, unknown> | undefined;
           const threadId = String(input?.threadId || "fixture-thread");
           const turnId = `fixture-turn-${Date.now()}`;
+          if ((window as any).__AGENT_GUI_DESKTOP_FIXTURE_STUCK_TURN__) {
+            return {
+              turn: {
+                id: turnId,
+                threadId,
+                mode: input?.mode || "plan",
+                status: "running",
+                startedAt: new Date().toISOString(),
+                operationId: input?.operationId,
+              },
+              items: [{
+                id: `fixture-running-${Date.now()}`,
+                threadId,
+                turnId,
+                kind: "reasoning",
+                title: "Codex Plan Reasoning",
+                text: "Direct plan fixture is still running until the runtime is recovered.",
+                status: "running",
+                createdAt: new Date().toISOString(),
+                metadata: { runtimeMode: input?.runtimeMode, providerId: input?.providerId },
+              }],
+            };
+          }
           return {
             turn: {
               id: turnId,
@@ -355,10 +393,16 @@ test.describe("Orbit Code — Run Controls", () => {
     await page.locator(".workbench-header-actions").getByRole("button", { name: "设置" }).click();
     await page.getByRole("button", { name: "模型", exact: true }).click();
     await expect(page.getByText("服务商", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /OpenAI/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^OpenAI\b/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /DeepSeek/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Custom OpenAI-compatible/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /导入模型/ })).toBeVisible();
     await expect(page.locator(".model-toggle-row", { hasText: "gpt-5" })).toHaveCount(0);
+
+    await page.getByRole("button", { name: /Custom OpenAI-compatible/ }).click();
+    await expect(page.getByRole("button", { name: /导入模型/ })).toBeDisabled();
+    await page.getByLabel(/Base URL/).fill("https://gateway.example/v1");
+    await expect(page.getByRole("button", { name: /导入模型/ })).toBeEnabled();
   });
 
   test("fixture model import stays free of React update-depth console errors", async ({ page }) => {
@@ -451,6 +495,68 @@ test.describe("Orbit Code — Run Controls", () => {
     expect(turnStart?.args?.input?.mode).toBe("plan");
     expect(turnStart?.args?.input?.runtimeMode).toBe("direct-deepseek-plan");
     expect(turnStart?.args?.input?.providerId).toBe("deepseek");
+  });
+
+  test("recover input state releases a stuck desktop Plan operation", async ({ page }) => {
+    await installDesktopFixture(page);
+    await page.addInitScript(() => {
+      (window as any).__AGENT_GUI_DESKTOP_FIXTURE_STUCK_TURN__ = true;
+      localStorage.setItem("orbit-code.codex-sidecar.session", JSON.stringify({
+        schemaVersion: "codex-sidecar.v1",
+        importedPlan: null,
+        providerSettings: {
+          activeProviderId: "deepseek",
+          configs: {
+            deepseek: {
+              defaultModel: "deepseek-v4-flash",
+              importedModels: ["deepseek-v4-flash"],
+              enabledModels: ["deepseek-v4-flash"],
+              customModels: [],
+              modelCapabilities: {},
+            },
+          },
+          sandboxMode: "none",
+          smokeStatus: {},
+        },
+        lastActiveAt: new Date().toISOString(),
+      }));
+      localStorage.setItem("agent-gui.run-controls.v1", JSON.stringify({
+        mode: "plan",
+        selection: {
+          providerId: "deepseek",
+          model: "deepseek-v4-flash",
+          reasoningEffort: "auto",
+        },
+      }));
+    });
+    await page.goto("/");
+    await expect(page.locator(".workbench-shell")).toBeVisible({ timeout: 10000 });
+    await page.evaluate(() => {
+      (window as any).__AGENT_GUI_DESKTOP_FIXTURE_LOG__ = [];
+      (window as any).__AGENT_GUI_DESKTOP_FIXTURE_CALLS__ = [];
+    });
+
+    await page.locator(".composer textarea").fill("触发卡住的 direct Plan turn");
+    await page.locator(".send-button").click();
+
+    await expect(page.locator(".agent-collaboration-timeline")).toContainText("Direct plan fixture is still running", { timeout: 5000 });
+    await expect(page.locator(".send-button")).toBeDisabled();
+
+    await page.locator(".workbench-header-actions").getByRole("button", { name: "设置" }).click();
+    await page.getByRole("button", { name: "模型", exact: true }).click();
+    await page.getByRole("button", { name: /恢复输入状态|Recover input state/ }).click();
+    await page.getByRole("button", { name: /返回应用|Back to app/ }).click();
+
+    await expect(page.locator(".send-button")).toBeEnabled({ timeout: 5000 });
+    const calls = await page.evaluate(() => (window as any).__AGENT_GUI_DESKTOP_FIXTURE_CALLS__ || []);
+    expect(calls.map((call: { command: string }) => call.command)).toContain("codex_runtime_recover");
+
+    await page.evaluate(() => {
+      (window as any).__AGENT_GUI_DESKTOP_FIXTURE_STUCK_TURN__ = false;
+    });
+    await page.locator(".composer textarea").fill("恢复后再次提交");
+    await page.locator(".send-button").click();
+    await expect(page.locator(".agent-collaboration-timeline")).toContainText("Direct plan fixture response", { timeout: 5000 });
   });
 
   test("thread canvas follows the bottom after sending a Plan message", async ({ page }) => {

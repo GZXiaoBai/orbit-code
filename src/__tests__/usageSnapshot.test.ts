@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildUsageSnapshot } from "../state/usageSnapshot";
+import { buildUsageSnapshot, codexUsageTokenRecords } from "../state/usageSnapshot";
 import type { TerminalRun } from "../domain/terminalRun";
 
 describe("usage snapshot", () => {
@@ -25,5 +25,15 @@ describe("usage snapshot", () => {
       llmTokens: 150,
       lastRunAt: "2026-05-25T01:01:00.000Z",
     });
+  });
+
+  it("converts Codex projection usage into workspace token records", () => {
+    expect(codexUsageTokenRecords({ inputTokens: 30, outputTokens: 12, totalTokens: 42 })).toEqual([{ totalTokens: 42 }]);
+    expect(buildUsageSnapshot([], codexUsageTokenRecords({ inputTokens: 30, outputTokens: 12, totalTokens: 42 }))).toMatchObject({
+      commandRuns: 0,
+      terminalRuns: 0,
+      llmTokens: 42,
+    });
+    expect(codexUsageTokenRecords({ inputTokens: 0, outputTokens: 0, totalTokens: 0 })).toEqual([]);
   });
 });

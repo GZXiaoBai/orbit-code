@@ -100,8 +100,30 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   return nodes;
 }
 
+function isTableRow(line: string) {
+  const trimmed = line.trim();
+  return trimmed.includes("|") && !trimmed.startsWith("```");
+}
+
+function isTableDivider(line: string) {
+  const cells = splitTableRow(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function splitTableRow(line: string) {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+function normalizeAgentMarkdown(text: string) {
+  return text
+    .replace(/\|\s*(?=\|\s*:?-{3,}:?\s*\|)/g, "|\n")
+    .replace(/(\|\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*\|)\s*(?=\|)/g, "$1\n")
+    .replace(/(\|[^\n|]+(?:\|[^\n|]+){2,}\|)\s*(?=\|[^\n|]+(?:\|[^\n|]+){2,}\|)/g, "$1\n");
+}
+
 function renderBlocks(text: string) {
-  const lines = text.split(/\r?\n/);
+  const lines = normalizeAgentMarkdown(text).split(/\r?\n/);
   const blocks: ReactNode[] = [];
   let paragraph: string[] = [];
   let index = 0;
@@ -140,7 +162,47 @@ function renderBlocks(text: string) {
       continue;
     }
 
-    const heading = /^(#{1,3})\s+(.+)$/.exec(trimmed);
+    if (
+      isTableRow(trimmed)
+      && lineIndex + 1 < lines.length
+      && isTableDivider(lines[lineIndex + 1])
+    ) {
+      flushParagraph();
+      const headers = splitTableRow(trimmed);
+      const rows: string[][] = [];
+      lineIndex += 2;
+      while (lineIndex < lines.length && isTableRow(lines[lineIndex]) && lines[lineIndex].trim()) {
+        rows.push(splitTableRow(lines[lineIndex]));
+        lineIndex += 1;
+      }
+      lineIndex -= 1;
+      blocks.push(
+        <div key={`table-${index}`} className="markdown-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                {headers.map((header, headerIndex) => (
+                  <th key={headerIndex}>{renderInline(header, `table-${index}-h-${headerIndex}`)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {headers.map((_, cellIndex) => (
+                    <td key={cellIndex}>{renderInline(row[cellIndex] || "", `table-${index}-r-${rowIndex}-${cellIndex}`)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      index += 1;
+      continue;
+    }
+
+    const heading = /^(#{1,6})\s+(.+)$/.exec(trimmed);
     if (heading) {
       flushParagraph();
       const level = heading[1].length;
@@ -149,7 +211,9 @@ function renderBlocks(text: string) {
         ? <h3 key={`h-${index}`}>{children}</h3>
         : level === 2
           ? <h4 key={`h-${index}`}>{children}</h4>
-          : <h5 key={`h-${index}`}>{children}</h5>);
+          : level === 3
+            ? <h5 key={`h-${index}`}>{children}</h5>
+            : <h6 key={`h-${index}`}>{children}</h6>);
       index += 1;
       continue;
     }

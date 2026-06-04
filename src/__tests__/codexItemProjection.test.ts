@@ -208,6 +208,50 @@ describe("Codex item projection", () => {
     expect(JSON.stringify(projection.runtimeMessages)).not.toContain('"tool":"');
   });
 
+  it("does not show a stale running turn as active when no operation is running", () => {
+    const projection = buildCodexProjection({
+      status: "ready",
+      thread: null,
+      activeTurn: {
+        id: "stale-turn",
+        threadId: "thread-1",
+        mode: "build",
+        status: "running",
+        startedAt: "2026-06-01T00:00:00.000Z",
+      },
+      activeOperation: {
+        id: "op-build",
+        kind: "build",
+        status: "failed",
+        startedAt: "2026-06-01T00:00:00.000Z",
+        deadlineAt: "2026-06-01T00:00:25.000Z",
+        finalState: "failed",
+      },
+      items: [item({ id: "error", kind: "error", title: "Build blocked", text: "Runtime unavailable", status: "failed" })],
+    });
+
+    expect(projection.threadModel.running).toBe(false);
+    expect(projection.threadModel.failed).toBe(true);
+  });
+
+  it("does not show Settings restart as a thread turn running state", () => {
+    const projection = buildCodexProjection({
+      status: "starting",
+      thread: null,
+      activeTurn: null,
+      activeOperation: {
+        id: "op-restart",
+        kind: "restart",
+        status: "running",
+        startedAt: "2026-06-01T00:00:00.000Z",
+        deadlineAt: "2026-06-01T00:00:25.000Z",
+      },
+      items: [],
+    });
+
+    expect(projection.threadModel.running).toBe(false);
+  });
+
   it("maps Codex approval and terminal items into action and run-step models", () => {
     const projection = buildCodexProjection({
       status: "running",
@@ -260,5 +304,49 @@ describe("Codex item projection", () => {
     expect(projection.inspectorModel.patchEvents[0]?.patches?.[0]).toMatchObject({ path: "README.md" });
     expect(projection.inspectorModel.usage).toEqual({ inputTokens: 10, outputTokens: 5, totalTokens: 15 });
     expect(projection.inspectorModel.counts).toMatchObject({ actions: 2, pendingActions: 0, edits: 1, changes: 1 });
+  });
+
+  it("aggregates nested direct Plan usage metadata across providers", () => {
+    const projection = buildCodexProjection({
+      status: "ready",
+      thread: null,
+      activeTurn: null,
+      items: [
+        item({
+          id: "deepseek-usage",
+          kind: "usage",
+          title: "Token usage",
+          text: "DeepSeek usage",
+          metadata: { providerId: "deepseek", usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
+        }),
+        item({
+          id: "anthropic-usage",
+          kind: "usage",
+          title: "Token usage",
+          text: "Anthropic usage",
+          metadata: { providerId: "anthropic", usage: { input_tokens: 20, output_tokens: 8 } },
+        }),
+        item({
+          id: "google-usage",
+          kind: "usage",
+          title: "Token usage",
+          text: "Gemini usage",
+          metadata: { providerId: "google", usage: { promptTokenCount: 30, candidatesTokenCount: 12, totalTokenCount: 42 } },
+        }),
+        item({
+          id: "ollama-usage",
+          kind: "usage",
+          title: "Token usage",
+          text: "Ollama usage",
+          metadata: { providerId: "ollama", usage: { prompt_eval_count: 7, eval_count: 3 } },
+        }),
+      ],
+    });
+
+    expect(projection.inspectorModel.usage).toEqual({
+      inputTokens: 67,
+      outputTokens: 28,
+      totalTokens: 95,
+    });
   });
 });

@@ -1,10 +1,10 @@
 {
-  "id": "plan-stability-smoke-2026-06-01T07-51-28-884Z",
+  "id": "plan-stability-smoke-2026-06-04T06-28-33-926Z",
   "runtime": "direct-deepseek-plan",
   "provider": "deepseek",
   "scope": "Combined Plan stability gate. This proves the frontend route does not touch Codex app-server after submit and the live DeepSeek SSE path can stream a simple greeting. It is not a packaged Tauri window WebDriver smoke.",
-  "startedAt": "2026-06-01T07:51:11.746Z",
-  "completedAt": "2026-06-01T07:51:28.883Z",
+  "startedAt": "2026-06-04T06:28:25.379Z",
+  "completedAt": "2026-06-04T06:28:33.926Z",
   "result": "verified",
   "steps": [
     {
@@ -16,11 +16,11 @@
         "smoke:plan-route"
       ],
       "status": "verified",
-      "startedAt": "2026-06-01T07:51:11.747Z",
-      "completedAt": "2026-06-01T07:51:22.056Z",
+      "startedAt": "2026-06-04T06:28:25.385Z",
+      "completedAt": "2026-06-04T06:28:32.332Z",
       "exitCode": 0,
-      "stdoutTail": "\n> orbit-code@1.0.0 smoke:plan-route\n> node scripts/run-plan-route-smoke.mjs\n\n\nRunning 1 test using 1 worker\n\n  ✓  1 e2e/run-controls.spec.ts:403:3 › Orbit Code — Run Controls › desktop Plan submission uses direct DeepSeek route without app-server preflight (4.2s)\n\n  1 passed (9.0s)\nPlan route smoke report: /Users/zhoujunjie/PersonalProjects/Agent GUI/docs/smoke/latest-plan-route-smoke.json\n",
-      "stderrTail": "(node:20111) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n(node:20111) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n"
+      "stdoutTail": "\n> orbit-code@1.0.0 smoke:plan-route\n> node scripts/run-plan-route-smoke.mjs\n\n\nRunning 1 test using 1 worker\n\n  ✓  1 e2e/run-controls.spec.ts:447:3 › Orbit Code — Run Controls › desktop Plan submission uses direct DeepSeek route without app-server preflight (2.2s)\n\n  1 passed (5.5s)\nPlan route smoke report: /Users/zhoujunjie/PersonalProjects/Agent GUI/docs/smoke/latest-plan-route-smoke.json\n",
+      "stderrTail": "\u001b[2m[WebServer] \u001b[22m(node:88686) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n\u001b[2m[WebServer] \u001b[22m(Use `node --trace-warnings ...` to show where the warning was created)\n(node:88689) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n(node:88689) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n"
     },
     {
       "id": "live-deepseek-sse",
@@ -31,8 +31,8 @@
         "smoke:plan-live"
       ],
       "status": "verified",
-      "startedAt": "2026-06-01T07:51:22.056Z",
-      "completedAt": "2026-06-01T07:51:28.881Z",
+      "startedAt": "2026-06-04T06:28:32.333Z",
+      "completedAt": "2026-06-04T06:28:33.926Z",
       "exitCode": 0,
       "stdoutTail": "\n> orbit-code@1.0.0 smoke:plan-live\n> node scripts/run-plan-live-streaming-smoke.mjs\n\nPlan live streaming report: /Users/zhoujunjie/PersonalProjects/Agent GUI/docs/smoke/latest-plan-live-streaming.json\nResult: verified\n",
       "stderrTail": ""

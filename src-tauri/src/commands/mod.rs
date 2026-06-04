@@ -48,9 +48,10 @@
 //! ## LLM API Relay
 //! | Command | Params | Returns | Description |
 //! |---------|--------|---------|-------------|
-//! | `call_llm_api` | provider:String, api_url:String, payload:Value | `String` | Synchronous LLM API call (CORS bypass). Reads API key from the unlocked credential vault |
-//! | `call_llm_api_streaming` | app:AppHandle, stream_id:String, provider:String, api_url:String, payload:Value | `()` | Streaming LLM API call. Emits `llm-stream-start/chunk/end/error` events |
+//! | `call_llm_api` | provider:String, api_url:String, payload:Value | `String` | Synchronous LLM API call (CORS bypass). Remote providers read API keys from the unlocked credential vault; local Ollama does not require a key |
+//! | `call_llm_api_streaming` | app:AppHandle, stream_id:String, provider:String, api_url:String, payload:Value | `()` | Streaming LLM API call. Remote providers read API keys from the unlocked credential vault; local Ollama consumes newline-delimited JSON without a key. Emits `llm-stream-start/chunk/end/error` events |
 //! | `list_llm_models` | provider:String, base_url?:String | `Vec<String>` | Fetch provider model IDs using the unlocked credential vault |
+//! | `list_llm_model_infos` | provider:String, base_url?:String | `Vec<LlmModelInfo>` | Fetch provider model IDs with non-secret capability metadata when the provider exposes it |
 //!
 //! ## Vector Embeddings & Semantic Search
 //! | Command | Params | Returns | Description |
@@ -109,6 +110,17 @@ static CREDENTIAL_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::ne
 
 fn credential_cache() -> &'static Mutex<HashMap<String, String>> {
     CREDENTIAL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmModelInfo {
+    pub id: String,
+    pub label: Option<String>,
+    pub max_context_tokens: Option<u64>,
+    pub max_output_tokens: Option<u64>,
+    pub tool_calls: Option<bool>,
+    pub vision: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1322,6 +1334,11 @@ pub fn preview_workspace_patches_in_sandbox(
                     patch.path
                 ));
             }
+        } else if !patch.old_content.is_empty() {
+            return fail(format!(
+                "Stale write detected for {}. Refresh the diff and resolve conflicts before applying.",
+                patch.path
+            ));
         } else if let Some(parent) = source_path.parent() {
             let mut first_existing_parent = parent;
             while !first_existing_parent.exists() {
@@ -1403,6 +1420,9 @@ pub fn apply_workspace_patches_transactional(
             }
             backups.push((canonical_target, Some(original)));
         } else {
+            if !patch.old_content.is_empty() {
+                return Err(format!("Stale write detected for {}. Refresh the diff and resolve conflicts before applying.", patch.path));
+            }
             if let Some(parent) = target_path.parent() {
                 let mut first_existing_parent = parent;
                 while !first_existing_parent.exists() {
@@ -1839,16 +1859,23 @@ pub async fn call_llm_api(
     api_url: String,
     payload: serde_json::Value,
 ) -> Result<String, String> {
-    let api_key = get_provider_credential(&provider)?.ok_or_else(|| {
-        format!(
-            "API Key for {} is not unlocked in Orbit credential vault",
-            provider
-        )
-    })?;
+    let api_key = if provider == "ollama" {
+        None
+    } else {
+        Some(get_provider_credential(&provider)?.ok_or_else(|| {
+            format!(
+                "API Key for {} is not unlocked in Orbit credential vault",
+                provider
+            )
+        })?)
+    };
 
     let final_url = if provider == "google" && !api_url.contains("key=") {
         let separator = if api_url.contains('?') { "&" } else { "?" };
-        format!("{}{}key={}", api_url, separator, api_key)
+        let key = api_key
+            .as_deref()
+            .ok_or_else(|| "Gemini API key not configured".to_string())?;
+        format!("{}{}key={}", api_url, separator, key)
     } else {
         api_url
     };
@@ -1861,11 +1888,19 @@ pub async fn call_llm_api(
         .header("Content-Type", "application/json");
 
     if provider == "anthropic" {
-        req = req
-            .header("x-api-key", &api_key)
-            .header("anthropic-version", "2023-06-01");
-    } else if provider != "google" {
-        req = req.header("Authorization", format!("Bearer {}", api_key));
+        if let Some(key) = api_key.as_deref() {
+            req = req
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01");
+        }
+    } else if provider == "azure-openai" {
+        if let Some(key) = api_key.as_deref() {
+            req = req.header("api-key", key);
+        }
+    } else if provider != "google" && provider != "ollama" {
+        if let Some(key) = api_key.as_deref() {
+            req = req.header("Authorization", format!("Bearer {}", key));
+        }
     }
 
     let res = req
@@ -1896,6 +1931,10 @@ fn provider_allowed_hosts(provider: &str) -> Result<Vec<&'static str>, String> {
         "kimi" => Ok(vec!["api.moonshot.cn"]),
         "siliconflow" => Ok(vec!["api.siliconflow.cn"]),
         "zhipu" => Ok(vec!["open.bigmodel.cn"]),
+        "together" => Ok(vec!["api.together.ai"]),
+        "fireworks" => Ok(vec!["api.fireworks.ai"]),
+        "cerebras" => Ok(vec!["api.cerebras.ai"]),
+        "nvidia" => Ok(vec!["integrate.api.nvidia.com"]),
         "ollama" => Ok(vec!["127.0.0.1", "localhost"]),
         _ => Err(format!("Unknown provider: {}", provider)),
     }
@@ -1904,6 +1943,27 @@ fn provider_allowed_hosts(provider: &str) -> Result<Vec<&'static str>, String> {
 fn ensure_provider_host(provider: &str, url: &str) -> Result<(), String> {
     let parsed_url = reqwest::Url::parse(url).map_err(|e| format!("Invalid API URL: {}", e))?;
     let host = parsed_url.host_str().unwrap_or("");
+    if provider == "custom-openai" {
+        let is_loopback = host == "127.0.0.1" || host == "localhost" || host == "::1";
+        if parsed_url.scheme() == "https" || (parsed_url.scheme() == "http" && is_loopback) {
+            return Ok(());
+        }
+        return Err(
+            "Custom OpenAI-compatible Base URL must use https, or http only for localhost/127.0.0.1.".to_string(),
+        );
+    }
+    if provider == "azure-openai" {
+        let host_allowed = host == "openai.azure.com"
+            || host.ends_with(".openai.azure.com")
+            || host == "services.ai.azure.com"
+            || host.ends_with(".services.ai.azure.com");
+        if parsed_url.scheme() == "https" && host_allowed {
+            return Ok(());
+        }
+        return Err(
+            "Azure OpenAI Base URL must use https and an *.openai.azure.com or *.services.ai.azure.com host.".to_string(),
+        );
+    }
     let allowed_hosts = provider_allowed_hosts(provider)?;
     if !allowed_hosts
         .iter()
@@ -1928,14 +1988,8 @@ fn model_list_url(
 
     let url = match provider {
         "openai" | "openrouter" | "xai" | "mistral" | "groq" | "qwen" | "kimi" | "siliconflow"
-        | "zhipu" => clean_base
-            .map(|base| {
-                if base.ends_with("/models") {
-                    base
-                } else {
-                    format!("{}/models", base)
-                }
-            })
+        | "zhipu" | "together" | "fireworks" | "cerebras" | "nvidia" => clean_base
+            .map(|base| provider_endpoint_for_path(&base, "/models"))
             .unwrap_or_else(|| match provider {
                 "openrouter" => "https://openrouter.ai/api/v1/models".to_string(),
                 "xai" => "https://api.x.ai/v1/models".to_string(),
@@ -1945,21 +1999,32 @@ fn model_list_url(
                 "kimi" => "https://api.moonshot.cn/v1/models".to_string(),
                 "siliconflow" => "https://api.siliconflow.cn/v1/models".to_string(),
                 "zhipu" => "https://open.bigmodel.cn/api/paas/v4/models".to_string(),
+                "together" => "https://api.together.ai/v1/models".to_string(),
+                "fireworks" => "https://api.fireworks.ai/inference/v1/models".to_string(),
+                "cerebras" => "https://api.cerebras.ai/v1/models".to_string(),
+                "nvidia" => "https://integrate.api.nvidia.com/v1/models".to_string(),
                 _ => "https://api.openai.com/v1/models".to_string(),
             }),
+        "custom-openai" => {
+            let base = clean_base.ok_or_else(|| {
+                "Custom OpenAI-compatible provider requires a Base URL.".to_string()
+            })?;
+            provider_endpoint_for_path(&base, "/models")
+        }
+        "azure-openai" => {
+            let base = clean_base
+                .ok_or_else(|| "Azure OpenAI provider requires a Base URL.".to_string())?;
+            provider_endpoint_for_path(&base, "/models")
+        }
         "anthropic" => clean_base
-            .map(|base| {
-                if base.ends_with("/models") {
-                    base
-                } else {
-                    format!("{}/models", base)
-                }
-            })
+            .map(|base| provider_endpoint_for_path(&base, "/models"))
             .unwrap_or_else(|| "https://api.anthropic.com/v1/models".to_string()),
         "google" => {
-            let base = clean_base.unwrap_or_else(|| {
-                "https://generativelanguage.googleapis.com/v1beta/models".to_string()
-            });
+            let base = clean_base
+                .map(|base| provider_endpoint_for_path(&base, "/models"))
+                .unwrap_or_else(|| {
+                    "https://generativelanguage.googleapis.com/v1beta/models".to_string()
+                });
             let separator = if base.contains('?') { "&" } else { "?" };
             let key = api_key.ok_or_else(|| "Gemini API key not configured".to_string())?;
             if base.contains("key=") {
@@ -1969,22 +2034,10 @@ fn model_list_url(
             }
         }
         "deepseek" => clean_base
-            .map(|base| {
-                if base.ends_with("/models") {
-                    base
-                } else {
-                    format!("{}/models", base)
-                }
-            })
+            .map(|base| provider_endpoint_for_path(&base, "/models"))
             .unwrap_or_else(|| "https://api.deepseek.com/models".to_string()),
         "ollama" => clean_base
-            .map(|base| {
-                if base.ends_with("/api/tags") {
-                    base
-                } else {
-                    format!("{}/api/tags", base)
-                }
-            })
+            .map(|base| provider_endpoint_for_path(&base, "/api/tags"))
             .unwrap_or_else(|| "http://127.0.0.1:11434/api/tags".to_string()),
         _ => return Err(format!("Unknown provider: {}", provider)),
     };
@@ -1993,31 +2046,108 @@ fn model_list_url(
     Ok(url)
 }
 
-fn extract_model_ids(provider: &str, body: &str) -> Vec<String> {
+fn provider_endpoint_for_path(base: &str, target_path: &str) -> String {
+    let endpoint_suffixes = [
+        "/chat/completions",
+        "/responses",
+        "/messages",
+        "/api/chat",
+        "/api/tags",
+        "/models",
+    ];
+    for suffix in endpoint_suffixes {
+        if let Some(prefix) = base.strip_suffix(suffix) {
+            return format!("{prefix}{target_path}");
+        }
+    }
+    if target_path == "/models" {
+        if let Some(index) = base.find("/models/") {
+            if base.ends_with(":generateContent") {
+                return format!("{}{}", &base[..index], target_path);
+            }
+        }
+    }
+    if base.ends_with(target_path) {
+        base.to_string()
+    } else {
+        format!("{base}{target_path}")
+    }
+}
+
+fn json_string<'a>(item: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| item.get(*key).and_then(|value| value.as_str()))
+}
+
+fn json_bool(item: &serde_json::Value, paths: &[&[&str]]) -> Option<bool> {
+    paths.iter().find_map(|path| {
+        let mut current = item;
+        for key in *path {
+            current = current.get(*key)?;
+        }
+        current.as_bool()
+    })
+}
+
+fn json_u64(item: &serde_json::Value, paths: &[&[&str]]) -> Option<u64> {
+    paths.iter().find_map(|path| {
+        let mut current = item;
+        for key in *path {
+            current = current.get(*key)?;
+        }
+        current
+            .as_u64()
+            .or_else(|| current.as_f64().filter(|value| *value > 0.0).map(|value| value as u64))
+            .or_else(|| current.as_str()?.replace('_', "").parse::<u64>().ok())
+    })
+}
+
+fn json_array_contains(item: &serde_json::Value, paths: &[&[&str]], needles: &[&str]) -> Option<bool> {
+    paths.iter().find_map(|path| {
+        let mut current = item;
+        for key in *path {
+            current = current.get(*key)?;
+        }
+        let values = current.as_array()?;
+        Some(values.iter().any(|value| {
+            let text = value.as_str().unwrap_or_default().to_ascii_lowercase();
+            needles.iter().any(|needle| text.contains(needle))
+        }))
+    })
+}
+
+fn extract_model_infos(provider: &str, body: &str) -> Vec<LlmModelInfo> {
     let parsed: serde_json::Value = match serde_json::from_str(body) {
         Ok(value) => value,
         Err(_) => return vec![],
     };
 
-    let raw_models = match provider {
-        "google" => parsed
-            .get("models")
-            .and_then(|value| value.as_array())
-            .cloned()
-            .unwrap_or_default(),
-        "ollama" => parsed
-            .get("models")
-            .and_then(|value| value.as_array())
-            .cloned()
-            .unwrap_or_default(),
-        _ => parsed
-            .get("data")
-            .and_then(|value| value.as_array())
-            .cloned()
-            .unwrap_or_default(),
+    let primary_key = match provider {
+        "google" | "ollama" => "models",
+        _ => "data",
     };
+    let fallback_key = if primary_key == "models" {
+        "data"
+    } else {
+        "models"
+    };
+    let raw_models = parsed
+        .get(primary_key)
+        .and_then(|value| value.as_array())
+        .or_else(|| parsed.get(fallback_key).and_then(|value| value.as_array()))
+        .cloned()
+        .or_else(|| {
+            if parsed.get("id").is_some()
+                || parsed.get("name").is_some()
+                || parsed.get("model").is_some()
+            {
+                Some(vec![parsed.clone()])
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
 
-    let mut models = Vec::new();
+    let mut models: Vec<LlmModelInfo> = Vec::new();
     for item in raw_models {
         let supports_generation = item
             .get("supportedGenerationMethods")
@@ -2032,30 +2162,117 @@ fn extract_model_ids(provider: &str, body: &str) -> Vec<String> {
             continue;
         }
 
-        let id = item
-            .get("id")
-            .or_else(|| item.get("name"))
-            .and_then(|value| value.as_str())
+        let raw_id = json_string(&item, &["id", "name", "model"])
             .unwrap_or("")
             .trim()
             .trim_start_matches("models/")
             .to_string();
-        if !id.is_empty() && !models.contains(&id) {
-            models.push(id);
+        if raw_id.is_empty() || models.iter().any(|model| model.id == raw_id) {
+            continue;
         }
+
+        let label = json_string(&item, &["display_name", "displayName", "label", "name"])
+            .map(|value| value.trim().trim_start_matches("models/").to_string())
+            .filter(|value| !value.is_empty() && value != &raw_id);
+        let max_context_tokens = json_u64(
+            &item,
+            &[
+                &["context_length"],
+                &["contextLength"],
+                &["max_context_length"],
+                &["maxContextLength"],
+                &["context_window"],
+                &["contextWindow"],
+                &["input_token_limit"],
+                &["inputTokenLimit"],
+                &["max_input_tokens"],
+                &["maxInputTokens"],
+                &["capabilities", "context_length"],
+                &["limits", "context_window"],
+            ],
+        );
+        let max_output_tokens = json_u64(
+            &item,
+            &[
+                &["output_token_limit"],
+                &["outputTokenLimit"],
+                &["max_output_tokens"],
+                &["maxOutputTokens"],
+                &["capabilities", "max_output_tokens"],
+                &["limits", "output_tokens"],
+            ],
+        );
+        let tool_calls = json_bool(
+            &item,
+            &[
+                &["tool_calls"],
+                &["toolCalls"],
+                &["supports_tools"],
+                &["supportsTools"],
+                &["capabilities", "tools"],
+                &["capabilities", "tool_calls"],
+                &["capabilities", "toolCalls"],
+                &["capabilities", "function_calling"],
+            ],
+        )
+        .or_else(|| {
+            json_array_contains(
+                &item,
+                &[&["supported_parameters"], &["supportedParameters"], &["features"]],
+                &["tools", "tool_choice", "function"],
+            )
+        });
+        let vision = json_bool(
+            &item,
+            &[
+                &["vision"],
+                &["supports_vision"],
+                &["supportsVision"],
+                &["capabilities", "vision"],
+                &["capabilities", "image"],
+            ],
+        )
+        .or_else(|| {
+            json_array_contains(
+                &item,
+                &[
+                    &["input_modalities"],
+                    &["inputModalities"],
+                    &["modalities"],
+                    &["supported_modalities"],
+                    &["supportedModalities"],
+                ],
+                &["image", "vision"],
+            )
+        });
+
+        models.push(LlmModelInfo {
+            id: raw_id,
+            label,
+            max_context_tokens,
+            max_output_tokens,
+            tool_calls,
+            vision,
+        });
     }
     models
 }
 
-#[tauri::command]
-pub async fn list_llm_models(
-    provider: String,
+fn extract_model_ids(provider: &str, body: &str) -> Vec<String> {
+    extract_model_infos(provider, body)
+        .into_iter()
+        .map(|model| model.id)
+        .collect()
+}
+
+async fn fetch_llm_model_list_body(
+    provider: &str,
     base_url: Option<String>,
-) -> Result<Vec<String>, String> {
+) -> Result<String, String> {
     let api_key = if provider == "ollama" {
         None
     } else {
-        Some(get_provider_credential(&provider)?.ok_or_else(|| {
+        Some(get_provider_credential(provider)?.ok_or_else(|| {
             format!(
                 "API Key for {} is not unlocked in Orbit credential vault",
                 provider
@@ -2063,7 +2280,7 @@ pub async fn list_llm_models(
         })?)
     };
 
-    let url = model_list_url(&provider, base_url, api_key.as_deref())?;
+    let url = model_list_url(provider, base_url, api_key.as_deref())?;
     let client = reqwest::Client::new();
     let mut req = client.get(&url).header("Content-Type", "application/json");
 
@@ -2091,8 +2308,38 @@ pub async fn list_llm_models(
     if !status.is_success() {
         return Err(format!("Model list request returned {}: {}", status, text));
     }
+    Ok(text)
+}
 
+fn extract_ollama_stream_content(line: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    parsed["message"]["content"]
+        .as_str()
+        .or_else(|| parsed["response"].as_str())
+        .filter(|content| !content.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+#[tauri::command]
+pub async fn list_llm_models(
+    provider: String,
+    base_url: Option<String>,
+) -> Result<Vec<String>, String> {
+    let text = fetch_llm_model_list_body(&provider, base_url).await?;
     let models = extract_model_ids(&provider, &text);
+    if models.is_empty() {
+        return Err("Provider returned no usable models".to_string());
+    }
+    Ok(models)
+}
+
+#[tauri::command]
+pub async fn list_llm_model_infos(
+    provider: String,
+    base_url: Option<String>,
+) -> Result<Vec<LlmModelInfo>, String> {
+    let text = fetch_llm_model_list_body(&provider, base_url).await?;
+    let models = extract_model_infos(&provider, &text);
     if models.is_empty() {
         return Err("Provider returned no usable models".to_string());
     }
@@ -2107,16 +2354,23 @@ pub async fn call_llm_api_streaming(
     api_url: String,
     payload: serde_json::Value,
 ) -> Result<(), String> {
-    let api_key = get_provider_credential(&provider)?.ok_or_else(|| {
-        format!(
-            "API Key for {} is not unlocked in Orbit credential vault",
-            provider
-        )
-    })?;
+    let api_key = if provider == "ollama" {
+        None
+    } else {
+        Some(get_provider_credential(&provider)?.ok_or_else(|| {
+            format!(
+                "API Key for {} is not unlocked in Orbit credential vault",
+                provider
+            )
+        })?)
+    };
 
     let final_url = if provider == "google" && !api_url.contains("key=") {
         let separator = if api_url.contains('?') { "&" } else { "?" };
-        format!("{}{}key={}", api_url, separator, api_key)
+        let key = api_key
+            .as_deref()
+            .ok_or_else(|| "Gemini API key not configured".to_string())?;
+        format!("{}{}key={}", api_url, separator, key)
     } else {
         api_url
     };
@@ -2134,11 +2388,15 @@ pub async fn call_llm_api_streaming(
         .header("Content-Type", "application/json");
 
     if provider == "anthropic" {
-        req = req
-            .header("x-api-key", &api_key)
-            .header("anthropic-version", "2023-06-01");
-    } else if provider != "google" {
-        req = req.header("Authorization", format!("Bearer {}", api_key));
+        if let Some(key) = api_key.as_deref() {
+            req = req
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01");
+        }
+    } else if provider != "google" && provider != "ollama" {
+        if let Some(key) = api_key.as_deref() {
+            req = req.header("Authorization", format!("Bearer {}", key));
+        }
     }
 
     let mut res = req
@@ -2149,6 +2407,7 @@ pub async fn call_llm_api_streaming(
 
     let app_clone = app.clone();
     let sid = stream_id.clone();
+    let stream_provider = provider.clone();
 
     let _ = app.emit(
         "llm-stream-start",
@@ -2166,6 +2425,26 @@ pub async fn call_llm_api_streaming(
                 Ok(Some(bytes)) => {
                     let text = String::from_utf8_lossy(&bytes);
                     buffer.push_str(&text);
+
+                    if stream_provider == "ollama" {
+                        while let Some(pos) = buffer.find('\n') {
+                            let line = buffer[..pos].trim().to_string();
+                            buffer.drain(..=pos);
+                            if line.is_empty() {
+                                continue;
+                            }
+                            if let Some(content) = extract_ollama_stream_content(&line) {
+                                let _ = app_clone.emit(
+                                    "llm-stream-chunk",
+                                    serde_json::json!({
+                                        "streamId": sid,
+                                        "content": content
+                                    }),
+                                );
+                            }
+                        }
+                        continue;
+                    }
 
                     while let Some(pos) = buffer.find("\n\n") {
                         let line = buffer[..pos].to_string();
@@ -2220,6 +2499,19 @@ pub async fn call_llm_api_streaming(
                     );
                     return;
                 }
+            }
+        }
+
+        if stream_provider == "ollama" {
+            let line = buffer.trim();
+            if let Some(content) = extract_ollama_stream_content(line) {
+                let _ = app_clone.emit(
+                    "llm-stream-chunk",
+                    serde_json::json!({
+                        "streamId": sid,
+                        "content": content
+                    }),
+                );
             }
         }
 
@@ -2279,6 +2571,37 @@ mod provider_tests {
         assert!(provider_allowed_hosts("qwen")
             .unwrap()
             .contains(&"dashscope.aliyuncs.com"));
+        assert!(provider_allowed_hosts("together")
+            .unwrap()
+            .contains(&"api.together.ai"));
+        assert!(provider_allowed_hosts("fireworks")
+            .unwrap()
+            .contains(&"api.fireworks.ai"));
+        assert!(provider_allowed_hosts("cerebras")
+            .unwrap()
+            .contains(&"api.cerebras.ai"));
+        assert!(provider_allowed_hosts("nvidia")
+            .unwrap()
+            .contains(&"integrate.api.nvidia.com"));
+        assert!(ensure_provider_host(
+            "azure-openai",
+            "https://team-west.openai.azure.com/openai/v1/models"
+        )
+        .is_ok());
+        assert!(ensure_provider_host(
+            "azure-openai",
+            "https://team-west.services.ai.azure.com/openai/v1/models"
+        )
+        .is_ok());
+        assert!(ensure_provider_host(
+            "azure-openai",
+            "http://team-west.openai.azure.com/openai/v1/models"
+        )
+        .unwrap_err()
+        .contains("Azure OpenAI Base URL"));
+        assert!(ensure_provider_host("azure-openai", "https://evil.example/openai/v1/models")
+            .unwrap_err()
+            .contains("Azure OpenAI Base URL"));
     }
 
     #[test]
@@ -2291,6 +2614,117 @@ mod provider_tests {
             model_list_url("groq", None, Some("key")).unwrap(),
             "https://api.groq.com/openai/v1/models"
         );
+        assert_eq!(
+            model_list_url("together", None, Some("key")).unwrap(),
+            "https://api.together.ai/v1/models"
+        );
+        assert_eq!(
+            model_list_url("fireworks", None, Some("key")).unwrap(),
+            "https://api.fireworks.ai/inference/v1/models"
+        );
+        assert_eq!(
+            model_list_url("cerebras", None, Some("key")).unwrap(),
+            "https://api.cerebras.ai/v1/models"
+        );
+        assert_eq!(
+            model_list_url("nvidia", None, Some("key")).unwrap(),
+            "https://integrate.api.nvidia.com/v1/models"
+        );
+        assert_eq!(
+            model_list_url(
+                "azure-openai",
+                Some("https://team-west.openai.azure.com/openai/v1".to_string()),
+                Some("key")
+            )
+            .unwrap(),
+            "https://team-west.openai.azure.com/openai/v1/models"
+        );
+        assert_eq!(
+            model_list_url(
+                "azure-openai",
+                Some("https://team-west.services.ai.azure.com/openai/v1/chat/completions"
+                    .to_string()),
+                Some("key")
+            )
+            .unwrap(),
+            "https://team-west.services.ai.azure.com/openai/v1/models"
+        );
+        assert!(model_list_url("azure-openai", None, Some("key"))
+            .unwrap_err()
+            .contains("requires a Base URL"));
+        assert_eq!(
+            model_list_url(
+                "custom-openai",
+                Some("https://gateway.example/v1".to_string()),
+                Some("key")
+            )
+            .unwrap(),
+            "https://gateway.example/v1/models"
+        );
+        assert!(model_list_url("custom-openai", None, Some("key"))
+            .unwrap_err()
+            .contains("requires a Base URL"));
+        assert!(model_list_url(
+            "custom-openai",
+            Some("http://gateway.example/v1".to_string()),
+            Some("key")
+        )
+        .unwrap_err()
+        .contains("must use https"));
+        assert_eq!(
+            model_list_url(
+                "custom-openai",
+                Some("http://127.0.0.1:8080/v1".to_string()),
+                Some("key")
+            )
+            .unwrap(),
+            "http://127.0.0.1:8080/v1/models"
+        );
+        assert_eq!(
+            model_list_url(
+                "custom-openai",
+                Some("https://gateway.example/v1/chat/completions".to_string()),
+                Some("key")
+            )
+            .unwrap(),
+            "https://gateway.example/v1/models"
+        );
+        assert_eq!(
+            model_list_url(
+                "custom-openai",
+                Some("https://gateway.example/v1/responses".to_string()),
+                Some("key")
+            )
+            .unwrap(),
+            "https://gateway.example/v1/models"
+        );
+        assert_eq!(
+            model_list_url(
+                "anthropic",
+                Some("https://api.anthropic.com/v1/messages".to_string()),
+                Some("key")
+            )
+            .unwrap(),
+            "https://api.anthropic.com/v1/models"
+        );
+        assert_eq!(
+            model_list_url(
+                "ollama",
+                Some("http://127.0.0.1:11434/api/chat".to_string()),
+                None
+            )
+            .unwrap(),
+            "http://127.0.0.1:11434/api/tags"
+        );
+        assert_eq!(
+            model_list_url(
+                "google",
+                Some("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent".to_string()),
+                Some("key")
+            )
+            .unwrap(),
+            "https://generativelanguage.googleapis.com/v1beta/models?key=key"
+        );
     }
 
     #[test]
@@ -2300,5 +2734,96 @@ mod provider_tests {
             extract_model_ids("siliconflow", body),
             vec!["deepseek-ai/DeepSeek-V3.2", "Qwen/Qwen3-Coder"]
         );
+    }
+
+    #[test]
+    fn parses_provider_model_list_variants_for_import() {
+        assert_eq!(
+            extract_model_ids(
+                "anthropic",
+                r#"{"data":[{"id":"claude-sonnet-4-5","display_name":"Claude Sonnet"}]}"#
+            ),
+            vec!["claude-sonnet-4-5"]
+        );
+        assert_eq!(
+            extract_model_ids(
+                "custom-openai",
+                r#"{"models":[{"model":"private-coder"},{"name":"models/private-reasoner"}]}"#
+            ),
+            vec!["private-coder", "private-reasoner"]
+        );
+        assert_eq!(
+            extract_model_ids("custom-openai", r#"{"id":"single-model"}"#),
+            vec!["single-model"]
+        );
+        assert_eq!(
+            extract_model_ids(
+                "google",
+                r#"{"models":[{"name":"models/gemini-2.5-pro","supportedGenerationMethods":["generateContent"]},{"name":"models/embedding-001","supportedGenerationMethods":["embedContent"]}]}"#
+            ),
+            vec!["gemini-2.5-pro"]
+        );
+        assert_eq!(
+            extract_model_ids("ollama", r#"{"models":[{"name":"qwen3-coder:latest"}]}"#),
+            vec!["qwen3-coder:latest"]
+        );
+    }
+
+    #[test]
+    fn parses_provider_model_capability_metadata_for_import() {
+        let openrouter = extract_model_infos(
+            "openrouter",
+            r#"{"data":[{"id":"openai/gpt-5.1-codex","context_length":400000,"max_output_tokens":32768,"supported_parameters":["tools","tool_choice"],"input_modalities":["text","image"]}]}"#,
+        );
+        assert_eq!(
+            openrouter,
+            vec![LlmModelInfo {
+                id: "openai/gpt-5.1-codex".to_string(),
+                label: None,
+                max_context_tokens: Some(400_000),
+                max_output_tokens: Some(32_768),
+                tool_calls: Some(true),
+                vision: Some(true),
+            }]
+        );
+
+        let anthropic = extract_model_infos(
+            "anthropic",
+            r#"{"data":[{"id":"claude-sonnet-4-5","display_name":"Claude Sonnet 4.5","input_token_limit":200000,"output_token_limit":64000}]}"#,
+        );
+        assert_eq!(anthropic[0].label.as_deref(), Some("Claude Sonnet 4.5"));
+        assert_eq!(anthropic[0].max_context_tokens, Some(200_000));
+        assert_eq!(anthropic[0].max_output_tokens, Some(64_000));
+
+        let google = extract_model_infos(
+            "google",
+            r#"{"models":[{"name":"models/gemini-2.5-pro","inputTokenLimit":1048576,"outputTokenLimit":65536,"supportedGenerationMethods":["generateContent"]},{"name":"models/embedding-001","inputTokenLimit":2048,"supportedGenerationMethods":["embedContent"]}]}"#,
+        );
+        assert_eq!(google.len(), 1);
+        assert_eq!(google[0].id, "gemini-2.5-pro");
+        assert_eq!(google[0].max_context_tokens, Some(1_048_576));
+        assert_eq!(google[0].max_output_tokens, Some(65_536));
+
+        let zhipu = extract_model_infos(
+            "zhipu",
+            r#"{"models":[{"model":"glm-4.6","contextWindow":"128000","capabilities":{"function_calling":true,"vision":true}}]}"#,
+        );
+        assert_eq!(zhipu[0].max_context_tokens, Some(128_000));
+        assert_eq!(zhipu[0].tool_calls, Some(true));
+        assert_eq!(zhipu[0].vision, Some(true));
+    }
+
+    #[test]
+    fn parses_ollama_stream_lines() {
+        assert_eq!(
+            extract_ollama_stream_content(r#"{"message":{"content":"hello"}}"#),
+            Some("hello".to_string())
+        );
+        assert_eq!(
+            extract_ollama_stream_content(r#"{"response":"legacy"}"#),
+            Some("legacy".to_string())
+        );
+        assert_eq!(extract_ollama_stream_content(r#"{"done":true}"#), None);
+        assert_eq!(extract_ollama_stream_content("not json"), None);
     }
 }

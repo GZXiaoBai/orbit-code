@@ -8,6 +8,7 @@ import { timestampId, writeSmokeReport } from "./smoke-report.mjs";
 const TAURI_WEBDRIVER_DOC = "https://v2.tauri.app/develop/tests/webdriver/";
 const DEFAULT_TIMEOUT_MS = Number(process.env.ORBIT_DESKTOP_BUILD_TIMEOUT_MS || 120_000);
 const REQUEST_TIMEOUT_MS = Number(process.env.ORBIT_WEBDRIVER_REQUEST_TIMEOUT_MS || 15_000);
+const SESSION_TIMEOUT_MS = Number(process.env.ORBIT_WEBDRIVER_SESSION_TIMEOUT_MS || Math.max(DEFAULT_TIMEOUT_MS, 60_000));
 const LIVE_BUILD_ENABLED = process.env.ORBIT_DESKTOP_BUILD_LIVE === "1";
 const DENY_APPROVAL = process.env.ORBIT_DESKTOP_BUILD_DENY === "1";
 const SMOKE_FILE = process.env.ORBIT_DESKTOP_BUILD_SMOKE_FILE || "ORBIT_DESKTOP_BUILD_SMOKE.md";
@@ -58,9 +59,9 @@ function discoverAppPath() {
   return candidates.map((candidate) => path.resolve(candidate)).find((candidate) => fs.existsSync(candidate)) || "";
 }
 
-async function requestJson(baseUrl, method, route, body) {
+async function requestJson(baseUrl, method, route, body, timeoutMs = REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${baseUrl}${route}`, {
       method,
@@ -69,7 +70,7 @@ async function requestJson(baseUrl, method, route, body) {
       signal: controller.signal,
     }).catch((error) => {
       if (error?.name === "AbortError") {
-        throw new Error(`${method} ${route} timed out after ${REQUEST_TIMEOUT_MS}ms`);
+        throw new Error(`${method} ${route} timed out after ${timeoutMs}ms`);
       }
       throw error;
     });
@@ -183,7 +184,7 @@ async function createSession(baseUrl, appPath) {
         "tauri:options": { application: appPath },
       },
     },
-  });
+  }, SESSION_TIMEOUT_MS);
   const sessionId = response?.value?.sessionId || response?.sessionId;
   if (!sessionId) throw new Error(`tauri-driver did not return a session id: ${JSON.stringify(response)}`);
   return {
@@ -412,6 +413,11 @@ async function main() {
     liveBuildEnabled: LIVE_BUILD_ENABLED,
     denyApproval: DENY_APPROVAL,
     smokeFile: SMOKE_FILE,
+    timeouts: {
+      requestMs: REQUEST_TIMEOUT_MS,
+      sessionMs: SESSION_TIMEOUT_MS,
+      overallMs: DEFAULT_TIMEOUT_MS,
+    },
     appDataOverride: APP_DATA_DIR ? { enabled: true, path: APP_DATA_DIR } : { enabled: false },
     workspace: WORKSPACE_DIR ? { path: WORKSPACE_DIR } : null,
     criteria,

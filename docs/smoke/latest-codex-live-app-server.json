@@ -1,12 +1,12 @@
 {
-  "id": "codex-live-app-server-2026-05-31T10-48-07-388Z",
+  "id": "codex-live-app-server-2026-06-02T01-21-51-794Z",
   "runtime": "codex-sidecar.v1",
   "provider": "deepseek",
   "model": "deepseek-chat",
   "approvalPolicy": "untrusted",
-  "workspace": "/var/folders/mj/jy1pdbqn2xv757mwvmmtxggh0000gn/T/orbit-codex-live-480BUn",
-  "startedAt": "2026-05-31T10:48:02.452Z",
-  "completedAt": "2026-05-31T10:48:07.387Z",
+  "workspace": "/var/folders/mj/jy1pdbqn2xv757mwvmmtxggh0000gn/T/orbit-codex-live-tdFMfD",
+  "startedAt": "2026-06-02T01:21:43.052Z",
+  "completedAt": "2026-06-02T01:21:51.794Z",
   "result": "verified",
   "criteria": [
     {
@@ -27,7 +27,7 @@
       "label": "Codex app-server thread/start returned a thread id.",
       "status": "verified",
       "evidence": {
-        "threadId": "019e7da5-ddde-7b70-ab28-a7eb344aa901"
+        "threadId": "019e85ec-2511-7042-bc57-1f85b13170e6"
       }
     },
     {
@@ -36,7 +36,7 @@
       "status": "verified",
       "evidence": {
         "model": "deepseek-chat",
-        "inputItems": 8,
+        "inputItems": 13,
         "tools": [
           "exec_command",
           "write_stdin",
@@ -53,7 +53,7 @@
       "label": "The live bridge completed at least one DeepSeek Responses stream.",
       "status": "verified",
       "evidence": {
-        "assistantChars": 444,
+        "assistantChars": 372,
         "reasoningChars": 0
       }
     },
@@ -91,8 +91,8 @@
       "label": "Codex app-server streamed a final assistant summary.",
       "status": "verified",
       "evidence": {
-        "assistantChars": 444,
-        "deltaCount": 110
+        "assistantChars": 372,
+        "deltaCount": 107
       }
     },
     {
@@ -100,7 +100,7 @@
       "label": "Codex app-server emitted token usage updates.",
       "status": "verified",
       "evidence": {
-        "count": 3
+        "count": 4
       }
     },
     {
@@ -108,7 +108,7 @@
       "label": "Codex app-server emitted command execution terminal output.",
       "status": "verified",
       "evidence": {
-        "count": 1
+        "count": 2
       }
     },
     {
@@ -117,6 +117,7 @@
       "status": "verified",
       "evidence": {
         "methods": [
+          "item/commandExecution/requestApproval",
           "item/commandExecution/requestApproval",
           "item/commandExecution/requestApproval"
         ]
@@ -127,20 +128,21 @@
       "label": "The live Build created the requested smoke file.",
       "status": "verified",
       "evidence": {
-        "path": "/var/folders/mj/jy1pdbqn2xv757mwvmmtxggh0000gn/T/orbit-codex-live-480BUn/SMOKE_CODEX_LIVE.md",
-        "content": "This is a smoke test for Codex Live.\n"
+        "path": "/var/folders/mj/jy1pdbqn2xv757mwvmmtxggh0000gn/T/orbit-codex-live-tdFMfD/SMOKE_CODEX_LIVE.md",
+        "content": "This is a smoke test file for Codex CLI.\n"
       }
     }
   ],
   "evidence": {
-    "responsesRequests": 3,
-    "deepseekResponses": 3,
-    "assistantChars": 444,
+    "responsesRequests": 4,
+    "deepseekResponses": 4,
+    "assistantChars": 372,
     "reasoningChars": 0,
-    "toolCallCount": 2,
-    "jsonRpcMessages": 146,
-    "commandOutputCount": 1,
+    "toolCallCount": 4,
+    "jsonRpcMessages": 155,
+    "commandOutputCount": 2,
     "serverRequestMethods": [
+      "item/commandExecution/requestApproval",
       "item/commandExecution/requestApproval",
       "item/commandExecution/requestApproval"
     ],
@@ -163,12 +165,44 @@
       "item/agentMessage/delta",
       "item/agentMessage/delta",
       "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
       "item/started",
       "item/completed",
       "thread/status/changed",
       "item/started",
+      "item/started",
+      "serverRequest/resolved",
       "serverRequest/resolved",
       "thread/status/changed",
+      "item/completed",
+      "item/completed",
+      "thread/tokenUsage/updated",
+      "account/rateLimits/updated",
+      "item/started",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/agentMessage/delta",
+      "item/started",
+      "item/completed",
+      "item/started",
       "item/completed",
       "thread/tokenUsage/updated",
       "account/rateLimits/updated",
@@ -177,35 +211,11 @@
       "serverRequest/resolved",
       "thread/status/changed",
       "item/commandExecution/outputDelta",
+      "item/commandExecution/outputDelta",
       "thread/tokenUsage/updated",
       "account/rateLimits/updated",
       "item/completed",
       "item/started",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
-      "item/agentMessage/delta",
       "item/agentMessage/delta",
       "item/agentMessage/delta",
       "item/agentMessage/delta",
@@ -287,7 +297,7 @@
       "thread/status/changed",
       "turn/completed"
     ],
-    "stderrTail": "{\"timestamp\":\"2026-05-31T10:48:02.780533Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Unknown model deepseek-chat is used. This will use fallback model metadata.\"},\"target\":\"codex_models_manager::model_info\"}\n{\"timestamp\":\"2026-05-31T10:48:02.781545Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Model personality requested but model_messages is missing, falling back to base instructions.\",\"model\":\"deepseek-chat\",\"personality\":\"pragmatic\"},\"target\":\"codex_protocol::openai_models\"}\n{\"timestamp\":\"2026-05-31T10:48:02.826387Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Unknown model deepseek-chat is used. This will use fallback model metadata.\"},\"target\":\"codex_models_manager::model_info\"}\n{\"timestamp\":\"2026-05-31T10:48:02.827579Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Unknown model deepseek-chat is used. This will use fallback model metadata.\"},\"target\":\"codex_models_manager::model_info\"}\n{\"timestamp\":\"2026-05-31T10:48:02.883759Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Unknown model deepseek-chat is used. This will use fallback model metadata.\"},\"target\":\"codex_models_manager::model_info\"}\n{\"timestamp\":\"2026-05-31T10:48:03.290836Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"failed to warm featured plugin ids cache\",\"error\":\"remote plugin sync request to https://chatgpt.com/backend-api/plugins/featured failed with status 401 Unauthorized: {\\\"detail\\\":\\\"Unauthorized\\\"}\"},\"target\":\"codex_core_plugins::manager\"}\n{\"timestamp\":\"2026-05-31T10:48:04.866114Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Model personality requested but model_messages is missing, falling back to base instructions.\",\"model\":\"deepseek-chat\",\"personality\":\"pragmatic\"},\"target\":\"codex_protocol::openai_models\"}\n{\"timestamp\":\"2026-05-31T10:48:06.130738Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Model personality requested but model_messages is missing, falling back to base instructions.\",\"model\":\"deepseek-chat\",\"personality\":\"pragmatic\"},\"target\":\"codex_protocol::openai_models\"}\n{\"timestamp\":\"2026-05-31T10:48:07.286239Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Model personality requested but model_messages is missing, falling back to base instructions.\",\"model\":\"deepseek-chat\",\"personality\":\"pragmatic\"},\"target\":\"codex_protocol::openai_models\"}",
+    "stderrTail": "{\"timestamp\":\"2026-06-02T01:21:46.256892Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Unknown model deepseek-chat is used. This will use fallback model metadata.\"},\"target\":\"codex_models_manager::model_info\"}\n{\"timestamp\":\"2026-06-02T01:21:46.256988Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Model personality requested but model_messages is missing, falling back to base instructions.\",\"model\":\"deepseek-chat\",\"personality\":\"pragmatic\"},\"target\":\"codex_protocol::openai_models\"}\n{\"timestamp\":\"2026-06-02T01:21:46.268121Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Unknown model deepseek-chat is used. This will use fallback model metadata.\"},\"target\":\"codex_models_manager::model_info\"}\n{\"timestamp\":\"2026-06-02T01:21:46.268265Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Unknown model deepseek-chat is used. This will use fallback model metadata.\"},\"target\":\"codex_models_manager::model_info\"}\n{\"timestamp\":\"2026-06-02T01:21:46.288380Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Unknown model deepseek-chat is used. This will use fallback model metadata.\"},\"target\":\"codex_models_manager::model_info\"}\n{\"timestamp\":\"2026-06-02T01:21:46.794623Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"failed to warm featured plugin ids cache\",\"error\":\"remote plugin sync request to https://chatgpt.com/backend-api/plugins/featured failed with status 401 Unauthorized: {\\\"detail\\\":\\\"Unauthorized\\\"}\"},\"target\":\"codex_core_plugins::manager\"}\n{\"timestamp\":\"2026-06-02T01:21:48.633683Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Model personality requested but model_messages is missing, falling back to base instructions.\",\"model\":\"deepseek-chat\",\"personality\":\"pragmatic\"},\"target\":\"codex_protocol::openai_models\"}\n{\"timestamp\":\"2026-06-02T01:21:49.753885Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Model personality requested but model_messages is missing, falling back to base instructions.\",\"model\":\"deepseek-chat\",\"personality\":\"pragmatic\"},\"target\":\"codex_protocol::openai_models\"}\n{\"timestamp\":\"2026-06-02T01:21:50.783211Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Model personality requested but model_messages is missing, falling back to base instructions.\",\"model\":\"deepseek-chat\",\"personality\":\"pragmatic\"},\"target\":\"codex_protocol::openai_models\"}\n{\"timestamp\":\"2026-06-02T01:21:51.757464Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Model personality requested but model_messages is missing, falling back to base instructions.\",\"model\":\"deepseek-chat\",\"personality\":\"pragmatic\"},\"target\":\"codex_protocol::openai_models\"}",
     "invalidJson": []
   }
 }

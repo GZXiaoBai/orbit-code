@@ -11,7 +11,7 @@ function run(command, args) {
 
 function outputFor(results, stepName) {
   const step = results.find((result) => result.name === stepName);
-  return `${step?.stdoutTail || ""}\n${step?.stderrTail || ""}`;
+  return `${step?.stdout || step?.stdoutTail || ""}\n${step?.stderr || step?.stderrTail || ""}`;
 }
 
 function criterion(id, label, evidence, haystack) {
@@ -75,11 +75,13 @@ function buildAcceptance(results) {
       frontendOutput,
     ),
     criterion(
-      "build-runtime-preflight",
-      "Workbench blocks Build before turn/start when the Codex app-server runtime is not ready.",
+      "build-runtime-submit-gate",
+      "Workbench allows verified DeepSeek Build submit without prestarting Codex app-server.",
       [
-        "blocks Build before turn/start when the app-server runtime is not ready",
-        "treats a running app-server as ready even when Build will later emit turn items",
+        "routes Build through the Codex app-server path",
+        "does not preflight Codex app-server before Build submissions",
+        "enables real DeepSeek Build after bridge smoke passes",
+        "does not require an already-running sidecar before enabling Build submit",
       ],
       frontendOutput,
     ),
@@ -110,6 +112,7 @@ function main() {
         "src/__tests__/codexSessionRouting.test.ts",
         "src/__tests__/codexItemProjection.test.ts",
         "src/__tests__/deepSeekSmokeHarness.test.ts",
+        "src/__tests__/runControls.test.ts",
       ],
     },
   ];
@@ -121,6 +124,8 @@ function main() {
     results.push({
       ...step,
       status: result.status,
+      stdout: result.stdout || "",
+      stderr: result.stderr || "",
       stdoutTail: (result.stdout || "").slice(-6000),
       stderrTail: (result.stderr || "").slice(-6000),
     });
@@ -140,7 +145,7 @@ function main() {
     completedAt,
     result: passed ? "verified" : "broken",
     acceptanceCriteria,
-    steps: results,
+    steps: results.map(({ stdout: _stdout, stderr: _stderr, ...result }) => result),
   };
   writeSmokeReport("codex-app-server-deepseek-smoke", report, "Codex app-server smoke report");
   if (!passed) process.exit(1);

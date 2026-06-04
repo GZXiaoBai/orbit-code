@@ -1,8 +1,8 @@
 {
-  "id": "tauri-webdriver-build-smoke-2026-06-01T07-47-06-921Z",
+  "id": "tauri-webdriver-build-smoke-2026-06-02T01-15-56-783Z",
   "scope": "Packaged-window Build smoke for Orbit Code through tauri-driver/WebDriver. Default mode verifies readiness; live Build requires ORBIT_DESKTOP_BUILD_LIVE=1.",
-  "startedAt": "2026-06-01T07:47:06.920Z",
-  "completedAt": "2026-06-01T07:47:06.921Z",
+  "startedAt": "2026-06-02T01:15:56.781Z",
+  "completedAt": "2026-06-02T01:15:56.783Z",
   "result": "blocked",
   "liveBuildEnabled": false,
   "denyApproval": false,

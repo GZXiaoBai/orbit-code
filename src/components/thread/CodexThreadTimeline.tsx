@@ -54,12 +54,12 @@ function ItemIcon({ item }: { item: CodexInspectableItem }) {
 function CodexMessageItem({
   copy,
   item,
-  showReasoningProcess,
+  reasoningOpen,
   onAcceptPlanDraft,
 }: {
   copy: AppCopy;
   item: CodexInspectableItem;
-  showReasoningProcess: boolean;
+  reasoningOpen: boolean;
   onAcceptPlanDraft?: (itemId: string) => void;
 }) {
   const label = itemKindLabel(copy, item);
@@ -83,23 +83,13 @@ function CodexMessageItem({
         </header>
 
         {item.kind === "reasoning" ? (
-          showReasoningProcess ? (
-            <details className="reasoning-message" open>
-              <summary>
-                <span>{copy.settingsModal.thinkingExpanded}</span>
-                <small>{statusText(copy, item.status)}</small>
-              </summary>
-              {body}
-            </details>
-          ) : (
-            <details className="reasoning-message">
-              <summary>
-                <span>{copy.settingsModal.thinkingCollapsed}</span>
-                <small>{statusText(copy, item.status)}</small>
-              </summary>
-              {body}
-            </details>
-          )
+          <details className="reasoning-message" open={reasoningOpen}>
+            <summary>
+              <span>{reasoningOpen ? copy.settingsModal.thinkingExpanded : copy.settingsModal.thinkingCollapsed}</span>
+              <small>{statusText(copy, item.status)}</small>
+            </summary>
+            {body}
+          </details>
         ) : item.kind === "planDraft" ? (
           <div className="codex-plan-draft">
             {body}
@@ -193,15 +183,21 @@ export function CodexThreadTimeline({
 
       {hasMessages ? (
         <div className="timeline-container">
-          {model.messages.map((item) => (
-            <CodexMessageItem
-              key={item.id}
-              copy={copy}
-              item={item}
-              showReasoningProcess={showReasoningProcess}
-              onAcceptPlanDraft={onAcceptPlanDraft}
-            />
-          ))}
+          {model.messages.map((item, index) => {
+            const hasAssistantAfter = item.kind === "reasoning" && model.messages
+              .slice(index + 1)
+              .some((next) => next.kind === "assistant" && (!item.turnId || !next.turnId || next.turnId === item.turnId));
+            const reasoningOpen = showReasoningProcess && item.kind === "reasoning" && (item.status === "running" || !hasAssistantAfter);
+            return (
+              <CodexMessageItem
+                key={item.id}
+                copy={copy}
+                item={item}
+                reasoningOpen={reasoningOpen}
+                onAcceptPlanDraft={onAcceptPlanDraft}
+              />
+            );
+          })}
         </div>
       ) : (
         <EmptyState

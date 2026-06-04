@@ -13,7 +13,14 @@ const DEVICE_KEY_PATH = process.env.ORBIT_DEVICE_KEY_PATH || path.join(APP_SUPPO
 const MODEL = process.env.ORBIT_DEEPSEEK_PLAN_MODEL
   || process.env.ORBIT_DEEPSEEK_SMOKE_MODEL
   || "deepseek-v4-flash";
+const API_MODEL = deepseekPlanApiModel(MODEL);
 const TIMEOUT_MS = Number(process.env.ORBIT_PLAN_LIVE_SMOKE_TIMEOUT_MS || 60_000);
+
+function deepseekPlanApiModel(model) {
+  if (model === "deepseek-v4-pro") return "deepseek-reasoner";
+  if (model === "deepseek-v4-flash") return "deepseek-chat";
+  return model;
+}
 
 function reportId() {
   return timestampId("plan-live-streaming");
@@ -64,6 +71,8 @@ async function runDeepSeekPlanStream(apiKey) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new Error(`Timed out after ${TIMEOUT_MS}ms`)), TIMEOUT_MS);
   const evidence = {
+    requestedModel: MODEL,
+    apiModel: API_MODEL,
     status: 0,
     frames: 0,
     assistantDeltas: 0,
@@ -86,7 +95,7 @@ async function runDeepSeekPlanStream(apiKey) {
         authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: MODEL,
+        model: API_MODEL,
         stream: true,
         stream_options: { include_usage: true },
         messages: [
@@ -204,7 +213,7 @@ async function main() {
         "DeepSeek direct Plan chat returns SSE deltas for a simple greeting.",
         false,
         error instanceof Error ? error.message : String(error),
-        { model: MODEL },
+        { model: MODEL, apiModel: API_MODEL },
       ));
     }
   } else {
@@ -213,7 +222,7 @@ async function main() {
       "DeepSeek direct Plan chat returns SSE deltas for a simple greeting.",
       false,
       "Skipped because no DeepSeek credential was available.",
-      { model: MODEL },
+      { model: MODEL, apiModel: API_MODEL },
     ));
   }
 
@@ -224,6 +233,7 @@ async function main() {
     runtime: "direct-deepseek-plan",
     provider: "deepseek",
     model: MODEL,
+    apiModel: API_MODEL,
     scope: "Live noninteractive smoke for the ordinary Plan/chat path. It decrypts the Orbit trusted-device vault in memory, calls DeepSeek chat streaming directly, verifies SSE deltas, and never logs or persists the API key.",
     startedAt,
     completedAt,

@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { writeSmokeReport } from "./smoke-report.mjs";
 
-const TEST_FILE = "e2e/run-controls.spec.ts:403";
+const TEST_FILE = "e2e/run-controls.spec.ts";
 const TEST_NAME = "desktop Plan submission uses direct DeepSeek route without app-server preflight";
 
 function run(command, args) {
@@ -23,7 +23,7 @@ function criterion(id, label, ok, evidence = {}) {
 
 function main() {
   const startedAt = new Date().toISOString();
-  const result = run("npx", ["playwright", "test", TEST_FILE]);
+  const result = run("npx", ["playwright", "test", TEST_FILE, "-g", TEST_NAME]);
   process.stdout.write(result.stdout || "");
   process.stderr.write(result.stderr || "");
 
@@ -61,7 +61,7 @@ function main() {
     acceptanceCriteria,
     step: {
       command: "npx",
-      args: ["playwright", "test", TEST_FILE],
+      args: ["playwright", "test", TEST_FILE, "-g", TEST_NAME],
       status: result.status,
       stdoutTail: (result.stdout || "").slice(-6000),
       stderrTail: (result.stderr || "").slice(-6000),

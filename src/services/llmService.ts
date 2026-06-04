@@ -22,6 +22,7 @@ export type LLMProvider =
   | "anthropic"
   | "google"
   | "deepseek"
+  | "ollama"
   | "openrouter"
   | "xai"
   | "mistral"
@@ -30,6 +31,12 @@ export type LLMProvider =
   | "kimi"
   | "siliconflow"
   | "zhipu"
+  | "together"
+  | "fireworks"
+  | "cerebras"
+  | "nvidia"
+  | "azure-openai"
+  | "custom-openai"
   | "fixture";
 
 export interface LLMRequestOptions {
@@ -146,6 +153,8 @@ const getApiUrl = (provider: LLMProvider, model: string, baseUrl?: string): stri
       return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
     case "deepseek":
       return "https://api.deepseek.com/chat/completions";
+    case "ollama":
+      return "http://127.0.0.1:11434/api/chat";
     case "openrouter":
       return "https://openrouter.ai/api/v1/chat/completions";
     case "xai":
@@ -162,6 +171,24 @@ const getApiUrl = (provider: LLMProvider, model: string, baseUrl?: string): stri
       return "https://api.siliconflow.cn/v1/chat/completions";
     case "zhipu":
       return "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+    case "together":
+      return "https://api.together.ai/v1/chat/completions";
+    case "fireworks":
+      return "https://api.fireworks.ai/inference/v1/chat/completions";
+    case "cerebras":
+      return "https://api.cerebras.ai/v1/chat/completions";
+    case "nvidia":
+      return "https://integrate.api.nvidia.com/v1/chat/completions";
+    case "azure-openai":
+      if (!baseUrl?.trim()) {
+        throw new Error("Azure OpenAI provider requires a Base URL.");
+      }
+      return appendProviderPath(baseUrl, adapter.chatPath);
+    case "custom-openai":
+      if (!baseUrl?.trim()) {
+        throw new Error("Custom OpenAI-compatible provider requires a Base URL.");
+      }
+      return appendProviderPath(baseUrl, adapter.chatPath);
     case "fixture":
       return "fixture://offline";
   }
@@ -299,6 +326,19 @@ export async function callLLMApi(
         payload.reasoning_effort = requestOptions.reasoningEffort;
       }
     }
+  } else if (provider === "ollama") {
+    payload = {
+      model: model || defaultModel(provider),
+      messages: [
+        { role: "system", content: effectiveSystemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      stream: false,
+      options: {
+        temperature: requestOptions.temperature,
+        num_predict: requestOptions.maxOutputTokens,
+      },
+    };
   } else if (provider === "anthropic") {
     payload = {
       model: model || "claude-3-5-sonnet-latest",
@@ -339,6 +379,8 @@ export async function callLLMApi(
     // 解析不同大模型的 Response
     if (isOpenAICompatibleProvider(provider)) {
       content = parsed.choices?.[0]?.message?.content || "";
+    } else if (provider === "ollama") {
+      content = parsed.message?.content || parsed.response || "";
     } else if (provider === "anthropic") {
       content = parsed.content?.[0]?.text || "";
     } else if (provider === "google") {
@@ -512,6 +554,19 @@ export function callLLMApiStreaming(
         payload.reasoning_effort = requestOptions.reasoningEffort;
       }
     }
+  } else if (provider === "ollama") {
+    payload = {
+      model: model || defaultModel(provider),
+      messages: [
+        { role: "system", content: effectiveSystemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      stream: true,
+      options: {
+        temperature: requestOptions.temperature,
+        num_predict: requestOptions.maxOutputTokens,
+      },
+    };
   } else if (provider === "anthropic") {
     payload = {
       model: model || "claude-3-5-sonnet-latest",

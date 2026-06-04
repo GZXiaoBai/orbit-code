@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ActionRequiredEvent } from "../domain/actionRequired";
-import type { CodexItem, CodexRuntimeProjection, CodexRuntimeSettingsModel, CodexRuntimeStatus, CodexSidecarStatus, CodexSidecarVersionInfo, CodexThread, CodexTurn, DesktopBuildSmokeResult, RuntimeRestartResult, RuntimeRoute } from "../domain/codex";
+import type { CodexItem, CodexRuntimeDiagnostics, CodexRuntimeProjection, CodexRuntimeSettingsModel, CodexRuntimeStatus, CodexSidecarStatus, CodexSidecarVersionInfo, CodexThread, CodexTurn, DesktopBuildSmokeResult, FreezeDiagnosticReport, RuntimeOperation, RuntimeOperationKind, RuntimeRestartResult, RuntimeRoute } from "../domain/codex";
 import type { ReasoningEffort, WorkbenchMode } from "../domain/types";
 import { agentRuntimePort } from "../runtime/agentRuntimePort";
 import { applyCodexItemEvent, applyCodexItemEvents } from "../runtime/codexItemEvents";
@@ -9,6 +9,11 @@ import { isDesktopRuntime } from "../runtime/desktopGateway";
 import { isTauri } from "../utils/tauri";
 
 const CODEX_SESSION_STORAGE_KEY = "orbit.codexSession.v1";
+const DIRECT_PLAN_TURN_START_TIMEOUT_MS = 6_000;
+const BUILD_TURN_START_TIMEOUT_MS = 25_000;
+const CODEX_RUNTIME_RESTART_TIMEOUT_MS = 25_000;
+const RUNNING_TURN_IDLE_TIMEOUT_MS = 60_000;
+const DIRECT_PLAN_OPERATION_IDLE_TIMEOUT_MS = 180_000;
 
 function now() {
   return new Date().toISOString();
@@ -48,6 +53,36 @@ function localItem(input: Partial<CodexItem> & Pick<CodexItem, "threadId" | "kin
     createdAt: input.createdAt || now(),
     metadata: input.metadata,
   };
+}
+
+function operationId(kind: RuntimeOperationKind) {
+  return `codex-operation-${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function operationDeadlineFromNow(timeoutMs: number) {
+  return new Date(Date.now() + timeoutMs).toISOString();
+}
+
+function operationFor(input: {
+  kind: RuntimeOperationKind;
+  timeoutMs: number;
+  threadId?: string;
+  turnId?: string;
+}): RuntimeOperation {
+  const started = Date.now();
+  return {
+    id: operationId(input.kind),
+    kind: input.kind,
+    status: "starting",
+    threadId: input.threadId,
+    turnId: input.turnId,
+    startedAt: new Date(started).toISOString(),
+    deadlineAt: new Date(started + input.timeoutMs).toISOString(),
+  };
+}
+
+function isOperationActive(operation: RuntimeOperation | null | undefined): operation is RuntimeOperation {
+  return operation?.status === "starting" || operation?.status === "running";
 }
 
 function fixturePlanDraft() {
@@ -124,37 +159,45 @@ export function recoverStoredItems(items: CodexItem[] | null | undefined): Codex
       if (item.title === "Codex app-server retry" && item.status === "running") return false;
       return true;
     })
-    .map((item) => item.status === "running" && item.kind !== "approval" && item.kind !== "question"
-      ? {
+    .map((item) => {
+      if (item.status !== "running") return item;
+      if (item.kind === "approval" || item.kind === "question") {
+        return {
+          ...item,
+          status: "pending" as const,
+          metadata: { ...(item.metadata || {}), restoredFromRunning: true },
+        };
+      }
+      return {
         ...item,
         status: "failed" as const,
         metadata: { ...(item.metadata || {}), restoredFromRunning: true },
-      }
-      : item);
+      };
+    });
 }
 
 export function codexRuntimeModeForTurn(mode: WorkbenchMode): RuntimeRoute {
   return mode === "build" ? "codex-app-server-build" : "direct-deepseek-plan";
 }
 
-export function codexBuildRuntimeReady(status: CodexSidecarStatus | null | undefined): boolean {
-  return Boolean(status?.running);
+export function codexTurnStartTimeoutMs(runtimeMode: RuntimeRoute): number {
+  return runtimeMode === "codex-app-server-build"
+    ? BUILD_TURN_START_TIMEOUT_MS
+    : DIRECT_PLAN_TURN_START_TIMEOUT_MS;
 }
 
-export function codexBuildRuntimeBlockedMessage(status: CodexSidecarStatus | null | undefined, error?: unknown): string {
-  const errorMessage = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  if (errorMessage.trim()) {
-    return `Codex Build runtime failed to start: ${errorMessage}`;
-  }
-  const diagnostics = [
-    status?.lastError?.trim(),
-    typeof status?.lastExitCode === "number" ? `exit code: ${status.lastExitCode}` : "",
-    status?.lastStderrTail?.trim() ? `stderr: ${status.lastStderrTail.trim()}` : "",
-  ].filter(Boolean).join(" | ");
-  if (diagnostics) {
-    return `Codex Build runtime is not ready: ${diagnostics}`;
-  }
-  return "Codex Build runtime is not ready. Restart the Codex runtime from Settings before starting Build.";
+export function codexRuntimeRestartTimeoutMs(): number {
+  return CODEX_RUNTIME_RESTART_TIMEOUT_MS;
+}
+
+export function codexRunningTurnIdleTimeoutMs(): number {
+  return RUNNING_TURN_IDLE_TIMEOUT_MS;
+}
+
+export function codexOperationIdleTimeoutMs(runtimeMode: RuntimeRoute): number {
+  return runtimeMode === "direct-deepseek-plan"
+    ? DIRECT_PLAN_OPERATION_IDLE_TIMEOUT_MS
+    : RUNNING_TURN_IDLE_TIMEOUT_MS;
 }
 
 export function codexSubmissionRoutingDecision(input: {
@@ -166,10 +209,7 @@ export function codexSubmissionRoutingDecision(input: {
   const runtimeMode = codexRuntimeModeForTurn(input.mode);
   const isFixture = input.providerId === "fixture";
   const buildBlocked = Boolean(input.buildBlockedReason);
-  const requiresBuildRuntimePreflight = input.isDesktopRuntime
-    && runtimeMode === "codex-app-server-build"
-    && !isFixture
-    && !buildBlocked;
+  const requiresBuildRuntimePreflight = false;
   return {
     runtimeMode,
     echoUserItem: isFixture || !input.isDesktopRuntime || runtimeMode !== "codex-app-server-build" || buildBlocked,
@@ -195,8 +235,75 @@ export function failRunningCodexTurn(turn: CodexTurn | null, completedAt = now()
   return { ...turn, status: "failed", completedAt };
 }
 
-export function codexComposerSubmitLocked(status: CodexRuntimeStatus, activeTurn: CodexTurn | null): boolean {
-  return status === "running" || activeTurn?.status === "running";
+export function codexComposerSubmitLocked(
+  status: CodexRuntimeStatus,
+  activeTurn: CodexTurn | null,
+  activeOperation?: RuntimeOperation | null,
+): boolean {
+  void status;
+  void activeTurn;
+  const operationBlocksComposer = activeOperation
+    ? isOperationActive(activeOperation)
+      && (activeOperation.kind === "plan" || activeOperation.kind === "build" || activeOperation.kind === "interrupt")
+    : false;
+  return operationBlocksComposer;
+}
+
+export function codexComposerLockReason(
+  status: CodexRuntimeStatus,
+  activeTurn: CodexTurn | null,
+  activeOperation?: RuntimeOperation | null,
+): string | undefined {
+  if (!codexComposerSubmitLocked(status, activeTurn, activeOperation)) return undefined;
+  if (!activeOperation) return undefined;
+  return `${activeOperation.kind}:${activeOperation.status}`;
+}
+
+export function codexRuntimeEventBelongsToActiveOperation(
+  payloadOperationId: string | undefined,
+  activeOperation?: RuntimeOperation | null,
+): boolean {
+  if (!payloadOperationId) return !isOperationActive(activeOperation);
+  if (!activeOperation?.id) return false;
+  return payloadOperationId === activeOperation.id;
+}
+
+export function codexRuntimeEventBelongsToActiveScope(input: {
+  payloadOperationId?: string;
+  payloadConnectionId?: string;
+  payloadTurnId?: string;
+  payloadThreadId?: string;
+  activeOperation?: RuntimeOperation | null;
+  activeTurn?: CodexTurn | null;
+}): boolean {
+  const { payloadOperationId, payloadConnectionId, payloadTurnId, payloadThreadId, activeOperation, activeTurn } = input;
+  if (payloadConnectionId && activeOperation?.connectionId && payloadConnectionId !== activeOperation.connectionId) {
+    return false;
+  }
+  if (payloadOperationId) {
+    return activeOperation?.id === payloadOperationId;
+  }
+  if (!isOperationActive(activeOperation)) return true;
+  if (payloadTurnId) {
+    if (activeOperation?.turnId === payloadTurnId || activeTurn?.id === payloadTurnId) return true;
+    if (activeOperation?.turnId) return false;
+  }
+  if (payloadThreadId && activeOperation?.threadId) {
+    return activeOperation.threadId === payloadThreadId;
+  }
+  return false;
+}
+
+export function codexStatusEventShouldCreateTimelineError(input: {
+  status: CodexRuntimeStatus;
+  error?: string;
+  operationKind?: string;
+}): boolean {
+  return input.status === "error"
+    && Boolean(input.error)
+    && input.operationKind !== "restart"
+    && input.operationKind !== "plan"
+    && input.operationKind !== "build";
 }
 
 export function appendSingleRuntimeErrorItem(input: {
@@ -244,14 +351,68 @@ export function appendSingleRuntimeErrorItem(input: {
   } : item);
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error || "Unknown error");
+}
+
+export function codexActionSubmitFailure(input: {
+  action: Pick<ActionRequiredEvent, "id" | "kind">;
+  approved: boolean;
+  error: unknown;
+}) {
+  const submitTarget = input.action.kind === "question" ? "question answer" : "approval response";
+  const message = `Codex ${submitTarget} could not be submitted: ${errorMessage(input.error)}`;
+  return {
+    message,
+    metadata: {
+      source: "approval-submit",
+      recoverable: true,
+      actionId: input.action.id,
+      actionKind: input.action.kind,
+      approved: input.approved,
+      submitError: errorMessage(input.error),
+    },
+  };
+}
+
 export function codexRuntimeRestartFailureResult(error: unknown): RuntimeRestartResult {
-  const message = error instanceof Error ? error.message : String(error || "Unknown Codex runtime restart error");
+  const message = errorMessage(error || "Unknown Codex runtime restart error");
   return {
     status: {
       running: false,
       lastError: message,
     },
     error: message,
+  };
+}
+
+export function recoverCodexRuntimeState(input: {
+  thread: CodexThread | null;
+  activeTurn: CodexTurn | null;
+  activeOperation: RuntimeOperation | null;
+  reason: string;
+  completedAt?: string;
+}): {
+  status: CodexRuntimeStatus;
+  activeTurn: CodexTurn | null;
+  activeOperation: RuntimeOperation | null;
+} {
+  const completedAt = input.completedAt || now();
+  return {
+    status: input.thread ? "ready" : "stopped",
+    activeTurn: input.activeTurn?.status === "running"
+      ? { ...input.activeTurn, status: "interrupted", completedAt }
+      : input.activeTurn,
+    activeOperation: isOperationActive(input.activeOperation)
+      ? {
+        ...input.activeOperation,
+        status: "cancelled",
+        finalState: "cancelled",
+        cancelled: true,
+        error: input.reason,
+        lastEventAt: completedAt,
+      }
+      : input.activeOperation,
   };
 }
 
@@ -271,10 +432,20 @@ export function useCodexSession() {
   const [error, setError] = useState<string | undefined>();
   const [sidecarStatus, setSidecarStatus] = useState<CodexSidecarStatus>({ running: false });
   const [sidecarInfo, setSidecarInfo] = useState<CodexSidecarVersionInfo | undefined>();
+  const [diagnostics, setDiagnostics] = useState<CodexRuntimeDiagnostics | undefined>();
   const [desktopBuildSmokeReport, setDesktopBuildSmokeReport] = useState<DesktopBuildSmokeResult | undefined>();
+  const [activeOperation, setActiveOperation] = useState<RuntimeOperation | null>(null);
+  const [staleEventCount, setStaleEventCount] = useState(0);
   const threadRef = useRef<CodexThread | null>(thread);
   const statusRef = useRef<CodexRuntimeStatus>(status);
   const activeTurnRef = useRef<CodexTurn | null>(activeTurn);
+  const itemsRef = useRef<CodexItem[]>(items);
+  const activeOperationRef = useRef<RuntimeOperation | null>(activeOperation);
+  const ignoredTurnIdsRef = useRef<Set<string>>(new Set());
+  const turnWatchdogRef = useRef<number | undefined>(undefined);
+  const operationDeadlineRef = useRef<number | undefined>(undefined);
+  const restartInFlightRef = useRef<Promise<RuntimeRestartResult> | null>(null);
+  const staleEventCountRef = useRef(0);
 
   useEffect(() => {
     threadRef.current = thread;
@@ -288,19 +459,159 @@ export function useCodexSession() {
     activeTurnRef.current = activeTurn;
   }, [activeTurn]);
 
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
+    activeOperationRef.current = activeOperation;
+  }, [activeOperation]);
+
+  useEffect(() => {
+    staleEventCountRef.current = staleEventCount;
+  }, [staleEventCount]);
+
+  const recordStaleRuntimeEvent = useCallback(() => {
+    setStaleEventCount((count) => count + 1);
+  }, []);
+
+  const clearTurnWatchdog = useCallback(() => {
+    if (turnWatchdogRef.current) {
+      globalThis.clearTimeout(turnWatchdogRef.current);
+      turnWatchdogRef.current = undefined;
+    }
+  }, []);
+
+  const clearOperationDeadline = useCallback(() => {
+    if (operationDeadlineRef.current) {
+      globalThis.clearTimeout(operationDeadlineRef.current);
+      operationDeadlineRef.current = undefined;
+    }
+  }, []);
+
+  const beginOperation = useCallback((input: {
+    kind: RuntimeOperationKind;
+    timeoutMs: number;
+    threadId?: string;
+    turnId?: string;
+  }) => {
+    const operation = operationFor(input);
+    setActiveOperation(operation);
+    activeOperationRef.current = operation;
+    return operation;
+  }, []);
+
+  const patchOperation = useCallback((operationId: string, patch: Partial<RuntimeOperation>) => {
+    setActiveOperation((current) => {
+      if (!current || current.id !== operationId) return current;
+      const next = { ...current, ...patch };
+      activeOperationRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const finishOperation = useCallback((operationId: string, finalState: "completed" | "failed" | "cancelled", error?: string) => {
+    setActiveOperation((current) => {
+      if (!current || current.id !== operationId) return current;
+      const next: RuntimeOperation = {
+        ...current,
+        status: finalState,
+        finalState,
+        cancelled: finalState === "cancelled" ? true : current.cancelled,
+        error,
+        lastEventAt: now(),
+      };
+      activeOperationRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const cancelOperation = useCallback(async (operation: RuntimeOperation, reason: string) => {
+    ignoredTurnIdsRef.current = new Set([
+      ...ignoredTurnIdsRef.current,
+      ...(operation.turnId ? [operation.turnId] : []),
+    ]);
+    finishOperation(operation.id, "failed", reason);
+    setError(reason);
+    if (operation.kind === "restart") {
+      setStatus(sidecarStatus.running ? "ready" : "error");
+    } else {
+      setStatus("error");
+      setActiveTurn((prev) => prev && prev.id === operation.turnId ? { ...prev, status: "failed", completedAt: now() } : prev);
+    }
+    if (isDesktopRuntime()) {
+      await agentRuntimePort.cancelOperation(operation.id).catch(() => undefined);
+      await agentRuntimePort.diagnostics().then(setDiagnostics).catch(() => undefined);
+    }
+  }, [finishOperation, sidecarStatus.running]);
+
+  useEffect(() => {
+    clearOperationDeadline();
+    if (!activeOperation || !isOperationActive(activeOperation)) return;
+    const deadline = new Date(activeOperation.deadlineAt).getTime();
+    const delay = Number.isFinite(deadline) ? Math.max(0, deadline - Date.now()) : 0;
+    operationDeadlineRef.current = globalThis.setTimeout(() => {
+      const current = activeOperationRef.current;
+      if (!current || current.id !== activeOperation.id || !isOperationActive(current)) return;
+      void cancelOperation(current, `${current.kind} operation timed out`);
+    }, delay);
+    return clearOperationDeadline;
+  }, [activeOperation, cancelOperation, clearOperationDeadline]);
+
+  const armTurnWatchdog = useCallback((turn: CodexTurn | null | undefined) => {
+    clearTurnWatchdog();
+    if (!turn || turn.status !== "running") return;
+    turnWatchdogRef.current = globalThis.setTimeout(() => {
+      const currentTurn = activeTurnRef.current;
+      if (!currentTurn || currentTurn.id !== turn.id || currentTurn.status !== "running") return;
+      const waitingForUser = itemsRef.current.some((item) => (
+        item.turnId === turn.id
+        && (item.kind === "approval" || item.kind === "question")
+        && item.status === "pending"
+      ));
+      if (waitingForUser) {
+        armTurnWatchdog(currentTurn);
+        return;
+      }
+      const message = `Codex turn had no runtime progress for ${RUNNING_TURN_IDLE_TIMEOUT_MS}ms`;
+      const currentOperation = activeOperationRef.current;
+      if (currentOperation?.turnId === currentTurn.id) {
+        void cancelOperation(currentOperation, message);
+        return;
+      }
+      setStatus("error");
+      setError(message);
+      setActiveTurn({ ...currentTurn, status: "failed", completedAt: now() });
+      setItems((prev) => appendSingleRuntimeErrorItem({
+        items: prev,
+        thread: threadRef.current,
+        activeTurn: currentTurn,
+        message,
+        source: "watchdog",
+        metadata: { recoverable: true, idleTimeoutMs: RUNNING_TURN_IDLE_TIMEOUT_MS },
+      }));
+    }, RUNNING_TURN_IDLE_TIMEOUT_MS);
+  }, [cancelOperation, clearTurnWatchdog]);
+
   const projection: CodexRuntimeProjection = useMemo(() => buildCodexProjection({
     status,
     thread,
     activeTurn,
+    activeOperation,
     items,
     error,
-  }), [activeTurn, error, items, status, thread]);
+  }), [activeOperation, activeTurn, error, items, status, thread]);
 
   useEffect(() => {
     localStorage.setItem(CODEX_SESSION_STORAGE_KEY, JSON.stringify({ thread, activeTurn, items }));
   }, [activeTurn, items, thread]);
 
   const recordRuntimeError = useCallback((message: string, metadata: Record<string, unknown> = {}) => {
+    clearTurnWatchdog();
+    const currentOperation = activeOperationRef.current;
+    if (currentOperation && isOperationActive(currentOperation)) {
+      finishOperation(currentOperation.id, "failed", message);
+    }
     setStatus("error");
     setError(message);
     setActiveTurn((prev) => failRunningCodexTurn(prev));
@@ -312,31 +623,126 @@ export function useCodexSession() {
       source: String(metadata.source || "runtime"),
       metadata,
     }));
-  }, []);
+  }, [clearTurnWatchdog, finishOperation]);
+
+  useEffect(() => () => {
+    clearTurnWatchdog();
+    clearOperationDeadline();
+  }, [clearOperationDeadline, clearTurnWatchdog]);
 
   useEffect(() => {
     if (!isTauri()) return;
     return agentRuntimePort.subscribe((event) => {
       if (event.type === "item") {
+        const currentTurn = activeTurnRef.current;
+        const payloadTurnId = event.payload.turnId || ("item" in event.payload ? event.payload.item?.turnId : undefined);
+        const payloadThreadId = event.payload.threadId || ("item" in event.payload ? event.payload.item?.threadId : undefined);
+        const payloadOperationId = "operationId" in event.payload ? event.payload.operationId : undefined;
+        const payloadConnectionId = "connectionId" in event.payload ? event.payload.connectionId : undefined;
+        const currentOperation = activeOperationRef.current;
+        if (!codexRuntimeEventBelongsToActiveScope({
+          payloadOperationId,
+          payloadConnectionId,
+          payloadTurnId,
+          payloadThreadId,
+          activeOperation: currentOperation,
+          activeTurn: currentTurn,
+        })) {
+          recordStaleRuntimeEvent();
+          return;
+        }
+        if (payloadTurnId && ignoredTurnIdsRef.current.has(payloadTurnId)) return;
         setItems((prev) => applyCodexItemEvent(prev, event.payload));
+        if (currentOperation && (!payloadTurnId || payloadTurnId === currentOperation.turnId)) {
+          patchOperation(currentOperation.id, {
+            status: "running",
+            lastEventAt: now(),
+            deadlineAt: operationDeadlineFromNow(codexOperationIdleTimeoutMs(
+              currentOperation.kind === "plan" ? "direct-deepseek-plan" : "codex-app-server-build",
+            )),
+          });
+        }
+        if (currentTurn?.status === "running" && (!payloadTurnId || payloadTurnId === currentTurn.id)) {
+          armTurnWatchdog(currentTurn);
+        }
         return;
       }
       if (event.type === "turn") {
+        if (ignoredTurnIdsRef.current.has(event.payload.id)) return;
+        const currentOperation = activeOperationRef.current;
+        if (!codexRuntimeEventBelongsToActiveScope({
+          payloadOperationId: event.payload.operationId,
+          payloadConnectionId: event.payload.connectionId,
+          payloadTurnId: event.payload.id,
+          payloadThreadId: event.payload.threadId,
+          activeOperation: currentOperation,
+          activeTurn: activeTurnRef.current,
+        })) {
+          recordStaleRuntimeEvent();
+          return;
+        }
         setActiveTurn(event.payload);
         setStatus(event.payload.status === "running" ? "running" : event.payload.status === "failed" ? "error" : "ready");
+        if (currentOperation && (!currentOperation.turnId || currentOperation.turnId === event.payload.id)) {
+          patchOperation(currentOperation.id, {
+            turnId: event.payload.id,
+            threadId: event.payload.threadId,
+            status: event.payload.status === "running" ? "running" : event.payload.status === "failed" ? "failed" : "completed",
+            finalState: event.payload.status === "running" ? undefined : event.payload.status === "failed" ? "failed" : "completed",
+            lastEventAt: now(),
+            deadlineAt: event.payload.status === "running"
+              ? operationDeadlineFromNow(codexOperationIdleTimeoutMs(
+                currentOperation.kind === "plan" ? "direct-deepseek-plan" : "codex-app-server-build",
+              ))
+              : currentOperation.deadlineAt,
+          });
+        }
+        if (event.payload.status === "running") {
+          armTurnWatchdog(event.payload);
+        } else {
+          clearTurnWatchdog();
+        }
         return;
       }
       if (event.type === "status") {
-        setStatus(event.payload.status);
+        const currentOperation = activeOperationRef.current;
+        if (!codexRuntimeEventBelongsToActiveScope({
+          payloadOperationId: event.payload.operationId,
+          payloadConnectionId: event.payload.connectionId,
+          activeOperation: currentOperation,
+          activeTurn: activeTurnRef.current,
+        })) {
+          recordStaleRuntimeEvent();
+          return;
+        }
+        if (event.payload.sidecarStatus) {
+          setSidecarStatus(event.payload.sidecarStatus);
+        }
+        if (event.payload.operationId) {
+          const finalState = event.payload.status === "error" ? "failed" : event.payload.status === "ready" ? "completed" : undefined;
+          if (finalState) {
+            finishOperation(event.payload.operationId, finalState, event.payload.error);
+          } else {
+            patchOperation(event.payload.operationId, { status: "running", lastEventAt: now() });
+          }
+        }
+        if (event.payload.operationKind === "restart" && event.payload.status === "error") {
+          setStatus(event.payload.sidecarStatus?.running ? "ready" : "error");
+        } else {
+          setStatus(event.payload.status);
+        }
         setError(event.payload.error);
-        if (event.payload.status === "error" && event.payload.error) {
-          recordRuntimeError(event.payload.error, { source: "status" });
+        if (codexStatusEventShouldCreateTimelineError(event.payload)) {
+          recordRuntimeError(event.payload.error || "Codex runtime error", { source: "status" });
+        }
+        if (isDesktopRuntime()) {
+          void agentRuntimePort.diagnostics().then(setDiagnostics).catch(() => undefined);
         }
         return;
       }
       recordRuntimeError(event.payload.message, { source: "event" });
     });
-  }, [recordRuntimeError]);
+  }, [armTurnWatchdog, clearTurnWatchdog, finishOperation, patchOperation, recordRuntimeError, recordStaleRuntimeEvent]);
 
   useEffect(() => {
     if (!isDesktopRuntime()) return;
@@ -349,18 +755,24 @@ export function useCodexSession() {
     void agentRuntimePort.desktopBuildSmokeReport()
       .then((report) => setDesktopBuildSmokeReport(report || undefined))
       .catch(() => setDesktopBuildSmokeReport(undefined));
+    void agentRuntimePort.diagnostics()
+      .then(setDiagnostics)
+      .catch(() => undefined);
   }, []);
 
   const runtimeSettings: CodexRuntimeSettingsModel = useMemo(() => ({
     sidecarStatus,
     sidecarInfo,
     sidecarPath: sidecarInfo?.path,
-    bridgeStatus: sidecarStatus.running ? "ready" : sidecarStatus.lastError ? "error" : "stopped",
+    bridgeStatus: activeOperation?.kind === "restart" && isOperationActive(activeOperation)
+      ? "starting"
+      : status === "starting" ? "starting" : sidecarStatus.running ? "ready" : sidecarStatus.lastError ? "error" : "stopped",
     bridgeBaseUrl: sidecarStatus.bridgeBaseUrl,
     activeProvider: undefined,
     lastError: sidecarStatus.lastError,
     latestDesktopBuildSmoke: desktopBuildSmokeReport,
-  }), [desktopBuildSmokeReport, sidecarInfo, sidecarStatus]);
+    diagnostics: diagnostics ? { ...diagnostics, staleEventCount } : diagnostics,
+  }), [activeOperation, desktopBuildSmokeReport, diagnostics, sidecarInfo, sidecarStatus, staleEventCount, status]);
 
   const ensureThread = useCallback(async (input: {
     workspacePath: string;
@@ -384,11 +796,12 @@ export function useCodexSession() {
     mode: WorkbenchMode;
     providerId: string;
     model: string;
+    baseUrl?: string;
     threadId?: string;
     reasoningEffort?: ReasoningEffort;
     buildBlockedReason?: string;
   }) => {
-    if (codexComposerSubmitLocked(statusRef.current, activeTurnRef.current)) {
+    if (codexComposerSubmitLocked(statusRef.current, activeTurnRef.current, activeOperationRef.current)) {
       return;
     }
     const activeThread = await ensureThread({
@@ -415,7 +828,6 @@ export function useCodexSession() {
       });
       setItems((prev) => [...prev, userItem]);
     }
-    setStatus("running");
     if (input.mode === "build" && input.buildBlockedReason) {
       const turn = {
         ...localTurn(activeThread.id, input.mode),
@@ -561,23 +973,14 @@ export function useCodexSession() {
       })]);
     };
 
+    const operation = beginOperation({
+      kind: input.mode === "build" ? "build" : "plan",
+      timeoutMs: codexOperationIdleTimeoutMs(runtimeMode),
+      threadId: activeThread.id,
+    });
+    setStatus(input.mode === "build" ? "starting" : "running");
     try {
-      if (route.requiresBuildRuntimePreflight) {
-        setStatus("starting");
-        const currentStatus = await withTimeout(agentRuntimePort.status(), 1500, "Codex Build runtime status").catch((err) => {
-          throw new Error(codexBuildRuntimeBlockedMessage(undefined, err));
-        });
-        setSidecarStatus(currentStatus);
-        if (!codexBuildRuntimeReady(currentStatus)) {
-          failWithSingleRuntimeError(codexBuildRuntimeBlockedMessage(currentStatus), {
-            runtimeStatus: currentStatus,
-            recoverable: true,
-          });
-          return;
-        }
-        setError(undefined);
-      }
-      const result = await agentRuntimePort.startTurn({
+      const result = await withTimeout(agentRuntimePort.startTurn({
         threadId: activeThread.id,
         workspacePath: input.workspacePath,
         prompt: input.prompt,
@@ -585,18 +988,41 @@ export function useCodexSession() {
         runtimeMode,
         providerId: input.providerId,
         model: input.model,
+        baseUrl: input.baseUrl,
         reasoningEffort: input.reasoningEffort,
-      });
+        operationId: operation.id,
+      }), codexTurnStartTimeoutMs(runtimeMode), `${runtimeMode} turn/start`);
       setActiveTurn(result.turn);
+      patchOperation(operation.id, {
+        status: result.turn.status === "running" ? "running" : result.turn.status === "failed" ? "failed" : "completed",
+        turnId: result.turn.id,
+        threadId: result.turn.threadId,
+        lastEventAt: now(),
+        deadlineAt: result.turn.status === "running"
+          ? operationDeadlineFromNow(codexOperationIdleTimeoutMs(runtimeMode))
+          : operation.deadlineAt,
+        finalState: result.turn.status === "running" ? undefined : result.turn.status === "failed" ? "failed" : "completed",
+      });
       setItems((prev) => applyCodexItemEvents(prev, result.items));
       setStatus(result.turn.status === "failed" ? "error" : result.turn.status === "running" ? "running" : "ready");
+      if (result.turn.status === "running") {
+        armTurnWatchdog(result.turn);
+      } else {
+        clearTurnWatchdog();
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      clearTurnWatchdog();
+      await cancelOperation(operation, message);
       failWithSingleRuntimeError(message);
     }
-  }, [ensureThread]);
+  }, [armTurnWatchdog, beginOperation, cancelOperation, clearTurnWatchdog, ensureThread, patchOperation]);
 
   const interrupt = useCallback(async () => {
+    const currentOperation = activeOperationRef.current;
+    if (currentOperation && isOperationActive(currentOperation)) {
+      await cancelOperation(currentOperation, "Operation interrupted by user");
+    }
     if (!activeTurn || !thread) return;
     try {
       await agentRuntimePort.interruptTurn(thread.id, activeTurn.id);
@@ -604,13 +1030,28 @@ export function useCodexSession() {
       setActiveTurn((prev) => prev ? { ...prev, status: "interrupted", completedAt: now() } : prev);
       setStatus("ready");
     }
-  }, [activeTurn, thread]);
+  }, [activeTurn, cancelOperation, thread]);
 
   const resolveAction = useCallback(async (action: ActionRequiredEvent, approved: boolean, answer?: string) => {
     const knownTarget = items.find((item) => item.id === action.id);
     const fixtureAction = typeof knownTarget?.metadata?.flow === "string";
     if (isDesktopRuntime() && !fixtureAction) {
-      await agentRuntimePort.submitApproval(action.id, approved, answer).catch(() => undefined);
+      try {
+        await agentRuntimePort.submitApproval(action.id, approved, answer);
+      } catch (err) {
+        const failure = codexActionSubmitFailure({ action, approved, error: err });
+        setStatus("error");
+        setError(failure.message);
+        setItems((prev) => appendSingleRuntimeErrorItem({
+          items: prev,
+          thread: threadRef.current,
+          activeTurn: activeTurnRef.current,
+          message: failure.message,
+          source: "approval-submit",
+          metadata: failure.metadata,
+        }));
+        void agentRuntimePort.diagnostics().then(setDiagnostics).catch(() => undefined);
+      }
       return;
     }
     setItems((prev) => {
@@ -677,38 +1118,136 @@ export function useCodexSession() {
   }, [items]);
 
   const clear = useCallback(() => {
+    clearTurnWatchdog();
+    clearOperationDeadline();
     setThread(null);
     setActiveTurn(null);
+    setActiveOperation(null);
     setItems([]);
     setError(undefined);
     setStatus("stopped");
     localStorage.removeItem(CODEX_SESSION_STORAGE_KEY);
-  }, []);
+  }, [clearOperationDeadline, clearTurnWatchdog]);
+
+  const recoverRuntime = useCallback(async (reason = "Recovered stuck runtime state") => {
+    clearTurnWatchdog();
+    clearOperationDeadline();
+    const recovered = recoverCodexRuntimeState({
+      thread: threadRef.current,
+      activeTurn: activeTurnRef.current,
+      activeOperation: activeOperationRef.current,
+      reason,
+    });
+    activeOperationRef.current = recovered.activeOperation;
+    activeTurnRef.current = recovered.activeTurn;
+    setActiveOperation(recovered.activeOperation);
+    setActiveTurn(recovered.activeTurn);
+    setStatus(recovered.status);
+    setError(undefined);
+    if (isDesktopRuntime()) {
+      await agentRuntimePort.recoverRuntime()
+        .then(setDiagnostics)
+        .catch(() => undefined);
+    }
+  }, [clearOperationDeadline, clearTurnWatchdog]);
+
+  const freezeDiagnosticsReport = useCallback((): FreezeDiagnosticReport => {
+    let localStorageSession: FreezeDiagnosticReport["localStorageSession"];
+    try {
+      const raw = localStorage.getItem(CODEX_SESSION_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { thread?: unknown; activeTurn?: CodexTurn | null; items?: unknown[] };
+        localStorageSession = {
+          hasThread: Boolean(parsed.thread),
+          activeTurnStatus: parsed.activeTurn?.status,
+          itemCount: Array.isArray(parsed.items) ? parsed.items.length : 0,
+        };
+      }
+    } catch {
+      localStorageSession = undefined;
+    }
+    const activeItems = itemsRef.current;
+    const activeActions = activeItems.filter((item) => (
+      (item.kind === "approval" || item.kind === "question") && item.status === "pending"
+    ));
+    return {
+      generatedAt: now(),
+      status: statusRef.current,
+      composerLocked: codexComposerSubmitLocked(statusRef.current, activeTurnRef.current, activeOperationRef.current),
+      composerLockReason: codexComposerLockReason(statusRef.current, activeTurnRef.current, activeOperationRef.current),
+      activeTurn: activeTurnRef.current,
+      activeOperation: activeOperationRef.current,
+      runtimeDiagnostics: diagnostics ? { ...diagnostics, staleEventCount: staleEventCountRef.current } : diagnostics,
+      itemCount: activeItems.length,
+      runningItemCount: activeItems.filter((item) => item.status === "running").length,
+      pendingActionCount: activeActions.length,
+      localStorageSession,
+    };
+  }, [diagnostics]);
 
   const restartRuntime = useCallback(async (providerId = "deepseek") => {
-    setStatus("starting");
-    try {
-      const result = await agentRuntimePort.restart(providerId);
-      setSidecarStatus(result.status);
-      setError(result.error || result.status.lastError);
-      setStatus(result.status.running ? "ready" : "error");
-      void agentRuntimePort.sidecarInfo()
-        .then(setSidecarInfo)
-        .catch(() => undefined);
-      return result;
-    } catch (err) {
-      const result = codexRuntimeRestartFailureResult(err);
-      setSidecarStatus(result.status);
-      setError(result.error);
-      setStatus("error");
-      return result;
+    if (restartInFlightRef.current) return restartInFlightRef.current;
+    const currentOperation = activeOperationRef.current;
+    if (currentOperation?.kind === "restart" && isOperationActive(currentOperation)) {
+      return {
+        status: sidecarStatus,
+        pid: sidecarStatus.pid,
+        error: undefined,
+      } satisfies RuntimeRestartResult;
     }
-  }, []);
+    const operation = beginOperation({
+      kind: "restart",
+      timeoutMs: CODEX_RUNTIME_RESTART_TIMEOUT_MS,
+    });
+    const restart = (async () => {
+      try {
+        const result = await withTimeout(
+          agentRuntimePort.restart(providerId, operation.id),
+          3_000,
+          "Codex runtime restart enqueue",
+        );
+        setSidecarStatus(result.status);
+        setError(result.error || undefined);
+        finishOperation(operation.id, result.error ? "failed" : "completed", result.error);
+        setStatus(result.status.running ? "ready" : "ready");
+        void agentRuntimePort.sidecarInfo()
+          .then(setSidecarInfo)
+          .catch(() => undefined);
+        void agentRuntimePort.diagnostics()
+          .then(setDiagnostics)
+          .catch(() => undefined);
+        return result;
+      } catch (err) {
+        const result = codexRuntimeRestartFailureResult(err);
+        await cancelOperation(operation, result.error || "Codex runtime restart failed");
+        const latestStatus = await withTimeout(
+          agentRuntimePort.status(),
+          1_500,
+          "Codex runtime status after restart failure",
+        ).catch(() => result.status);
+        const resolved: RuntimeRestartResult = {
+          ...result,
+          status: latestStatus,
+          error: latestStatus.running ? latestStatus.lastError : result.error,
+        };
+        setSidecarStatus(resolved.status);
+        setError(resolved.error || resolved.status.lastError);
+        setStatus("ready");
+        finishOperation(operation.id, resolved.status.running ? "completed" : "failed", resolved.error || resolved.status.lastError);
+        return resolved;
+      }
+    })().finally(() => {
+      restartInFlightRef.current = null;
+    });
+    restartInFlightRef.current = restart;
+    return restart;
+  }, [beginOperation, cancelOperation, finishOperation, sidecarStatus]);
 
   return {
     status,
     thread,
     activeTurn,
+    activeOperation,
     items,
     projection,
     runtimeSettings,
@@ -716,6 +1255,8 @@ export function useCodexSession() {
     interrupt,
     resolveAction,
     restartRuntime,
+    recoverRuntime,
+    freezeDiagnosticsReport,
     clear,
   };
 }

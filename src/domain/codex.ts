@@ -6,6 +6,33 @@ import type { RunStep } from "./runSteps";
 
 export type CodexRuntimeStatus = "stopped" | "starting" | "ready" | "running" | "error";
 export type RuntimeRoute = "direct-deepseek-plan" | "codex-app-server-build";
+export type RuntimeOperationKind = "plan" | "build" | "restart" | "interrupt";
+export type RuntimeOperationStatus = "starting" | "running" | "completed" | "failed" | "cancelled";
+
+export interface RuntimeOperation {
+  id: string;
+  connectionId?: string;
+  kind: RuntimeOperationKind;
+  status: RuntimeOperationStatus;
+  threadId?: string;
+  turnId?: string;
+  startedAt: string;
+  deadlineAt: string;
+  lastEventAt?: string;
+  cancelled?: boolean;
+  finalState?: "completed" | "failed" | "cancelled";
+  error?: string;
+}
+
+export interface RuntimeEvent {
+  operationId?: string;
+  connectionId?: string;
+  type: "started" | "item" | "turn" | "status" | "failed" | "cancelled" | "completed";
+  item?: CodexItemEvent | CodexItem;
+  turn?: CodexTurn;
+  status?: CodexRuntimeStatus;
+  error?: string;
+}
 
 export type CodexItemKind =
   | "user"
@@ -36,6 +63,8 @@ export interface CodexTurn {
   mode: "plan" | "build";
   startedAt: string;
   completedAt?: string;
+  operationId?: string;
+  connectionId?: string;
 }
 
 export interface CodexItem {
@@ -66,12 +95,15 @@ export interface CodexItemEvent {
   metadata?: Record<string, unknown>;
   error?: string;
   createdAt?: string;
+  operationId?: string;
+  connectionId?: string;
 }
 
 export interface CodexRuntimeProjection {
   status: CodexRuntimeStatus;
   thread: CodexThread | null;
   activeTurn: CodexTurn | null;
+  activeOperation?: RuntimeOperation | null;
   items: CodexItem[];
   threadModel: CodexThreadViewModel;
   inspectorModel: CodexInspectorModel;
@@ -109,6 +141,7 @@ export interface CodexThreadViewModel {
   status: CodexRuntimeStatus;
   thread: CodexThread | null;
   activeTurn: CodexTurn | null;
+  activeOperation?: RuntimeOperation | null;
   messages: CodexInspectableItem[];
   planDrafts: CodexInspectableItem[];
   pendingActions: CodexInspectableItem[];
@@ -209,16 +242,38 @@ export interface CodexRuntimeSettingsModel {
   activeProvider?: string;
   lastError?: string;
   latestDesktopBuildSmoke?: DesktopBuildSmokeResult;
+  diagnostics?: CodexRuntimeDiagnostics;
 }
 
 export interface CodexRuntimeDiagnostics {
-  source: string;
-  message?: string;
-  recoverable: boolean;
-  runtimeStatus?: CodexRuntimeStatus;
-  stderr?: string;
+  pid?: number;
+  sidecarPath?: string;
+  stderrTail?: string;
   exitCode?: number;
-  requestId?: string | number;
+  pendingResponseCount: number;
+  pendingRequestCount: number;
+  activeOperation?: RuntimeOperation;
+  lastEventAt?: string;
+  staleEventCount?: number;
+  lastError?: string;
+}
+
+export interface FreezeDiagnosticReport {
+  generatedAt: string;
+  status: CodexRuntimeStatus;
+  composerLocked: boolean;
+  composerLockReason?: string;
+  activeTurn?: CodexTurn | null;
+  activeOperation?: RuntimeOperation | null;
+  runtimeDiagnostics?: CodexRuntimeDiagnostics;
+  itemCount: number;
+  runningItemCount: number;
+  pendingActionCount: number;
+  localStorageSession?: {
+    hasThread: boolean;
+    activeTurnStatus?: string;
+    itemCount: number;
+  };
 }
 
 export interface DesktopBuildSmokeResult {
