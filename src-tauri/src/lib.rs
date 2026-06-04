@@ -189,21 +189,23 @@ mod tests {
 
     #[test]
     fn test_apply_workspace_patches_transactional_rejects_stale_old_content() {
-        let file = "src-tauri/test_stale_write.txt";
-        let _ = fs::write(file, "disk content");
+        let root = std::env::temp_dir().join(format!("orbit-stale-write-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("test_stale_write.txt");
+        fs::write(&file, "disk content").unwrap();
 
         let patches = vec![FilePatch {
-            path: file.to_string(),
+            path: "test_stale_write.txt".to_string(),
             old_content: "older content".to_string(),
             new_content: "agent content".to_string(),
         }];
 
-        let res = apply_workspace_patches_transactional("".to_string(), patches);
+        let res = apply_workspace_patches_transactional(root.to_string_lossy().to_string(), patches);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Stale write detected"));
-        assert_eq!(fs::read_to_string(file).unwrap(), "disk content");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "disk content");
 
-        let _ = fs::remove_file(file);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

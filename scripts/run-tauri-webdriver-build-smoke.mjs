@@ -7,10 +7,10 @@ import { timestampId, writeSmokeReport } from "./smoke-report.mjs";
 
 const TAURI_WEBDRIVER_DOC = "https://v2.tauri.app/develop/tests/webdriver/";
 const DEFAULT_TIMEOUT_MS = Number(process.env.ORBIT_DESKTOP_BUILD_TIMEOUT_MS || 120_000);
-const REQUEST_TIMEOUT_MS = Number(process.env.ORBIT_WEBDRIVER_REQUEST_TIMEOUT_MS || 15_000);
-const SESSION_TIMEOUT_MS = Number(process.env.ORBIT_WEBDRIVER_SESSION_TIMEOUT_MS || Math.max(DEFAULT_TIMEOUT_MS, 60_000));
 const LIVE_BUILD_ENABLED = process.env.ORBIT_DESKTOP_BUILD_LIVE === "1";
 const DENY_APPROVAL = process.env.ORBIT_DESKTOP_BUILD_DENY === "1";
+const REQUEST_TIMEOUT_MS = Number(process.env.ORBIT_WEBDRIVER_REQUEST_TIMEOUT_MS || (LIVE_BUILD_ENABLED ? 60_000 : 15_000));
+const SESSION_TIMEOUT_MS = Number(process.env.ORBIT_WEBDRIVER_SESSION_TIMEOUT_MS || Math.max(DEFAULT_TIMEOUT_MS, 60_000));
 const SMOKE_FILE = process.env.ORBIT_DESKTOP_BUILD_SMOKE_FILE || "ORBIT_DESKTOP_BUILD_SMOKE.md";
 const BUILD_PROVIDER = process.env.ORBIT_DESKTOP_BUILD_PROVIDER || "deepseek";
 const BUILD_MODEL = process.env.ORBIT_DESKTOP_BUILD_MODEL || "deepseek-v4-flash";
@@ -133,6 +133,7 @@ async function waitForTruthy(session, script, timeoutMs) {
 
 async function captureDesktopDiagnostics(session) {
   if (!session) return null;
+  const smokePath = WORKSPACE_DIR ? path.join(WORKSPACE_DIR, SMOKE_FILE) : null;
   try {
     const result = await session.execute(`
       const selectors = [
@@ -155,9 +156,23 @@ async function captureDesktopDiagnostics(session) {
         rootChildren: document.getElementById("root")?.children.length ?? null,
       };
     `);
-    return result?.value ?? null;
+    return {
+      ...(result?.value ?? {}),
+      smokeFile: smokePath ? {
+        path: smokePath,
+        exists: fs.existsSync(smokePath),
+        content: fs.existsSync(smokePath) ? fs.readFileSync(smokePath, "utf8").slice(0, 1000) : "",
+      } : null,
+    };
   } catch (error) {
-    return { error: error?.message || String(error) };
+    return {
+      error: error?.message || String(error),
+      smokeFile: smokePath ? {
+        path: smokePath,
+        exists: fs.existsSync(smokePath),
+        content: fs.existsSync(smokePath) ? fs.readFileSync(smokePath, "utf8").slice(0, 1000) : "",
+      } : null,
+    };
   }
 }
 
@@ -419,7 +434,7 @@ async function submitBuildPrompt(session) {
     const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
     setter.call(textarea, ${JSON.stringify(prompt)});
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, data: ${JSON.stringify(prompt)}, inputType: "insertText" }));
-    button.click();
+    window.setTimeout(() => button.click(), 0);
     return true;
   `);
 }
@@ -471,7 +486,7 @@ async function runLiveBuild(session, criteria) {
         ? /拒绝|Deny|Cancel/i.test(candidate.textContent || "")
         : /批准|Approve/i.test(candidate.textContent || ""));
     if (!button) throw new Error("Approval resolution button not found.");
-    button.click();
+    window.setTimeout(() => button.click(), 0);
     return true;
   `);
 
