@@ -20,6 +20,7 @@ const WORKSPACE_DIR = process.env.ORBIT_DESKTOP_BUILD_WORKSPACE
   : LIVE_BUILD_ENABLED
     ? path.resolve(".qa/desktop-build-workspace")
     : null;
+const SESSION_KEY = "session:codex-sidecar:current";
 
 function reportId() {
   return timestampId("tauri-webdriver-build-smoke");
@@ -28,6 +29,10 @@ function reportId() {
 function which(binary) {
   const result = spawnSync(process.platform === "win32" ? "where" : "which", [binary], { encoding: "utf8" });
   return result.status === 0 ? result.stdout.split(/\r?\n/).find(Boolean)?.trim() || "" : "";
+}
+
+function sqlString(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 function criterion(id, label, status, message, evidence = {}) {
@@ -190,9 +195,8 @@ function cleanupSmokeWorkspace(criteria) {
   ));
 }
 
-async function configureWorkspace(session, criteria) {
-  if (!WORKSPACE_DIR || !LIVE_BUILD_ENABLED) return;
-  const providerSettings = {
+function liveBuildProviderSettings() {
+  return {
     activeProviderId: BUILD_PROVIDER,
     configs: {
       [BUILD_PROVIDER]: {
@@ -240,13 +244,19 @@ async function configureWorkspace(session, criteria) {
     },
     smokeStatus: {},
   };
-  const sessionState = {
+}
+
+function liveBuildSessionState() {
+  return {
     schemaVersion: "codex-sidecar.v1",
     importedPlan: null,
-    providerSettings,
+    providerSettings: liveBuildProviderSettings(),
     lastActiveAt: new Date().toISOString(),
   };
-  const runControlState = {
+}
+
+function liveBuildRunControlState() {
+  return {
     mode: "build",
     selection: {
       providerId: BUILD_PROVIDER,
@@ -254,6 +264,44 @@ async function configureWorkspace(session, criteria) {
       reasoningEffort: "fast",
     },
   };
+}
+
+function seedLiveBuildSession(criteria) {
+  if (!LIVE_BUILD_ENABLED || !APP_DATA_DIR) return;
+  const sqlite = which("sqlite3");
+  if (!sqlite) {
+    criteria.push(criterion(
+      "desktop-build-session-seed",
+      "Live Build smoke seeds a non-secret DeepSeek session.",
+      "broken",
+      "sqlite3 is required to seed the temporary Orbit session before the packaged app starts.",
+    ));
+    return;
+  }
+  const dbPath = path.join(APP_DATA_DIR, "orbit_code.db");
+  const sessionJson = JSON.stringify(liveBuildSessionState());
+  const result = spawnSync(sqlite, [dbPath], {
+    input: [
+      "CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT);",
+      `INSERT INTO kv_store (key, value) VALUES (${sqlString(SESSION_KEY)}, ${sqlString(sessionJson)}) ON CONFLICT(key) DO UPDATE SET value=excluded.value;`,
+    ].join("\n"),
+    encoding: "utf8",
+  });
+  criteria.push(criterion(
+    "desktop-build-session-seed",
+    "Live Build smoke seeds a non-secret DeepSeek session.",
+    result.status === 0 ? "verified" : "broken",
+    result.status === 0
+      ? "Seeded provider/model selection into the temporary encrypted Orbit database; provider credential remains in the vault envelope."
+      : `sqlite3 failed while seeding the Orbit session: ${result.stderr || result.error?.message || "unknown error"}`,
+    { provider: BUILD_PROVIDER, model: BUILD_MODEL },
+  ));
+}
+
+async function configureWorkspace(session, criteria) {
+  if (!WORKSPACE_DIR || !LIVE_BUILD_ENABLED) return;
+  const sessionState = liveBuildSessionState();
+  const runControlState = liveBuildRunControlState();
   await session.execute(`
     window.localStorage.setItem("orbit-code.active-workspace.v1", ${JSON.stringify(WORKSPACE_DIR)});
     window.localStorage.removeItem("agent-gui.active-workspace.v1");
@@ -460,6 +508,8 @@ async function runLiveBuild(session, criteria) {
 async function runSmoke(criteria) {
   const appPath = await verifyDesktopPrerequisites(criteria);
   if (!appPath) return criteria.some((item) => item.status === "broken") ? "broken" : "blocked";
+  seedLiveBuildSession(criteria);
+  if (criteria.some((item) => item.status === "broken")) return "broken";
 
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
