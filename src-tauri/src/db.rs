@@ -384,7 +384,7 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
 pub fn get_connection(app: &AppHandle) -> Result<Connection, String> {
     let path = get_db_path(app)?;
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+    conn.execute_batch("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
         .map_err(|e| e.to_string())?;
     init_schema(&conn)?;
     Ok(conn)

@@ -157,10 +157,8 @@ export function useSession(): SessionState {
     async function load() {
       try {
         sessionStore.clearLegacySession();
-        const [session, storedConfigs] = await Promise.all([
-          sessionStore.loadSession(),
-          sessionStore.loadProviderConfigs(),
-        ]);
+        const session = await sessionStore.loadSession();
+        const storedConfigs = await sessionStore.loadProviderConfigs();
         if (session?.importedPlan) setImportedPlan(session.importedPlan);
         const storedSettings = session?.providerSettings as ProviderSettings | undefined;
         setProviderSettings(normalizeProviderSettings({

@@ -108,13 +108,20 @@ async function waitForDriver(baseUrl, timeoutMs) {
 async function waitForTruthy(session, script, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastValue = null;
+  let lastError = null;
   while (Date.now() < deadline) {
-    const result = await session.execute(script);
-    lastValue = result?.value;
-    if (lastValue) return lastValue;
+    try {
+      const result = await session.execute(script);
+      lastValue = result?.value;
+      lastError = null;
+      if (lastValue) return lastValue;
+    } catch (error) {
+      lastError = error;
+    }
     await sleep(300);
   }
-  throw new Error(`Timed out waiting for WebDriver condition. Last value: ${JSON.stringify(lastValue)}`);
+  const suffix = lastError ? ` Last execute error: ${lastError?.message || String(lastError)}` : "";
+  throw new Error(`Timed out waiting for WebDriver condition. Last value: ${JSON.stringify(lastValue)}.${suffix}`);
 }
 
 async function captureDesktopDiagnostics(session) {
