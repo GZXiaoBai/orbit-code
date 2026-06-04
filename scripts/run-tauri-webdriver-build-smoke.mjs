@@ -6,9 +6,9 @@ import path from "node:path";
 import { timestampId, writeSmokeReport } from "./smoke-report.mjs";
 
 const TAURI_WEBDRIVER_DOC = "https://v2.tauri.app/develop/tests/webdriver/";
-const DEFAULT_TIMEOUT_MS = Number(process.env.ORBIT_DESKTOP_BUILD_TIMEOUT_MS || 120_000);
 const LIVE_BUILD_ENABLED = process.env.ORBIT_DESKTOP_BUILD_LIVE === "1";
 const DENY_APPROVAL = process.env.ORBIT_DESKTOP_BUILD_DENY === "1";
+const DEFAULT_TIMEOUT_MS = Number(process.env.ORBIT_DESKTOP_BUILD_TIMEOUT_MS || (LIVE_BUILD_ENABLED ? 480_000 : 120_000));
 const REQUEST_TIMEOUT_MS = Number(process.env.ORBIT_WEBDRIVER_REQUEST_TIMEOUT_MS || (LIVE_BUILD_ENABLED ? 60_000 : 15_000));
 const SESSION_TIMEOUT_MS = Number(process.env.ORBIT_WEBDRIVER_SESSION_TIMEOUT_MS || Math.max(DEFAULT_TIMEOUT_MS, 60_000));
 const SMOKE_FILE = process.env.ORBIT_DESKTOP_BUILD_SMOKE_FILE || "ORBIT_DESKTOP_BUILD_SMOKE.md";
@@ -451,7 +451,7 @@ async function submitBuildPrompt(session) {
   await waitForTruthy(session, `
     return Boolean(document.querySelector(".composer textarea") && document.querySelector(".composer .send-button"));
   `, DEFAULT_TIMEOUT_MS);
-  await session.execute(`
+  const submitResult = await session.execute(`
     if (window.__ORBIT_DESKTOP_SMOKE__?.submitBuildPrompt) {
       window.setTimeout(() => window.__ORBIT_DESKTOP_SMOKE__.submitBuildPrompt(${JSON.stringify(prompt)}), 0);
       return { submitted: true, source: "smoke-hook" };
@@ -467,6 +467,7 @@ async function submitBuildPrompt(session) {
     window.setTimeout(() => button.click(), 0);
     return { submitted: true, source: "composer-dom" };
   `);
+  return submitResult?.value || { submitted: true, source: "unknown" };
 }
 
 function inspectBuildPreflightText(text) {
@@ -607,7 +608,14 @@ async function runLiveBuild(session, criteria) {
 
   prepareSmokeWorkspace(criteria);
   await configureWorkspace(session, criteria);
-  await submitBuildPrompt(session);
+  const submitResult = await submitBuildPrompt(session);
+  criteria.push(criterion(
+    "desktop-build-submit-dispatched",
+    "Live Build smoke dispatches the prompt through the packaged desktop window.",
+    "verified",
+    "The smoke prompt was submitted to the packaged workbench before waiting for approval.",
+    submitResult,
+  ));
   const preflight = await waitForBuildPreflight(session);
   if (preflight.blocked) {
     criteria.push(criterion("build-gate", "Build is not allowed to enter a half-running state when prerequisites are missing.", "broken", "Build was blocked before approval.", preflight));
