@@ -301,6 +301,20 @@ export function codexRuntimeEventBelongsToActiveScope(input: {
   return false;
 }
 
+export function codexRuntimeEventMatchesOperation(input: {
+  payloadTurnId?: string;
+  payloadThreadId?: string;
+  activeOperation?: RuntimeOperation | null;
+}): boolean {
+  const { payloadTurnId, payloadThreadId, activeOperation } = input;
+  if (!activeOperation) return false;
+  if (!payloadTurnId) return true;
+  if (!activeOperation.turnId || activeOperation.turnId === payloadTurnId) return true;
+  return activeOperation.kind === "build"
+    && Boolean(payloadThreadId)
+    && activeOperation.threadId === payloadThreadId;
+}
+
 export function mergeRuntimeOperationPatch(
   current: RuntimeOperation,
   patch: Partial<RuntimeOperation>,
@@ -339,10 +353,12 @@ export function finishRuntimeOperation(
 export function codexStatusEventShouldCreateTimelineError(input: {
   status: CodexRuntimeStatus;
   error?: string;
+  operationId?: string;
   operationKind?: string;
 }): boolean {
   return input.status === "error"
     && Boolean(input.error)
+    && !input.operationId
     && input.operationKind !== "restart"
     && input.operationKind !== "plan"
     && input.operationKind !== "build";
@@ -702,7 +718,11 @@ export function useCodexSession() {
         }
         if (payloadTurnId && ignoredTurnIdsRef.current.has(payloadTurnId)) return;
         setItems((prev) => applyCodexItemEvent(prev, event.payload));
-        if (currentOperation && (!payloadTurnId || payloadTurnId === currentOperation.turnId)) {
+        if (currentOperation && codexRuntimeEventMatchesOperation({
+          payloadTurnId,
+          payloadThreadId,
+          activeOperation: currentOperation,
+        })) {
           patchOperation(currentOperation.id, {
             status: "running",
             lastEventAt: now(),
@@ -732,7 +752,11 @@ export function useCodexSession() {
         }
         setActiveTurn(event.payload);
         setStatus(event.payload.status === "running" ? "running" : event.payload.status === "failed" ? "error" : "ready");
-        if (currentOperation && (!currentOperation.turnId || currentOperation.turnId === event.payload.id)) {
+        if (currentOperation && codexRuntimeEventMatchesOperation({
+          payloadTurnId: event.payload.id,
+          payloadThreadId: event.payload.threadId,
+          activeOperation: currentOperation,
+        })) {
           patchOperation(currentOperation.id, {
             turnId: event.payload.id,
             threadId: event.payload.threadId,

@@ -5,6 +5,7 @@ import {
   codexRuntimeRestartFailureResult,
   codexComposerSubmitLocked,
   codexRuntimeEventBelongsToActiveOperation,
+  codexRuntimeEventMatchesOperation,
   codexRuntimeEventBelongsToActiveScope,
   codexComposerLockReason,
   codexOperationIdleTimeoutMs,
@@ -271,6 +272,34 @@ describe("Codex session runtime routing", () => {
     })).toBe(true);
   });
 
+  it("matches app-server turn events to the active Build operation by thread", () => {
+    const activeOperation = {
+      id: "op-current",
+      kind: "build" as const,
+      status: "running" as const,
+      threadId: "thread-1",
+      turnId: "orbit-turn-1",
+      startedAt: "2026-05-31T00:00:00.000Z",
+      deadlineAt: "2026-05-31T00:01:00.000Z",
+    };
+
+    expect(codexRuntimeEventMatchesOperation({
+      payloadTurnId: "app-turn-1",
+      payloadThreadId: "thread-1",
+      activeOperation,
+    })).toBe(true);
+    expect(codexRuntimeEventMatchesOperation({
+      payloadTurnId: "app-turn-1",
+      payloadThreadId: "thread-old",
+      activeOperation,
+    })).toBe(false);
+    expect(codexRuntimeEventMatchesOperation({
+      payloadTurnId: "app-turn-1",
+      payloadThreadId: "thread-1",
+      activeOperation: { ...activeOperation, kind: "plan" },
+    })).toBe(false);
+  });
+
   it("does not downgrade a completed operation when a late running turn result arrives", () => {
     const completed = {
       id: "op-current",
@@ -358,6 +387,11 @@ describe("Codex session runtime routing", () => {
       status: "error",
       error: "turn failed",
       operationKind: "build",
+    })).toBe(false);
+    expect(codexStatusEventShouldCreateTimelineError({
+      status: "error",
+      error: "Codex operation op-current was cancelled",
+      operationId: "op-current",
     })).toBe(false);
   });
 
