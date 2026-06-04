@@ -693,6 +693,29 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_does_not_cancel_completed_operation() {
+        let _lock = test_runtime_state_lock();
+        cleanup_active_app_server();
+        begin_runtime_operation(
+            Some("op-completed".to_string()),
+            "build",
+            Some("orbit-thread".to_string()),
+            Some("orbit-turn".to_string()),
+            Duration::from_secs(25),
+        );
+        patch_runtime_operation_status("completed", Some("completed"), None);
+
+        cleanup_active_app_server();
+
+        let guard = active_app_server().lock().unwrap();
+        let operation = guard.active_operation.as_ref().expect("operation snapshot");
+        assert_eq!(operation.id, "op-completed");
+        assert_eq!(operation.status, "completed");
+        assert_eq!(operation.final_state.as_deref(), Some("completed"));
+        assert_eq!(operation.cancelled, None);
+    }
+
+    #[test]
     fn app_server_start_cleanup_preserves_active_operation() {
         let _lock = test_runtime_state_lock();
         cleanup_active_app_server();

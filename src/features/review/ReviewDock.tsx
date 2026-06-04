@@ -186,6 +186,7 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
           { id: "context", label: copy.workbench.contextTab, count: contextInspector.blocks.length },
         ]}
       />
+      <UsageStrip copy={copy} workspace={workspace} />
 
       <div className="review-dock-body">
         {activeTab === "files" ? (
@@ -199,7 +200,6 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
         {activeTab === "actions" ? (
           <div className="codex-inspector-list">
             {model.actions.map((item) => <ActionItemCard key={item.id} copy={copy} item={item} />)}
-            <UsageStrip copy={copy} workspace={workspace} />
             {model.errors.map((item) => (
               <article key={item.id} className="codex-inspector-card codex-inspector-card-danger">
                 <header>

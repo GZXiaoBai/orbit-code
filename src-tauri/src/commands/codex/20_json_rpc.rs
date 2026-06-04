@@ -657,10 +657,12 @@ fn cleanup_active_app_server_inner(cancel_active_operation: bool) {
         guard.active_context = None;
         if cancel_active_operation {
             if let Some(operation) = guard.active_operation.as_mut() {
-                operation.status = "cancelled".to_string();
-                operation.cancelled = Some(true);
-                operation.final_state = Some("cancelled".to_string());
-                operation.last_event_at = Some(now_iso());
+                if operation.status == "starting" || operation.status == "running" {
+                    operation.status = "cancelled".to_string();
+                    operation.cancelled = Some(true);
+                    operation.final_state = Some("cancelled".to_string());
+                    operation.last_event_at = Some(now_iso());
+                }
             }
         } else if let Some(operation) = guard.active_operation.as_mut() {
             operation.connection_id = None;
