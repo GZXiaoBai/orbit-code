@@ -12,6 +12,8 @@ const SESSION_TIMEOUT_MS = Number(process.env.ORBIT_WEBDRIVER_SESSION_TIMEOUT_MS
 const LIVE_BUILD_ENABLED = process.env.ORBIT_DESKTOP_BUILD_LIVE === "1";
 const DENY_APPROVAL = process.env.ORBIT_DESKTOP_BUILD_DENY === "1";
 const SMOKE_FILE = process.env.ORBIT_DESKTOP_BUILD_SMOKE_FILE || "ORBIT_DESKTOP_BUILD_SMOKE.md";
+const BUILD_PROVIDER = process.env.ORBIT_DESKTOP_BUILD_PROVIDER || "deepseek";
+const BUILD_MODEL = process.env.ORBIT_DESKTOP_BUILD_MODEL || "deepseek-v4-flash";
 const APP_DATA_DIR = process.env.ORBIT_APP_DATA_DIR ? path.resolve(process.env.ORBIT_APP_DATA_DIR) : null;
 const WORKSPACE_DIR = process.env.ORBIT_DESKTOP_BUILD_WORKSPACE
   ? path.resolve(process.env.ORBIT_DESKTOP_BUILD_WORKSPACE)
@@ -190,9 +192,73 @@ function cleanupSmokeWorkspace(criteria) {
 
 async function configureWorkspace(session, criteria) {
   if (!WORKSPACE_DIR || !LIVE_BUILD_ENABLED) return;
+  const providerSettings = {
+    activeProviderId: BUILD_PROVIDER,
+    configs: {
+      [BUILD_PROVIDER]: {
+        defaultModel: BUILD_MODEL,
+        importedModels: [BUILD_MODEL],
+        enabledModels: [BUILD_MODEL],
+        customModels: [],
+        modelCapabilities: {
+          [BUILD_MODEL]: {
+            streaming: true,
+            reasoningLevels: ["auto", "fast", "balanced", "deep"],
+            toolCalls: true,
+            local: false,
+            buildSupported: true,
+            maxContextTokens: 128000,
+            capabilitySource: "manual",
+          },
+        },
+      },
+    },
+    sandboxMode: "none",
+    security: {
+      preset: "askBeforeAction",
+      advancedRules: {},
+      sandboxMode: "none",
+    },
+    projectSecurityOverrides: {},
+    agent: {
+      maxIterations: 15,
+      contextBudget: "balanced",
+      autoCompact: true,
+      autoSelfHeal: false,
+      verificationApproval: true,
+      fixtureProviderEnabled: false,
+    },
+    general: {
+      startMode: "build",
+      openLastWorkspace: true,
+    },
+    advanced: {
+      diagnosticsEnabled: false,
+    },
+    context: {
+      userRules: [],
+    },
+    smokeStatus: {},
+  };
+  const sessionState = {
+    schemaVersion: "codex-sidecar.v1",
+    importedPlan: null,
+    providerSettings,
+    lastActiveAt: new Date().toISOString(),
+  };
+  const runControlState = {
+    mode: "build",
+    selection: {
+      providerId: BUILD_PROVIDER,
+      model: BUILD_MODEL,
+      reasoningEffort: "fast",
+    },
+  };
   await session.execute(`
     window.localStorage.setItem("orbit-code.active-workspace.v1", ${JSON.stringify(WORKSPACE_DIR)});
     window.localStorage.removeItem("agent-gui.active-workspace.v1");
+    window.localStorage.setItem("orbit-code.codex-sidecar.session", ${JSON.stringify(JSON.stringify(sessionState))});
+    window.localStorage.setItem("agent-gui.run-controls.v1", ${JSON.stringify(JSON.stringify(runControlState))});
     window.location.reload();
     return true;
   `);
@@ -205,7 +271,7 @@ async function configureWorkspace(session, criteria) {
     "Packaged desktop window loads the isolated smoke workspace.",
     "verified",
     "The workbench rendered the smoke workspace after seeding Orbit's active workspace storage.",
-    { workspaceDir: WORKSPACE_DIR },
+    { workspaceDir: WORKSPACE_DIR, provider: BUILD_PROVIDER, model: BUILD_MODEL },
   ));
 }
 
