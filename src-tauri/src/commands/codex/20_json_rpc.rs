@@ -634,6 +634,14 @@ fn active_restart_operation() -> Option<RuntimeOperationSnapshot> {
 }
 
 fn cleanup_active_app_server() {
+    cleanup_active_app_server_inner(true);
+}
+
+fn cleanup_active_app_server_preserving_active_operation() {
+    cleanup_active_app_server_inner(false);
+}
+
+fn cleanup_active_app_server_inner(cancel_active_operation: bool) {
     let mut pending_responses = HashMap::new();
     let mut child_to_kill = None;
     if let Ok(mut guard) = active_app_server().lock() {
@@ -647,17 +655,27 @@ fn cleanup_active_app_server() {
         guard.orbit_to_app_thread.clear();
         guard.app_to_orbit_thread.clear();
         guard.active_context = None;
-        if let Some(operation) = guard.active_operation.as_mut() {
-            operation.status = "cancelled".to_string();
-            operation.cancelled = Some(true);
-            operation.final_state = Some("cancelled".to_string());
-            operation.last_event_at = Some(now_iso());
+        if cancel_active_operation {
+            if let Some(operation) = guard.active_operation.as_mut() {
+                operation.status = "cancelled".to_string();
+                operation.cancelled = Some(true);
+                operation.final_state = Some("cancelled".to_string());
+                operation.last_event_at = Some(now_iso());
+            }
+        } else if let Some(operation) = guard.active_operation.as_mut() {
+            operation.connection_id = None;
         }
         guard.sequence = 0;
         guard.last_event_at = Some(now_iso());
         child_to_kill = guard.child.take();
     }
-    record_app_server_stage("cleanup", json!({ "reason": "cleanup_active_app_server" }));
+    record_app_server_stage(
+        "cleanup",
+        json!({
+            "reason": "cleanup_active_app_server",
+            "cancelActiveOperation": cancel_active_operation
+        }),
+    );
     for (_, tx) in pending_responses {
         let _ = tx.send(Err("Codex app-server stopped".to_string()));
     }

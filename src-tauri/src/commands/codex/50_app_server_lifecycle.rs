@@ -285,6 +285,9 @@ fn spawn_persistent_app_server_process(
         guard.last_stage = Some("persistent:spawn:started".to_string());
         guard.last_stage_at = Some(now_iso());
         guard.last_stage_metadata = Some(json!({ "providerId": provider_id, "pid": pid }));
+        if let Some(operation) = guard.active_operation.as_mut() {
+            operation.connection_id = Some(connection_id.clone());
+        }
         previous
     };
     if let Some(mut previous) = previous_child {
@@ -357,7 +360,7 @@ fn ensure_persistent_app_server(
         return Ok(status);
     }
 
-    cleanup_active_app_server();
+    cleanup_active_app_server_preserving_active_operation();
     let status = spawn_persistent_app_server_process(app.clone(), provider_id)?;
     record_app_server_stage(
         "persistent:initialize:starting",

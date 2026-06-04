@@ -693,6 +693,31 @@ mod tests {
     }
 
     #[test]
+    fn app_server_start_cleanup_preserves_active_operation() {
+        let _lock = test_runtime_state_lock();
+        cleanup_active_app_server();
+        begin_runtime_operation(
+            Some("op-build-preserve".to_string()),
+            "build",
+            Some("orbit-thread".to_string()),
+            Some("orbit-turn".to_string()),
+            Duration::from_secs(25),
+        );
+
+        cleanup_active_app_server_preserving_active_operation();
+
+        let guard = active_app_server().lock().unwrap();
+        let operation = guard.active_operation.as_ref().expect("operation snapshot");
+        assert_eq!(operation.id, "op-build-preserve");
+        assert_eq!(operation.status, "running");
+        assert_eq!(operation.final_state, None);
+        assert_eq!(operation.cancelled, None);
+        assert_eq!(operation.connection_id, None);
+        drop(guard);
+        cleanup_active_app_server();
+    }
+
+    #[test]
     fn active_build_recover_clears_pending_approval_and_marks_operation_cancelled() {
         let _lock = test_runtime_state_lock();
         cleanup_active_app_server();
