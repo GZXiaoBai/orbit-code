@@ -593,16 +593,11 @@ fn persistent_context_from_notification(params: &Value) -> Option<AppServerRunCo
 
 fn persistent_handle_notification(app: &AppHandle, method: &str, params: Option<&Value>) {
     let params = params.unwrap_or(&Value::Null);
-    let mut context = {
-        let guard = match active_app_server().lock() {
-            Ok(guard) => guard,
-            Err(_) => return,
-        };
-        guard
-            .active_context
-            .clone()
-            .or_else(|| persistent_context_from_notification(params))
-    };
+    let active_context = active_app_server()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.active_context.clone());
+    let mut context = active_context.or_else(|| persistent_context_from_notification(params));
     let Some(mut context) = context.take() else {
         return;
     };
@@ -621,10 +616,11 @@ fn persistent_handle_notification(app: &AppHandle, method: &str, params: Option<
         &mut sequence,
     );
     let completed = notification_completes_persistent_turn(method, params, &context);
+    let mut complete_operation = false;
     if let Ok(mut guard) = active_app_server().lock() {
         guard.sequence = sequence;
         if completed {
-            patch_runtime_operation_status("completed", Some("completed"), None);
+            complete_operation = true;
             guard.active_context = None;
             guard.app_turn_id = None;
             guard
@@ -635,6 +631,9 @@ fn persistent_handle_notification(app: &AppHandle, method: &str, params: Option<
             guard.app_turn_id = context.app_turn_id.clone();
             guard.active_context = Some(context);
         }
+    }
+    if complete_operation {
+        patch_runtime_operation_status("completed", Some("completed"), None);
     }
 }
 
