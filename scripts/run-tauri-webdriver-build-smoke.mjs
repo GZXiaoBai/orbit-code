@@ -39,6 +39,16 @@ function criterion(id, label, status, message, evidence = {}) {
   return { id, label, status, message, evidence };
 }
 
+function readFileSnapshot(filePath, maxLength = 4000) {
+  if (!filePath) return null;
+  const exists = fs.existsSync(filePath);
+  return {
+    path: filePath,
+    exists,
+    content: exists ? fs.readFileSync(filePath, "utf8").slice(0, maxLength) : "",
+  };
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -132,8 +142,13 @@ async function waitForTruthy(session, script, timeoutMs) {
 }
 
 async function captureDesktopDiagnostics(session) {
-  if (!session) return null;
   const smokePath = WORKSPACE_DIR ? path.join(WORKSPACE_DIR, SMOKE_FILE) : null;
+  const runtimeDiagnosticsPath = APP_DATA_DIR ? path.join(APP_DATA_DIR, "orbit_codex_runtime_diagnostics.json") : null;
+  const fileDiagnostics = {
+    smokeFile: readFileSnapshot(smokePath, 1000),
+    runtimeDiagnosticsFile: readFileSnapshot(runtimeDiagnosticsPath, 4000),
+  };
+  if (!session) return fileDiagnostics;
   try {
     const result = await session.execute(`
       const selectors = [
@@ -158,20 +173,12 @@ async function captureDesktopDiagnostics(session) {
     `);
     return {
       ...(result?.value ?? {}),
-      smokeFile: smokePath ? {
-        path: smokePath,
-        exists: fs.existsSync(smokePath),
-        content: fs.existsSync(smokePath) ? fs.readFileSync(smokePath, "utf8").slice(0, 1000) : "",
-      } : null,
+      ...fileDiagnostics,
     };
   } catch (error) {
     return {
       error: error?.message || String(error),
-      smokeFile: smokePath ? {
-        path: smokePath,
-        exists: fs.existsSync(smokePath),
-        content: fs.existsSync(smokePath) ? fs.readFileSync(smokePath, "utf8").slice(0, 1000) : "",
-      } : null,
+      ...fileDiagnostics,
     };
   }
 }

@@ -1007,6 +1007,9 @@ pub fn codex_runtime_diagnostics() -> CodexRuntimeDiagnostics {
         active_operation,
         last_event_at,
         stale_event_count,
+        last_stage,
+        last_stage_at,
+        last_stage_metadata,
     ) = active_app_server()
         .lock()
         .map(|guard| {
@@ -1016,9 +1019,12 @@ pub fn codex_runtime_diagnostics() -> CodexRuntimeDiagnostics {
                 guard.active_operation.clone(),
                 guard.last_event_at.clone(),
                 guard.stale_event_count,
+                guard.last_stage.clone(),
+                guard.last_stage_at.clone(),
+                guard.last_stage_metadata.clone(),
             )
         })
-        .unwrap_or((0, 0, None, None, 0));
+        .unwrap_or((0, 0, None, None, 0, None, None, None));
     let status = codex_sidecar_status();
     let sidecar_info = codex_sidecar_version_info();
     CodexRuntimeDiagnostics {
@@ -1031,6 +1037,9 @@ pub fn codex_runtime_diagnostics() -> CodexRuntimeDiagnostics {
         active_operation,
         last_event_at,
         stale_event_count: Some(stale_event_count),
+        last_stage,
+        last_stage_at,
+        last_stage_metadata,
         last_error: status.last_error,
     }
 }

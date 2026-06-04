@@ -1002,6 +1002,15 @@ function CodexRuntimePanel({
     runtime.diagnostics?.lastEventAt
       ? `last event: ${runtime.diagnostics.lastEventAt}`
       : "",
+    runtime.diagnostics?.lastStage
+      ? `stage: ${runtime.diagnostics.lastStage}`
+      : "",
+    runtime.diagnostics?.lastStageAt
+      ? `stage at: ${runtime.diagnostics.lastStageAt}`
+      : "",
+    runtime.diagnostics?.lastStageMetadata
+      ? `stage metadata: ${JSON.stringify(runtime.diagnostics.lastStageMetadata).slice(0, 500)}`
+      : "",
     typeof runtime.diagnostics?.staleEventCount === "number" && runtime.diagnostics.staleEventCount > 0
       ? `stale events: ${runtime.diagnostics.staleEventCount}`
       : "",

@@ -216,6 +216,10 @@ fn spawn_persistent_app_server_process(
     app: AppHandle,
     provider_id: &str,
 ) -> Result<CodexSidecarStatus, String> {
+    record_app_server_stage(
+        "persistent:spawn:starting",
+        json!({ "providerId": provider_id }),
+    );
     let bridge = ensure_bridge_started(provider_id)?;
     if bridge.status != "ready" {
         return Err(bridge
@@ -278,6 +282,9 @@ fn spawn_persistent_app_server_process(
         guard.app_to_orbit_thread.clear();
         guard.active_context = None;
         guard.sequence = 0;
+        guard.last_stage = Some("persistent:spawn:started".to_string());
+        guard.last_stage_at = Some(now_iso());
+        guard.last_stage_metadata = Some(json!({ "providerId": provider_id, "pid": pid }));
         previous
     };
     if let Some(mut previous) = previous_child {
@@ -310,6 +317,10 @@ fn ensure_persistent_app_server(
     app: &AppHandle,
     provider_id: &str,
 ) -> Result<CodexSidecarStatus, String> {
+    record_app_server_stage(
+        "persistent:ensure",
+        json!({ "providerId": provider_id }),
+    );
     let reuse = {
         let mut guard = active_app_server().lock().map_err(|e| e.to_string())?;
         let provider_matches = guard.provider_id.as_deref() == Some(provider_id);
@@ -339,11 +350,19 @@ fn ensure_persistent_app_server(
         }
     };
     if let Some(status) = reuse {
+        record_app_server_stage(
+            "persistent:ensure:reuse",
+            json!({ "providerId": provider_id, "pid": status.pid }),
+        );
         return Ok(status);
     }
 
     cleanup_active_app_server();
     let status = spawn_persistent_app_server_process(app.clone(), provider_id)?;
+    record_app_server_stage(
+        "persistent:initialize:starting",
+        json!({ "providerId": provider_id, "pid": status.pid }),
+    );
     let initialize = persistent_app_server_request_wait(
         "initialize",
         json!({
@@ -353,9 +372,17 @@ fn ensure_persistent_app_server(
         Duration::from_secs(15),
     )?;
     if initialize.get("error").is_some() {
+        record_app_server_stage(
+            "persistent:initialize:error",
+            json!({ "providerId": provider_id }),
+        );
         return Err(format!("Codex initialize failed: {initialize}"));
     }
     write_active_app_server_payload(&json!({ "method": "initialized" }))?;
+    record_app_server_stage(
+        "persistent:initialize:ready",
+        json!({ "providerId": provider_id, "pid": status.pid }),
+    );
     Ok(status)
 }
 
@@ -400,6 +427,10 @@ fn persistent_app_server_reader_loop(
         }
         match client.handle_line(&line) {
             CodexJsonRpcDispatch::Response { id, result } => {
+                record_app_server_stage(
+                    "reader:response",
+                    json!({ "connectionId": connection_id, "requestId": id }),
+                );
                 if let Ok(mut guard) = active_app_server().lock() {
                     if let Some(tx) = guard.pending_responses.remove(&id) {
                         let _ = tx.send(Ok(result));
@@ -408,6 +439,10 @@ fn persistent_app_server_reader_loop(
             }
             CodexJsonRpcDispatch::Error { id, error } => {
                 let message = json_error_message(&error);
+                record_app_server_stage(
+                    "reader:error",
+                    json!({ "connectionId": connection_id, "requestId": id, "error": &message }),
+                );
                 if let Some(id) = id {
                     if let Ok(mut guard) = active_app_server().lock() {
                         if let Some(tx) = guard.pending_responses.remove(&id) {
@@ -418,12 +453,24 @@ fn persistent_app_server_reader_loop(
                 persistent_emit_context_error(&app, message);
             }
             CodexJsonRpcDispatch::Notification { method, params } => {
+                record_app_server_stage(
+                    &format!("notification:{method}"),
+                    json!({ "connectionId": connection_id }),
+                );
                 persistent_handle_notification(&app, &method, params.as_ref());
             }
             CodexJsonRpcDispatch::ServerRequest { id, method, params } => {
+                record_app_server_stage(
+                    &format!("server-request:{method}"),
+                    json!({ "connectionId": connection_id, "requestId": id }),
+                );
                 persistent_handle_server_request(&app, id, &method, params.as_ref());
             }
             CodexJsonRpcDispatch::Invalid(error) => {
+                record_app_server_stage(
+                    "reader:invalid",
+                    json!({ "connectionId": connection_id, "error": &error }),
+                );
                 persistent_emit_context_error(
                     &app,
                     format!("Invalid Codex app-server JSON-RPC: {error}"),
@@ -596,6 +643,10 @@ fn cached_or_start_app_thread(input: &CodexTurnStartInput) -> Result<String, Str
         .get(&input.thread_id)
         .cloned()
     {
+        record_app_server_stage(
+            "thread/start:cached",
+            json!({ "orbitThreadId": &input.thread_id, "appThreadId": &existing }),
+        );
         return Ok(existing);
     }
     let sandbox = if input.mode == "plan" {
@@ -633,6 +684,10 @@ fn cached_or_start_app_thread(input: &CodexTurnStartInput) -> Result<String, Str
             .app_to_orbit_thread
             .insert(app_thread_id.clone(), input.thread_id.clone());
     }
+    record_app_server_stage(
+        "thread/start:ready",
+        json!({ "orbitThreadId": &input.thread_id, "appThreadId": &app_thread_id }),
+    );
     Ok(app_thread_id)
 }
 
@@ -641,6 +696,10 @@ fn persistent_start_turn(
     input: &CodexTurnStartInput,
     orbit_turn_id: &str,
 ) -> Result<Option<String>, String> {
+    record_app_server_stage(
+        "turn:start:begin",
+        json!({ "orbitThreadId": &input.thread_id, "orbitTurnId": orbit_turn_id, "mode": &input.mode, "providerId": &input.provider_id, "model": &input.model }),
+    );
     let _status = ensure_persistent_app_server(app, &input.provider_id)?;
     let app_thread_id = cached_or_start_app_thread(input)?;
     let sandbox_policy = if input.mode == "plan" {
@@ -667,6 +726,10 @@ fn persistent_start_turn(
         guard.app_thread_id = Some(app_thread_id.clone());
         guard.app_turn_id = None;
     }
+    record_app_server_stage(
+        "turn/start:requesting",
+        json!({ "orbitThreadId": &input.thread_id, "orbitTurnId": orbit_turn_id, "appThreadId": &app_thread_id, "mode": &input.mode }),
+    );
     let response = persistent_app_server_request_wait(
         "turn/start",
         json!({
@@ -693,6 +756,10 @@ fn persistent_start_turn(
                 context.app_turn_id = Some(app_turn_id.clone());
             }
         }
+        record_app_server_stage(
+            "turn/start:ready",
+            json!({ "orbitThreadId": &input.thread_id, "orbitTurnId": orbit_turn_id, "appThreadId": &app_thread_id, "appTurnId": &app_turn_id }),
+        );
         emit_codex_turn(
             app,
             &CodexTurn {
@@ -711,6 +778,10 @@ fn persistent_start_turn(
                 context.app_turn_id = Some(orbit_turn_id.to_string());
             }
         }
+        record_app_server_stage(
+            "turn/start:no-app-turn-id",
+            json!({ "orbitThreadId": &input.thread_id, "orbitTurnId": orbit_turn_id, "appThreadId": &app_thread_id }),
+        );
         Ok(None)
     }
 }

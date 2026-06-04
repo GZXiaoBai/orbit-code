@@ -301,6 +301,9 @@ fn clear_active_app_server_after_failure_for_connection(
         guard.orbit_to_app_thread.clear();
         guard.app_to_orbit_thread.clear();
         guard.active_context = None;
+        guard.last_stage = Some("failure-cleanup".to_string());
+        guard.last_stage_at = Some(now_iso());
+        guard.last_stage_metadata = Some(json!({ "message": message }));
         if let Some(operation) = guard.active_operation.as_mut() {
             operation.status = "failed".to_string();
             operation.final_state = Some("failed".to_string());
@@ -376,6 +379,9 @@ fn persistent_app_server_request(
             clear_active_app_server_after_failure(&message, true);
             return Err(message);
         }
+        guard.last_stage = Some(format!("request:{method}:sent"));
+        guard.last_stage_at = Some(now_iso());
+        guard.last_stage_metadata = Some(json!({ "requestId": request_id, "method": method }));
         (request_id, raw)
     };
     if raw.1.is_empty() {
@@ -390,17 +396,41 @@ fn wait_for_persistent_response(
     operation: &str,
     timeout: Duration,
 ) -> Result<Value, String> {
+    record_app_server_stage(
+        &format!("request:{operation}:waiting"),
+        json!({ "requestId": request.id, "method": operation, "timeoutMs": timeout.as_millis() }),
+    );
     match request.rx.recv_timeout(timeout) {
-        Ok(result) => result,
+        Ok(result) => {
+            match &result {
+                Ok(_) => record_app_server_stage(
+                    &format!("response:{operation}:received"),
+                    json!({ "requestId": request.id, "method": operation }),
+                ),
+                Err(error) => record_app_server_stage(
+                    &format!("response:{operation}:error"),
+                    json!({ "requestId": request.id, "method": operation, "error": error }),
+                ),
+            }
+            result
+        }
         Err(mpsc::RecvTimeoutError::Timeout) => {
             remove_pending_app_server_response(request.id);
             let message = format!("Timed out waiting for Codex app-server {operation} response");
+            record_app_server_stage(
+                &format!("response:{operation}:timeout"),
+                json!({ "requestId": request.id, "method": operation, "timeoutMs": timeout.as_millis() }),
+            );
             clear_active_app_server_after_failure(&message, true);
             Err(message)
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             remove_pending_app_server_response(request.id);
             let message = format!("Codex app-server {operation} response channel disconnected");
+            record_app_server_stage(
+                &format!("response:{operation}:disconnected"),
+                json!({ "requestId": request.id, "method": operation }),
+            );
             clear_active_app_server_after_failure(&message, true);
             Err(message)
         }
@@ -544,8 +574,8 @@ fn begin_runtime_operation(
             connection_id: guard.connection_id.clone(),
             kind: kind.to_string(),
             status: "running".to_string(),
-            thread_id,
-            turn_id,
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
             started_at,
             deadline_at,
             last_event_at: None,
@@ -554,6 +584,10 @@ fn begin_runtime_operation(
             error: None,
         });
     }
+    record_app_server_stage(
+        &format!("operation:{kind}:running"),
+        json!({ "threadId": thread_id, "turnId": turn_id }),
+    );
 }
 
 fn patch_runtime_operation_status(
@@ -612,6 +646,9 @@ fn cleanup_active_app_server() {
         }
         guard.sequence = 0;
         guard.last_event_at = Some(now_iso());
+        guard.last_stage = Some("cleanup".to_string());
+        guard.last_stage_at = Some(now_iso());
+        guard.last_stage_metadata = Some(json!({ "reason": "cleanup_active_app_server" }));
         child_to_kill = guard.child.take();
     }
     for (_, tx) in pending_responses {

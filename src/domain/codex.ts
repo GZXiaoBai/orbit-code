@@ -255,6 +255,9 @@ export interface CodexRuntimeDiagnostics {
   activeOperation?: RuntimeOperation;
   lastEventAt?: string;
   staleEventCount?: number;
+  lastStage?: string;
+  lastStageAt?: string;
+  lastStageMetadata?: unknown;
   lastError?: string;
 }
 

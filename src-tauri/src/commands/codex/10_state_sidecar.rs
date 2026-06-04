@@ -82,6 +82,9 @@ struct ActiveAppServerState {
     sequence: u64,
     last_event_at: Option<String>,
     stale_event_count: u64,
+    last_stage: Option<String>,
+    last_stage_at: Option<String>,
+    last_stage_metadata: Option<Value>,
 }
 
 static CODEX_STATE: OnceLock<Mutex<CodexSidecarState>> = OnceLock::new();
@@ -134,6 +137,9 @@ fn active_app_server() -> &'static Mutex<ActiveAppServerState> {
             sequence: 0,
             last_event_at: None,
             stale_event_count: 0,
+            last_stage: None,
+            last_stage_at: None,
+            last_stage_metadata: None,
         })
     })
 }
@@ -158,6 +164,50 @@ fn mark_runtime_event_sent() {
         guard.last_event_at = Some(at.clone());
         if let Some(operation) = guard.active_operation.as_mut() {
             operation.last_event_at = Some(at);
+        }
+    }
+}
+
+fn runtime_diagnostics_path() -> Option<PathBuf> {
+    env::var_os("ORBIT_APP_DATA_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|path| path.join("orbit_codex_runtime_diagnostics.json"))
+}
+
+fn record_app_server_stage(stage: &str, metadata: Value) {
+    let at = now_iso();
+    let snapshot = active_app_server()
+        .lock()
+        .ok()
+        .map(|mut guard| {
+            guard.last_stage = Some(stage.to_string());
+            guard.last_stage_at = Some(at.clone());
+            guard.last_stage_metadata = Some(metadata.clone());
+            json!({
+                "stage": stage,
+                "stageAt": at,
+                "metadata": metadata,
+                "connectionId": guard.connection_id,
+                "providerId": guard.provider_id,
+                "appThreadId": guard.app_thread_id,
+                "appTurnId": guard.app_turn_id,
+                "pendingResponseCount": guard.pending_responses.len(),
+                "pendingRequestCount": guard.pending_requests.len(),
+                "activeOperation": guard.active_operation,
+                "lastEventAt": guard.last_event_at,
+                "staleEventCount": guard.stale_event_count
+            })
+        });
+    let Some(snapshot) = snapshot else {
+        return;
+    };
+    if let Some(path) = runtime_diagnostics_path() {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(body) = serde_json::to_vec_pretty(&snapshot) {
+            let _ = fs::write(path, body);
         }
     }
 }

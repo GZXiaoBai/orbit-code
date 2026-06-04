@@ -512,6 +512,20 @@ mod tests {
         );
         assert_eq!(status.last_exit_code, Some(42));
 
+        record_app_server_stage(
+            "test:diagnostics-stage",
+            json!({ "providerId": "deepseek", "requestId": 42 }),
+        );
+        let diagnostics = codex_runtime_diagnostics();
+        assert_eq!(
+            diagnostics.last_stage.as_deref(),
+            Some("test:diagnostics-stage")
+        );
+        assert_eq!(
+            diagnostics.last_stage_metadata,
+            Some(json!({ "providerId": "deepseek", "requestId": 42 }))
+        );
+
         if let Ok(mut guard) = state().lock() {
             guard.bridge_base_url = None;
             guard.codex_home = None;

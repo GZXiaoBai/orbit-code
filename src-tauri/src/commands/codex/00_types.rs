@@ -200,5 +200,8 @@ pub struct CodexRuntimeDiagnostics {
     pub active_operation: Option<RuntimeOperationSnapshot>,
     pub last_event_at: Option<String>,
     pub stale_event_count: Option<u64>,
+    pub last_stage: Option<String>,
+    pub last_stage_at: Option<String>,
+    pub last_stage_metadata: Option<Value>,
     pub last_error: Option<String>,
 }
