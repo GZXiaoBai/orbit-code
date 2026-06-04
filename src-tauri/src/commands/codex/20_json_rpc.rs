@@ -301,9 +301,6 @@ fn clear_active_app_server_after_failure_for_connection(
         guard.orbit_to_app_thread.clear();
         guard.app_to_orbit_thread.clear();
         guard.active_context = None;
-        guard.last_stage = Some("failure-cleanup".to_string());
-        guard.last_stage_at = Some(now_iso());
-        guard.last_stage_metadata = Some(json!({ "message": message }));
         if let Some(operation) = guard.active_operation.as_mut() {
             operation.status = "failed".to_string();
             operation.final_state = Some("failed".to_string());
@@ -338,6 +335,7 @@ fn clear_active_app_server_after_failure_for_connection(
             guard.last_stderr_tail.as_deref(),
         ));
     }
+    record_app_server_stage("failure-cleanup", json!({ "message": message }));
 }
 
 fn remove_pending_app_server_response(request_id: u64) {
@@ -379,15 +377,16 @@ fn persistent_app_server_request(
             clear_active_app_server_after_failure(&message, true);
             return Err(message);
         }
-        guard.last_stage = Some(format!("request:{method}:sent"));
-        guard.last_stage_at = Some(now_iso());
-        guard.last_stage_metadata = Some(json!({ "requestId": request_id, "method": method }));
         (request_id, raw)
     };
     if raw.1.is_empty() {
         remove_pending_app_server_response(raw.0);
         return Err("Failed to encode Codex app-server request".to_string());
     }
+    record_app_server_stage(
+        &format!("request:{method}:sent"),
+        json!({ "requestId": raw.0, "method": method }),
+    );
     Ok(PersistentAppServerRequest { id: raw.0, rx })
 }
 
@@ -595,6 +594,7 @@ fn patch_runtime_operation_status(
     final_state: Option<&str>,
     error: Option<String>,
 ) {
+    let mut metadata = None;
     if let Ok(mut guard) = active_app_server().lock() {
         if let Some(operation) = guard.active_operation.as_mut() {
             operation.status = status.to_string();
@@ -606,7 +606,16 @@ fn patch_runtime_operation_status(
                 operation.cancelled
             };
             operation.error = error;
+            metadata = Some(json!({
+                "operationId": &operation.id,
+                "kind": &operation.kind,
+                "status": &operation.status,
+                "finalState": &operation.final_state,
+            }));
         }
+    }
+    if let Some(metadata) = metadata {
+        record_app_server_stage(&format!("operation:{status}"), metadata);
     }
 }
 
@@ -646,11 +655,9 @@ fn cleanup_active_app_server() {
         }
         guard.sequence = 0;
         guard.last_event_at = Some(now_iso());
-        guard.last_stage = Some("cleanup".to_string());
-        guard.last_stage_at = Some(now_iso());
-        guard.last_stage_metadata = Some(json!({ "reason": "cleanup_active_app_server" }));
         child_to_kill = guard.child.take();
     }
+    record_app_server_stage("cleanup", json!({ "reason": "cleanup_active_app_server" }));
     for (_, tx) in pending_responses {
         let _ = tx.send(Err("Codex app-server stopped".to_string()));
     }

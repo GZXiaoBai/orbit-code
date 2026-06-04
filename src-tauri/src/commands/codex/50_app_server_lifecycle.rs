@@ -655,6 +655,10 @@ fn cached_or_start_app_thread(input: &CodexTurnStartInput) -> Result<String, Str
         json!("workspace-write")
     };
     let approval_policy = codex_app_server_approval_policy(&input.mode);
+    record_app_server_stage(
+        "thread/start:requesting",
+        json!({ "orbitThreadId": &input.thread_id, "model": &input.model, "workspacePath": &input.workspace_path }),
+    );
     let response = persistent_app_server_request_wait(
         "thread/start",
         json!({
@@ -701,6 +705,10 @@ fn persistent_start_turn(
         json!({ "orbitThreadId": &input.thread_id, "orbitTurnId": orbit_turn_id, "mode": &input.mode, "providerId": &input.provider_id, "model": &input.model }),
     );
     let _status = ensure_persistent_app_server(app, &input.provider_id)?;
+    record_app_server_stage(
+        "turn/start:app-server-ready",
+        json!({ "orbitThreadId": &input.thread_id, "orbitTurnId": orbit_turn_id, "providerId": &input.provider_id }),
+    );
     let app_thread_id = cached_or_start_app_thread(input)?;
     let sandbox_policy = if input.mode == "plan" {
         json!({ "type": "readOnly", "networkAccess": false })
