@@ -522,6 +522,15 @@ fn handle_app_server_request(
             },
         );
     }
+    record_app_server_stage(
+        "server-request:pending",
+        json!({
+            "requestId": request_id,
+            "method": method,
+            "actionId": action_id,
+            "kind": kind
+        }),
+    );
     let item = CodexItem {
         id: action_id,
         thread_id: context.orbit_thread_id.clone(),

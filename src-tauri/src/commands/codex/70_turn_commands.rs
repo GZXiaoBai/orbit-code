@@ -742,16 +742,48 @@ pub fn codex_approval_submit(
     if action_id.trim().is_empty() {
         return Err("actionId is required to resolve a Codex approval".to_string());
     }
+    record_app_server_stage(
+        "approval-submit:begin",
+        json!({ "actionId": action_id, "approved": approved, "hasAnswer": answer.is_some() }),
+    );
     let pending = {
         let mut guard = active_app_server().lock().map_err(|e| e.to_string())?;
         guard.pending_requests.remove(&action_id)
     }
-    .ok_or_else(|| format!("No active Codex app-server approval request for {action_id}"))?;
+    .ok_or_else(|| {
+        record_app_server_stage(
+            "approval-submit:missing-request",
+            json!({ "actionId": action_id, "approved": approved }),
+        );
+        format!("No active Codex app-server approval request for {action_id}")
+    })?;
     let result = app_server_response_payload_for_action(&pending, approved, answer.clone());
-    write_active_app_server_payload(&json!({
+    let response_payload = json!({
         "id": pending.request_id,
         "result": result
-    }))?;
+    });
+    if let Err(error) = write_active_app_server_payload(&response_payload) {
+        record_app_server_stage(
+            "approval-submit:write-error",
+            json!({
+                "actionId": pending.action_id,
+                "requestId": pending.request_id,
+                "method": pending.method,
+                "approved": approved,
+                "error": error
+            }),
+        );
+        return Err(error);
+    }
+    record_app_server_stage(
+        "approval-submit:sent",
+        json!({
+            "actionId": pending.action_id,
+            "requestId": pending.request_id,
+            "method": pending.method,
+            "approved": approved
+        }),
+    );
     let item = CodexItem {
         id: pending.action_id,
         thread_id: pending.orbit_thread_id,

@@ -529,11 +529,11 @@ async function clickApprovalResolution(session) {
   try {
     const element = await session.findElement(selector, 5000);
     await session.clickElement(element, 5000);
-    return;
+    return { submitted: true, source: "webdriver-element-click", denied: DENY_APPROVAL };
   } catch {
     // Fall back to DOM script for WebDriver implementations that do not expose element click reliably.
   }
-  await session.execute(`
+  const result = await session.execute(`
     const dialog = document.querySelector(".approval-dialog");
     const button = [...dialog.querySelectorAll("button")]
       .find((candidate) => ${DENY_APPROVAL}
@@ -541,8 +541,9 @@ async function clickApprovalResolution(session) {
         : /批准|Approve/i.test(candidate.textContent || ""));
     if (!button) throw new Error("Approval resolution button not found.");
     window.setTimeout(() => button.click(), 0);
-    return true;
+    return { submitted: true, source: "dom-click", denied: ${DENY_APPROVAL}, text: button.textContent || "" };
   `);
+  return result?.value || { submitted: true, source: "dom-click", denied: DENY_APPROVAL };
 }
 
 function inspectApprovedEvidenceText(text) {
@@ -569,13 +570,11 @@ async function waitForApprovedEvidence(session) {
         const hasEdit = edit.includes(${JSON.stringify(SMOKE_FILE)}) || text.includes(${JSON.stringify(SMOKE_FILE)});
         const hasUsage = /Token|tokens|usage|使用量|prompt=|completion=|total=/i.test(text);
         const hasFinalSummary = /final summary|summary|总结|完成|completed|created|updated|wrote|写入|已完成/i.test(text);
-        return hasTerminal && hasEdit && hasUsage && hasFinalSummary
-          ? { text: text.slice(-2400), terminal, edit, hasTerminal, hasEdit, hasUsage, hasFinalSummary, source: "execute" }
-          : "";
+        return { text: text.slice(-2400), terminal, edit, hasTerminal, hasEdit, hasUsage, hasFinalSummary, source: "execute" };
       `);
       lastValue = result?.value;
       lastError = null;
-      if (lastValue) return lastValue;
+      if (lastValue?.hasTerminal && lastValue?.hasEdit && lastValue?.hasUsage && lastValue?.hasFinalSummary) return lastValue;
     } catch (error) {
       lastError = error;
       try {
@@ -630,7 +629,8 @@ async function runLiveBuild(session, criteria) {
   }
   criteria.push(criterion("approval-request", "Build produces a real approval request.", "verified", "Approval overlay appeared in the packaged desktop window."));
 
-  await clickApprovalResolution(session);
+  const approvalSubmit = await clickApprovalResolution(session);
+  criteria.push(criterion("approval-submitted", "Build approval resolution is submitted from the packaged window.", "verified", "The packaged window accepted the approval button action.", approvalSubmit));
 
   if (DENY_APPROVAL) {
     await waitForTruthy(session, `

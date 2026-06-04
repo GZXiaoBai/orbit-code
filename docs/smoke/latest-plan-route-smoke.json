@@ -1,10 +1,10 @@
 {
-  "id": "plan-route-smoke-2026-06-04T08-39-06-462Z",
+  "id": "plan-route-smoke-2026-06-04T10-22-24-803Z",
   "runtime": "codex-sidecar.v1",
   "provider": "deepseek",
   "scope": "Focused workbench smoke for ordinary Plan/chat submissions. It verifies the desktop invoke route sends direct-deepseek-plan to codex_turn_start and does not preflight or restart Codex app-server after submit.",
-  "startedAt": "2026-06-04T08:39:00.705Z",
-  "completedAt": "2026-06-04T08:39:06.462Z",
+  "startedAt": "2026-06-04T10:22:16.643Z",
+  "completedAt": "2026-06-04T10:22:24.803Z",
   "result": "verified",
   "acceptanceCriteria": [
     {
@@ -47,7 +47,7 @@
       "desktop Plan submission uses direct DeepSeek route without app-server preflight"
     ],
     "status": 0,
-    "stdoutTail": "\nRunning 1 test using 1 worker\n\n  ✓  1 e2e/run-controls.spec.ts:447:3 › Orbit Code — Run Controls › desktop Plan submission uses direct DeepSeek route without app-server preflight (2.3s)\n\n  1 passed (4.8s)\n",
-    "stderrTail": "\u001b[2m[WebServer] \u001b[22m(node:81661) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n\u001b[2m[WebServer] \u001b[22m(Use `node --trace-warnings ...` to show where the warning was created)\n(node:81672) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n(node:81672) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n"
+    "stdoutTail": "\nRunning 1 test using 1 worker\n\n  ✓  1 e2e/run-controls.spec.ts:447:3 › Orbit Code — Run Controls › desktop Plan submission uses direct DeepSeek route without app-server preflight (2.7s)\n\n  1 passed (6.1s)\n",
+    "stderrTail": "\u001b[2m[WebServer] \u001b[22m(node:52531) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n\u001b[2m[WebServer] \u001b[22m(Use `node --trace-warnings ...` to show where the warning was created)\n(node:52637) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n(node:52637) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n"
   }
 }
