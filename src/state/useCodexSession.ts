@@ -527,6 +527,10 @@ export function useCodexSession() {
   }, []);
 
   const patchOperation = useCallback((operationId: string, patch: Partial<RuntimeOperation>) => {
+    const currentRef = activeOperationRef.current;
+    if (currentRef?.id === operationId) {
+      activeOperationRef.current = mergeRuntimeOperationPatch(currentRef, patch);
+    }
     setActiveOperation((current) => {
       if (!current || current.id !== operationId) return current;
       const next = mergeRuntimeOperationPatch(current, patch);
