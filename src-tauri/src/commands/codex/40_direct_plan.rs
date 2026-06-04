@@ -1010,6 +1010,7 @@ pub fn codex_runtime_diagnostics() -> CodexRuntimeDiagnostics {
         last_stage,
         last_stage_at,
         last_stage_metadata,
+        stage_history,
     ) = active_app_server()
         .lock()
         .map(|guard| {
@@ -1022,9 +1023,10 @@ pub fn codex_runtime_diagnostics() -> CodexRuntimeDiagnostics {
                 guard.last_stage.clone(),
                 guard.last_stage_at.clone(),
                 guard.last_stage_metadata.clone(),
+                guard.stage_history.clone(),
             )
         })
-        .unwrap_or((0, 0, None, None, 0, None, None, None));
+        .unwrap_or((0, 0, None, None, 0, None, None, None, Vec::new()));
     let status = codex_sidecar_status();
     let sidecar_info = codex_sidecar_version_info();
     CodexRuntimeDiagnostics {
@@ -1040,6 +1042,7 @@ pub fn codex_runtime_diagnostics() -> CodexRuntimeDiagnostics {
         last_stage,
         last_stage_at,
         last_stage_metadata,
+        stage_history,
         last_error: status.last_error,
     }
 }

@@ -258,6 +258,7 @@ export interface CodexRuntimeDiagnostics {
   lastStage?: string;
   lastStageAt?: string;
   lastStageMetadata?: unknown;
+  stageHistory?: unknown[];
   lastError?: string;
 }
 

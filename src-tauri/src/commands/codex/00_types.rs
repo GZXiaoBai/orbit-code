@@ -203,5 +203,6 @@ pub struct CodexRuntimeDiagnostics {
     pub last_stage: Option<String>,
     pub last_stage_at: Option<String>,
     pub last_stage_metadata: Option<Value>,
+    pub stage_history: Vec<Value>,
     pub last_error: Option<String>,
 }

@@ -85,6 +85,7 @@ struct ActiveAppServerState {
     last_stage: Option<String>,
     last_stage_at: Option<String>,
     last_stage_metadata: Option<Value>,
+    stage_history: Vec<Value>,
 }
 
 static CODEX_STATE: OnceLock<Mutex<CodexSidecarState>> = OnceLock::new();
@@ -140,6 +141,7 @@ fn active_app_server() -> &'static Mutex<ActiveAppServerState> {
             last_stage: None,
             last_stage_at: None,
             last_stage_metadata: None,
+            stage_history: Vec::new(),
         })
     })
 }
@@ -181,6 +183,16 @@ fn record_app_server_stage(stage: &str, metadata: Value) {
         .lock()
         .ok()
         .map(|mut guard| {
+            let stage_entry = json!({
+                "stage": stage,
+                "stageAt": at,
+                "metadata": metadata.clone()
+            });
+            guard.stage_history.push(stage_entry);
+            if guard.stage_history.len() > 40 {
+                let overflow = guard.stage_history.len() - 40;
+                guard.stage_history.drain(0..overflow);
+            }
             guard.last_stage = Some(stage.to_string());
             guard.last_stage_at = Some(at.clone());
             guard.last_stage_metadata = Some(metadata.clone());
@@ -196,7 +208,8 @@ fn record_app_server_stage(stage: &str, metadata: Value) {
                 "pendingRequestCount": guard.pending_requests.len(),
                 "activeOperation": guard.active_operation,
                 "lastEventAt": guard.last_event_at,
-                "staleEventCount": guard.stale_event_count
+                "staleEventCount": guard.stale_event_count,
+                "stageHistory": guard.stage_history.clone()
             })
         });
     let Some(snapshot) = snapshot else {

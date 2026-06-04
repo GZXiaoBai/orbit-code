@@ -525,6 +525,9 @@ mod tests {
             diagnostics.last_stage_metadata,
             Some(json!({ "providerId": "deepseek", "requestId": 42 }))
         );
+        assert!(diagnostics.stage_history.iter().any(|entry| {
+            entry.get("stage").and_then(Value::as_str) == Some("test:diagnostics-stage")
+        }));
 
         if let Ok(mut guard) = state().lock() {
             guard.bridge_base_url = None;
