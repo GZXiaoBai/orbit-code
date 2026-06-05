@@ -84,6 +84,17 @@ function usageScore(record: Record<string, unknown>): number {
   ].filter((key) => typeof record[key] === "number" && Number.isFinite(record[key])).length;
 }
 
+function usageTotalValue(record: Record<string, unknown>): number {
+  return numberField(record, [...USAGE_TOTAL_KEYS], numberField(record, [...USAGE_INPUT_KEYS]) + numberField(record, [...USAGE_OUTPUT_KEYS]));
+}
+
+function collectNestedUsageRecords(value: unknown, output: Record<string, unknown>[], depth = 0) {
+  if (depth > 5 || !value || typeof value !== "object" || Array.isArray(value)) return;
+  const record = value as Record<string, unknown>;
+  if (usageScore(record) > 0) output.push(record);
+  Object.values(record).forEach((nested) => collectNestedUsageRecords(nested, output, depth + 1));
+}
+
 function usageRecordFromContainers(record: Record<string, unknown>): Record<string, unknown> {
   const info = asRecord(record.info);
   const candidates = [
@@ -96,6 +107,8 @@ function usageRecordFromContainers(record: Record<string, unknown>): Record<stri
     asRecord(record.token_usage),
     asRecord(record.usageSnapshot),
     asRecord(record.usage_snapshot),
+    asRecord(record.lastTokenUsage),
+    asRecord(record.last_token_usage),
     asRecord(info.totalTokenUsage),
     asRecord(info.total_token_usage),
     asRecord(info.totalUsage),
@@ -103,11 +116,14 @@ function usageRecordFromContainers(record: Record<string, unknown>): Record<stri
     asRecord(info.tokenUsage),
     asRecord(info.token_usage),
     asRecord(info.usage),
+    asRecord(info.lastTokenUsage),
+    asRecord(info.last_token_usage),
     record,
   ];
+  collectNestedUsageRecords(record, candidates);
   return candidates
     .filter((candidate) => Object.keys(candidate).length > 0)
-    .sort((a, b) => usageScore(b) - usageScore(a))[0] || {};
+    .sort((a, b) => usageScore(b) - usageScore(a) || usageTotalValue(b) - usageTotalValue(a))[0] || {};
 }
 
 function itemDate(value: string): Date {

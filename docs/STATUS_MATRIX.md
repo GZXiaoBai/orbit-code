@@ -8,7 +8,7 @@
 
 | 命令 | 状态 | 说明 |
 | --- | --- | --- |
-| `npm test -- --run` | `verified` | 2026-06-05 通过，47 files / 220 tests；新增覆盖 Plan follow-up 线程上下文、accepted Plan Build prompt、Build idle auto-recover、final summary 解锁、terminal operation 防降级、nested app-server usage、session persistence debounce。 |
+| `npm test -- --run` | `verified` | 2026-06-05 通过，47 files / 221 tests；新增覆盖 Plan follow-up 线程上下文、accepted Plan Build prompt、Build idle auto-recover、final summary 解锁、terminal operation 防降级、nested app-server usage、session persistence debounce、unknown-wrapper app-server usage。 |
 | `npm run build` | `verified` | 2026-06-05 通过，仅保留既有 Vite chunk size / dynamic import warning。当前前端以 Codex sidecar projection 驱动 Thread、Review Dock、Action overlay 和 runtime settings；Plan/普通聊天 route 为 `direct-deepseek-plan`，Build route 为 `codex-app-server-build`。 |
 | `cargo test --manifest-path src-tauri/Cargo.toml` | `verified` | 2026-06-05 通过，78 lib tests + AST/code graph/embedding integration tests；包含 Codex JSON-RPC、Responses bridge、direct Plan、app-server cleanup/recover、workspace patch stale-write 防护和 provider/vault/parser 回归。 |
 | `npm run test:e2e` | `verified` | 2026-06-05 通过，46 passed；Playwright fixture 已迁到 Codex thread/turn/item，并覆盖桌面 Plan direct route、Settings recover input state、Build fixture approval/terminal/file edit/usage、pending approval/question/patch reload recovery、deny path 和 provider gating。 |

@@ -377,4 +377,33 @@ describe("Codex item projection", () => {
       totalTokens: 51,
     });
   });
+
+  it("finds app-server usage records inside unknown metadata wrappers", () => {
+    const projection = buildCodexProjection({
+      status: "ready",
+      thread: null,
+      activeTurn: null,
+      items: [
+        item({
+          id: "wrapped-app-server-usage",
+          kind: "usage",
+          title: "Token usage",
+          text: "Codex app-server usage",
+          metadata: {
+            params: {
+              snapshot: {
+                total_token_usage: { input_tokens: 70, output_tokens: 22, total_tokens: 92 },
+              },
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(projection.inspectorModel.usage).toEqual({
+      inputTokens: 70,
+      outputTokens: 22,
+      totalTokens: 92,
+    });
+  });
 });

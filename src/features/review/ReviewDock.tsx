@@ -78,11 +78,13 @@ function ActionItemCard({ copy, item }: { copy: AppCopy; item: CodexInspectableI
 
 function UsageStrip({ copy, workspace }: { copy: AppCopy; workspace: WorkspaceState }) {
   const usage = workspace.codexInspectorModel.usage;
-  if (usage.totalTokens <= 0) return null;
+  const hasUsageEvent = workspace.codexInspectorModel.usageItems.length > 0;
+  if (usage.totalTokens <= 0 && !hasUsageEvent) return null;
+  const pendingLabel = copy.language === "中" ? "已收到" : "observed";
   return (
     <div className="codex-usage-strip" data-codex-usage-total={usage.totalTokens}>
       <span>{copy.language === "中" ? "Token 使用量" : "Token usage"}</span>
-      <strong>{usage.totalTokens}</strong>
+      <strong>{usage.totalTokens > 0 ? usage.totalTokens : pendingLabel}</strong>
       <small>in {usage.inputTokens} / out {usage.outputTokens}</small>
     </div>
   );
