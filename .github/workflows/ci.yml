@@ -183,7 +183,14 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Build Tauri
-        run: npx tauri build
+        timeout-minutes: 25
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            npx tauri build --bundles deb
+          else
+            npx tauri build
+          fi
+        shell: bash
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
@@ -198,4 +205,4 @@ jobs:
         if: runner.os == 'Linux'
         with:
           name: orbit-code-linux
-          path: src-tauri/target/release/bundle/appimage/*.AppImage
+          path: src-tauri/target/release/bundle/deb/*.deb

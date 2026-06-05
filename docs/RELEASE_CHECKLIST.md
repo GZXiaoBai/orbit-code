@@ -40,8 +40,8 @@ This checklist defines the minimum bar for an Orbit Code local-first Beta. The B
 ## Publishing
 
 - [ ] Confirm app name and bundle name are `Orbit Code`.
-- [ ] Confirm icon assets render on macOS, Windows, and Linux bundles.
+- [ ] Confirm icon assets render on macOS, Windows, and Linux `.deb` bundles.
 - [ ] Confirm README links are valid.
 - [ ] Confirm CI frontend, Rust, E2E, desktop readiness, and three-platform release build jobs pass.
-- [ ] Upload macOS, Windows, and Linux artifacts from CI.
+- [ ] Upload macOS DMG, Windows MSI, and Linux `.deb` artifacts from CI.
 - [ ] Update `docs/STATUS_MATRIX.md`, `docs/NEXT_TASKS.md`, and `docs/smoke/latest-*.json` with the final Beta evidence.
