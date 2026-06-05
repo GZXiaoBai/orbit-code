@@ -151,6 +151,17 @@ function elementKey(element) {
   return element?.["element-6066-11e4-a52e-4f735466cecf"] || element?.ELEMENT;
 }
 
+async function waitForProcessExit(child, timeoutMs = 2000) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
 async function createSession(baseUrl, appPath) {
   const response = await requestJson(baseUrl, "POST", "/session", {
     capabilities: {
@@ -351,6 +362,13 @@ async function runSmoke(criteria) {
   } finally {
     if (session) await session.quit();
     driver.kill("SIGTERM");
+    await waitForProcessExit(driver);
+    if (driver.exitCode === null && driver.signalCode === null) {
+      driver.kill("SIGKILL");
+      await waitForProcessExit(driver, 1000);
+    }
+    driver.stdout.destroy();
+    driver.stderr.destroy();
   }
 }
 
