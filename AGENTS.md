@@ -105,14 +105,15 @@ src-tauri/src/
 
 ## 当前优先级
 
+0. 两周 Beta 推进目标：本地可日常使用，范围固定为 Codex sidecar + DeepSeek Build。不要在 Beta 线恢复旧 runner/tool loop，也不要开放其他 provider 的 Build。
 1. 验证真实 Codex app-server 长 turn：当前 runtime 已使用 persistent reader、pending response routing 和 `Orbit threadId -> Codex threadId` 进程内缓存；下一步重点是用真实 DeepSeek Build 压 approval/question/tool result/interrupt、crash cleanup。
 2. DeepSeek 是唯一 Build provider。其他 OpenRouter、Qwen/DashScope、SiliconFlow、Kimi、Groq、自定义 OpenAI-compatible 先保留 discovery-only 和 blocked reason。
-3. Plan/普通聊天走 `direct-deepseek-plan`，默认不启动 Codex app-server；Build 才走 `codex-app-server-build`。running turn 期间必须阻止重复提交，失败/中断/完成后恢复输入。
+3. Plan/普通聊天走 `direct-deepseek-plan`，默认不启动 Codex app-server；Build 才走 `codex-app-server-build`。running turn 期间必须阻止重复提交，失败/中断/完成后恢复输入。Plan follow-up 会携带同线程最近上下文；只有点击“采纳并进入 Build”的 Plan draft 会作为 accepted Plan 注入 Build prompt。
 4. `npm run smoke:deepseek` 当前是 prepared sidecar + app-server routing contract smoke；`npm run smoke:deepseek:live-app-server` 已验证独立 live driver 的 approval -> terminal/fileEdit -> final summary。translation-only smoke 是 `npm run smoke:deepseek:bridge-unit`，旧直连 harness 是 `npm run smoke:deepseek:legacy`。下一步是把同等证据落到 Rust bridge + 桌面 UI Build 路径。
 5. `npm run smoke:desktop-build` 是 packaged workbench Build smoke。默认只做 readiness；设置 `ORBIT_DESKTOP_BUILD_LIVE=1` 才执行真实 approval -> terminal/fileEdit -> usage/final summary；设置 `ORBIT_DESKTOP_BUILD_DENY=1` 验证拒绝路径。CI 的手动 `desktop-build-live` job 使用 `orbit-live-smoke` environment secret `ORBIT_LIVE_VAULT_BUNDLE_B64`，解包到临时 `ORBIT_APP_DATA_DIR`，设置隔离的 `ORBIT_DESKTOP_BUILD_WORKSPACE`，再在 Ubuntu `xvfb` 下跑 approve/deny 两条 live 路径。
 6. 设置页要作为 Codex runtime control plane：sidecar version/path/sha256、bridge base URL、pid、last error、restart、model discovery、bridge smoke、Build enabled。
 7. Smoke 证据默认只保留 `docs/smoke/latest-*.json`；只有设置 `ORBIT_SMOKE_KEEP_HISTORY=1` 才写 timestamp 历史，且历史 JSON 必须保持 Git ignored。
-8. 跑并维护基线：`npm test -- --run`、`npm run build`、`cargo test --manifest-path src-tauri/Cargo.toml`、`npm run test:e2e`、`npm run smoke:deepseek`、`npm run tauri build -- --debug`。
+8. 跑并维护 Beta 基线：`npm test -- --run`、`npm run build`、`cargo test --manifest-path src-tauri/Cargo.toml`、`npm run test:e2e`、`npm run smoke:plan`、`npm run smoke:deepseek`、`npm run tauri build -- --debug --no-bundle`。
 
 ## 接手提示
 

@@ -670,6 +670,20 @@
   background: color-mix(in srgb, var(--surface-2) 42%, transparent);
 }
 
+.accepted-build-plan-status {
+  width: var(--conversation-column);
+  margin: calc(-1 * var(--space-3)) auto var(--space-5);
+  padding: var(--space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
+
+.accepted-build-plan-status strong {
+  color: var(--text-primary);
+  font-weight: 680;
+}
+
 .agent-collaboration-timeline {
   display: grid;
   gap: var(--space-5);

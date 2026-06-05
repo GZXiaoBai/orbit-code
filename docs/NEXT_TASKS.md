@@ -1,23 +1,39 @@
 # Next Tasks
 
-## P0
+当前推进目标是两周内达到本地可日常使用的 Beta。Beta 范围固定为 Codex sidecar + DeepSeek Build；其他 provider 继续 discovery-only，替代 Agent 只允许隔离 spike。
 
-1. Turn the packaged-window smoke from launch coverage into full live Plan coverage. `npm run smoke:desktop-plan` now starts the real Tauri binary through `tauri-driver` on Linux/Windows and has an opt-in `ORBIT_DESKTOP_PLAN_LIVE=1` path for sending “你好”; the remaining gap is running that live mode in a credentialed desktop environment.
-2. Finish the credentialed `desktop-build-live` workflow. `smoke:live-vault:export` now writes a minimized encrypted vault DB that fits GitHub environment secret limits, `ORBIT_LIVE_VAULT_BUNDLE_B64` is set on `orbit-live-smoke`, and run `26939495042` proved vault bootstrap, no-bundle debug binary build, DeepSeek readiness, packaged Plan window smoke, packaged Build readiness, workspace render, non-secret `codex-sidecar.v1` DeepSeek `deepseek-v4-flash` SQLite session seed, and isolated workspace load. Rust, frontend, E2E, and desktop readiness were green in the same run. The failure is no longer “未配置模型”, form submission, or preflight: run `26944685880` reached the approval overlay after preserving active operation during sidecar startup and fixing notification lock reentry. The current gap is post-approval: no terminal/file evidence and no smoke workspace file. Runtime diagnostics now keep a non-secret stage history tail under `ORBIT_APP_DATA_DIR`, skip high-volume delta notifications, and the packaged smoke artifact captures 20KB even when WebDriver is unresponsive. Rerun live CI, then promote approved/denied `npm run smoke:desktop-build` reports once approval and tool execution are visible.
-3. Finish app-server request handling verification for question/tool result/interrupt with real provider traffic, not fixture-synthesized items. Current live evidence proves initialize, thread/start, approval request/response, turn completion, terminal output, usage, final assistant summary, and file write.
-4. Extend active Build crash/restart recovery from command-level cleanup tests into packaged UI coverage. Rust now verifies active Build recovery clears pending approval requests/responses and marks the operation cancelled, and Playwright fixture coverage verifies Settings "Recover input state" releases a stuck desktop Plan operation and re-enables submission. The remaining gap is a deterministic packaged sidecar crash harness plus real Build window assertions for the same state transition.
-5. Keep retry/error output stable in live desktop Build: Rust now has stable per-turn app-server error item ids; next verify reconnect warning updates and final error upserts through the packaged UI and extend `smoke:desktop-build` once a deterministic crash harness is available.
-6. Add tests for `useCodexSession` streaming/retry/approval/interrupted/failed/reload recovery states beyond the current duplicate-submit lock and runtime-error coverage. Reload recovery now normalizes running approval/question items back to pending and fails non-interactive running command/terminal/file edit items; foreground interrupt operations, stale sidecar connection events, and recoverRuntime state transitions now have pure routing/state regression coverage. The remaining gap is broader streaming/retry/reload behavior coverage against a real React hook harness or packaged UI.
+## P0 - Day 0 Baseline
 
-## P1
+1. 整理当前修复为稳定提交：Plan follow-up 线程上下文、accepted Plan Build 注入、accepted Plan 持久化、Build final summary 解锁、idle recover、usage projection、localStorage/diagnostics debounce。
+2. 保持当前基线全绿：`npm test -- --run`、`npm run build`、`npm run test:e2e`、`cargo test --manifest-path src-tauri/Cargo.toml`、`npm run smoke:plan`、`npm run smoke:deepseek`。
+3. 更新 smoke evidence：只保留 `docs/smoke/latest-*.json`；需要历史时使用 `ORBIT_SMOKE_KEEP_HISTORY=1`，历史 JSON 必须保持 Git ignored。
 
-1. Keep DeepSeek as the only Build-enabled provider; keep OpenRouter, Qwen/DashScope, SiliconFlow, Kimi, Groq, Together AI, Fireworks AI, Cerebras, NVIDIA NIM, Azure OpenAI, and custom providers discovery-only with explicit blocked reasons.
-2. Expand DeepSeek bridge tests for tool call result loops. Illegal role sanitization, orphan tool output repair, SSE mid-stream error handling, direct Plan provider error-frame extraction, provider-error secret redaction, and frontend direct Plan usage aggregation now have coverage: tool/tool_result/function output items are converted into DeepSeek-safe user messages with Tool result context, provider error frames fail the stream instead of producing a partial success response, unlocked API keys are redacted from provider error text, and nested provider usage metadata is counted in the inspector and workspace Usage snapshot.
-3. Finish Settings as the Codex runtime control plane: sidecar version/path/sha256, bridge base URL, pid, last error, restart result, discovery/smoke/build states.
-4. Add regression coverage for streaming caret, last-thread deletion, and empty-thread state; Markdown rendering, auto-scroll, and first-pass composer/session submit recovery already have focused coverage.
+## P0 - Week 1 Build Runtime
 
-## P2
+1. 重跑 GitHub `desktop-build-live` workflow，要求 approve 和 deny 两条 packaged desktop Build live smoke 都产生 verified artifact。
+2. 如果 live CI 失败，只修 Build runtime 证据链：operation terminal state、appTurnId/threadId scope、usage evidence、multi-approval、sidecar cleanup，不扩大 provider 范围。
+3. 增加 deterministic sidecar crash/restart harness，覆盖 active Build 期间 approval pending、question pending、tool result pending、interrupt、sidecar crash 后 recover。
+4. 把 Build idle auto-recover 作为正式语义：60s 无 runtime progress 且无 pending approval/question 时恢复 composer，不写误导性 Codex error，保留 diagnostics/stage history。
+5. 补 runtime state-machine 单测：late running/status/cancel 不降级 terminal operation；turn completed/final summary 立即解锁；pending action 不触发 idle recover。
 
-1. Turn sidecar preparation into a release-grade pipeline: platform target map, checksum validation, clear build-time error, and no committed large binaries. First-pass cleanup now keeps `src-tauri/binaries/codex-*` ignored and lets Cargo-only tests compile without a prepared sidecar.
-2. Run an isolated OpenCode adapter spike behind `AgentRuntimePort`; do not connect it to production UI until it fills every requirement in `src/runtime/agentRuntimeConformance.ts` with verified evidence.
-3. Revisit the visual system after the Codex loop is stable.
+## P0 - Week 1 Plan/Build Product Loop
+
+1. accepted Plan 是 thread 级状态并持久化在 `codex-sidecar.v1` session 中；旧 session 不迁移，只允许 unsupported 展示和删除。
+2. 只有点击 “采纳并进入 Build” 的 Plan draft 才注入 Build prompt；用户直接导入 YAML 计划仍可用于“开始执行”任务选择，但不标记为 accepted Plan。
+3. Build prompt 固定包含 accepted Plan title/goals/constraints/tasks/filesHint/verification/acceptance，再附用户本次 Build 指令。
+4. Thread header 或 composer 附近显示 “Build 将使用已采纳计划”，切换 thread 后必须准确。
+5. Plan follow-up prompt 保留同线程最近上下文，解决 “开始吧/继续/按这个来” 丢前文；timeline 仍显示用户原始输入。
+
+## P1 - Week 2 Desktop Beta UX
+
+1. 完成 Settings runtime control plane 验收：sidecar version/path/sha256、pid、bridge base URL、last error、restart/recover、latest smoke status、Build gate reason。
+2. 打磨 Action/Review Dock 空态和恢复态：approval deny、question answer、patch conflict、usage strip、terminal output、file preview 均需可读。
+3. 补 first-run/blocked-state 文案：未解锁 vault、未导入 DeepSeek、sidecar missing、Build provider blocked、macOS WebDriver blocked。
+4. 执行 `docs/RELEASE_CHECKLIST.md`，补齐本地 dev、debug no-bundle、三平台 release build、Plan smoke、Build smoke、manual smoke。
+5. 更新 README、AGENTS、STATUS_MATRIX：明确 Beta 支持范围是 DeepSeek Build + Codex sidecar，其他 Agent/provider 是后续 spike。
+
+## P2 - After Beta
+
+1. 逐个验证 OpenAI/OpenRouter/Qwen/SiliconFlow/Kimi/Groq/Zhipu/Together/Fireworks/Cerebras/NVIDIA/Azure/custom Build bridge，再解除 blocked reason。
+2. 将 Codex app-server `generate-ts` / JSON schema 导出固化为 repo fixture，降低 protocol drift 风险。
+3. 做 OpenCode 或 Claude Code 的隔离 adapter spike；在通过 `AgentRuntimePort` conformance 前不得进入生产 Build UI。

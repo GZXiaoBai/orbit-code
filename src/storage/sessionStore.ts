@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { CodexThread } from "../domain/codex";
-import type { CodingPlan, ProviderSmokeRecord } from "../domain/types";
+import type { AcceptedBuildPlan, CodingPlan, ProviderSmokeRecord } from "../domain/types";
 import type { ModelCapability } from "../domain/types";
 import { isTauri } from "../utils/tauri";
 
@@ -29,6 +29,7 @@ export interface CodexSessionState {
     smokeStatus?: Record<string, ProviderSmokeRecord>;
     [key: string]: unknown;
   };
+  acceptedPlansByThreadId?: Record<string, AcceptedBuildPlan | null>;
   activeCodexThread?: CodexThread | null;
   lastActiveAt: string;
 }

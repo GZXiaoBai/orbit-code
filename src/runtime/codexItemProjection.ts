@@ -51,6 +51,65 @@ function numberField(record: Record<string, unknown>, keys: string[], fallback =
   return fallback;
 }
 
+const USAGE_INPUT_KEYS = [
+  "inputTokens",
+  "input_tokens",
+  "promptTokens",
+  "prompt_tokens",
+  "promptTokenCount",
+  "prompt_eval_count",
+] as const;
+
+const USAGE_OUTPUT_KEYS = [
+  "outputTokens",
+  "output_tokens",
+  "completionTokens",
+  "completion_tokens",
+  "candidatesTokenCount",
+  "eval_count",
+] as const;
+
+const USAGE_TOTAL_KEYS = [
+  "totalTokens",
+  "total_tokens",
+  "totalTokenCount",
+  "tokens",
+] as const;
+
+function usageScore(record: Record<string, unknown>): number {
+  return [
+    ...USAGE_INPUT_KEYS,
+    ...USAGE_OUTPUT_KEYS,
+    ...USAGE_TOTAL_KEYS,
+  ].filter((key) => typeof record[key] === "number" && Number.isFinite(record[key])).length;
+}
+
+function usageRecordFromContainers(record: Record<string, unknown>): Record<string, unknown> {
+  const info = asRecord(record.info);
+  const candidates = [
+    asRecord(record.usage),
+    asRecord(record.totalTokenUsage),
+    asRecord(record.total_token_usage),
+    asRecord(record.totalUsage),
+    asRecord(record.total_usage),
+    asRecord(record.tokenUsage),
+    asRecord(record.token_usage),
+    asRecord(record.usageSnapshot),
+    asRecord(record.usage_snapshot),
+    asRecord(info.totalTokenUsage),
+    asRecord(info.total_token_usage),
+    asRecord(info.totalUsage),
+    asRecord(info.total_usage),
+    asRecord(info.tokenUsage),
+    asRecord(info.token_usage),
+    asRecord(info.usage),
+    record,
+  ];
+  return candidates
+    .filter((candidate) => Object.keys(candidate).length > 0)
+    .sort((a, b) => usageScore(b) - usageScore(a))[0] || {};
+}
+
 function itemDate(value: string): Date {
   if (value.startsWith("unix-ms:")) {
     const millis = Number(value.slice("unix-ms:".length));
@@ -254,29 +313,10 @@ export function codexItemsToRunSteps(items: CodexItem[]): RunStep[] {
 
 function usageFromItem(item: CodexItem): CodexUsageSummary {
   const metadata = asRecord(item.metadata);
-  const nestedUsage = asRecord(metadata.usage);
-  const usage = Object.keys(nestedUsage).length > 0 ? nestedUsage : metadata;
-  const inputTokens = numberField(usage, [
-    "inputTokens",
-    "input_tokens",
-    "promptTokens",
-    "prompt_tokens",
-    "promptTokenCount",
-    "prompt_eval_count",
-  ]);
-  const outputTokens = numberField(usage, [
-    "outputTokens",
-    "output_tokens",
-    "completionTokens",
-    "completion_tokens",
-    "candidatesTokenCount",
-    "eval_count",
-  ]);
-  const totalTokens = numberField(usage, [
-    "totalTokens",
-    "total_tokens",
-    "totalTokenCount",
-  ], inputTokens + outputTokens);
+  const usage = usageRecordFromContainers(metadata);
+  const inputTokens = numberField(usage, [...USAGE_INPUT_KEYS]);
+  const outputTokens = numberField(usage, [...USAGE_OUTPUT_KEYS]);
+  const totalTokens = numberField(usage, [...USAGE_TOTAL_KEYS], inputTokens + outputTokens);
   return { inputTokens, outputTokens, totalTokens };
 }
 

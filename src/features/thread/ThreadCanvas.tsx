@@ -120,6 +120,12 @@ export function ThreadCanvas({ copy, workspace, onOpenSettings }: ThreadCanvasPr
 
       <div className="thread-scroll" ref={scrollRef} onScroll={updateScrollFollowState}>
         <PlanSummary copy={copy} importedPlan={workspace.importedPlan} importError={workspace.importError} />
+        {isBuildMode && workspace.acceptedBuildPlan ? (
+          <div className="accepted-build-plan-status" role="status">
+            {copy.language === "中" ? "Build 将使用已采纳计划：" : "Build will use accepted plan: "}
+            <strong>{workspace.acceptedBuildPlan.title}</strong>
+          </div>
+        ) : null}
 
         <CodexThreadTimeline
           copy={copy}

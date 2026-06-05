@@ -197,6 +197,13 @@ export interface CodingPlan {
   references: string[];
 }
 
+export interface AcceptedBuildPlan {
+  plan: CodingPlan;
+  source: "codex-plan-draft";
+  acceptedAt: string;
+  title: string;
+}
+
 export interface ModelProviderCapability {
   text: boolean;
   vision: boolean;

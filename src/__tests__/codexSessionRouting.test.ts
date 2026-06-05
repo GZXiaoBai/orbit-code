@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   appendSingleRuntimeErrorItem,
+  buildPlanPromptWithThreadContext,
   codexActionSubmitFailure,
+  codexItemEventSignalsFinalSummary,
   codexRuntimeRestartFailureResult,
   codexComposerSubmitLocked,
+  codexOperationMatchesTurn,
   codexRuntimeEventBelongsToActiveOperation,
   codexRuntimeEventMatchesOperation,
   codexRuntimeEventBelongsToActiveScope,
@@ -12,6 +15,8 @@ import {
   codexRuntimeModeForTurn,
   codexRuntimeRestartTimeoutMs,
   codexRunningTurnIdleTimeoutMs,
+  codexSessionPersistenceDebounceMs,
+  codexShouldAutoRecoverIdleBuild,
   codexStatusEventShouldCreateTimelineError,
   codexSubmissionRoutingDecision,
   codexTurnStartTimeoutMs,
@@ -56,6 +61,11 @@ describe("Codex session runtime routing", () => {
     expect(codexOperationIdleTimeoutMs("codex-app-server-build")).toBe(codexRunningTurnIdleTimeoutMs());
   });
 
+  it("debounces session persistence so token and delta bursts do not synchronously write every update", () => {
+    expect(codexSessionPersistenceDebounceMs()).toBeGreaterThanOrEqual(100);
+    expect(codexSessionPersistenceDebounceMs()).toBeLessThanOrEqual(500);
+  });
+
   it("does not preflight or restart Codex app-server for desktop Plan submissions", () => {
     const route = codexSubmissionRoutingDecision({
       mode: "plan",
@@ -66,6 +76,37 @@ describe("Codex session runtime routing", () => {
     expect(route.runtimeMode).toBe("direct-deepseek-plan");
     expect(route.echoUserItem).toBe(true);
     expect(route.requiresBuildRuntimePreflight).toBe(false);
+  });
+
+  it("adds recent thread context to direct Plan follow-up prompts", () => {
+    const prompt = buildPlanPromptWithThreadContext({
+      userPrompt: "开始吧",
+      threadId: "thread-1",
+      items: [
+        {
+          id: "assistant-plan",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          kind: "assistant",
+          title: "Assistant",
+          text: "建议分阶段实施：阶段一修复 Plan/Build 联动，阶段二修复 Build 卡死。",
+          status: "completed",
+          createdAt: "2026-06-05T00:00:00.000Z",
+        },
+      ],
+    });
+
+    expect(prompt).toContain("# Recent Orbit thread context");
+    expect(prompt).toContain("阶段一修复 Plan/Build 联动");
+    expect(prompt).toContain("# Current user request\n开始吧");
+  });
+
+  it("leaves first Plan prompts unchanged when no thread context exists", () => {
+    expect(buildPlanPromptWithThreadContext({
+      userPrompt: "制定一个计划",
+      threadId: "thread-1",
+      items: [],
+    })).toBe("制定一个计划");
   });
 
   it("does not preflight Codex app-server before Build submissions", () => {
@@ -297,6 +338,72 @@ describe("Codex session runtime routing", () => {
       payloadTurnId: "app-turn-1",
       payloadThreadId: "thread-1",
       activeOperation: { ...activeOperation, kind: "plan" },
+    })).toBe(false);
+  });
+
+  it("matches Build operations to app-server turns by thread for idle recovery", () => {
+    const activeOperation = {
+      id: "op-current",
+      kind: "build" as const,
+      status: "running" as const,
+      threadId: "thread-1",
+      turnId: "orbit-turn-1",
+      startedAt: "2026-05-31T00:00:00.000Z",
+      deadlineAt: "2026-05-31T00:01:00.000Z",
+    };
+    const turn: CodexTurn = {
+      id: "app-server-turn-1",
+      threadId: "thread-1",
+      mode: "build",
+      status: "running",
+      startedAt: "2026-05-31T00:00:00.000Z",
+    };
+
+    expect(codexOperationMatchesTurn(activeOperation, turn)).toBe(true);
+    expect(codexOperationMatchesTurn({ ...activeOperation, kind: "plan" }, turn)).toBe(false);
+  });
+
+  it("auto-recovers idle Build operations only when no user action is pending", () => {
+    const activeOperation = {
+      id: "op-current",
+      kind: "build" as const,
+      status: "running" as const,
+      threadId: "thread-1",
+      turnId: "app-turn-1",
+      startedAt: "2026-05-31T00:00:00.000Z",
+      deadlineAt: "2026-05-31T00:01:00.000Z",
+    };
+
+    expect(codexShouldAutoRecoverIdleBuild({
+      operation: activeOperation,
+      waitingForUser: false,
+    })).toBe(true);
+    expect(codexShouldAutoRecoverIdleBuild({
+      operation: activeOperation,
+      waitingForUser: true,
+    })).toBe(false);
+    expect(codexShouldAutoRecoverIdleBuild({
+      operation: { ...activeOperation, kind: "plan" },
+      waitingForUser: false,
+    })).toBe(false);
+  });
+
+  it("recognizes final summary item events as Build completion signals", () => {
+    expect(codexItemEventSignalsFinalSummary({
+      type: "complete",
+      itemId: "summary",
+      threadId: "thread-1",
+      turnId: "app-turn-1",
+      kind: "assistant",
+      title: "Codex final summary",
+      status: "completed",
+    })).toBe(true);
+    expect(codexItemEventSignalsFinalSummary({
+      type: "complete",
+      itemId: "usage",
+      kind: "usage",
+      title: "Token usage",
+      status: "completed",
     })).toBe(false);
   });
 

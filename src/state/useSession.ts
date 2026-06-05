@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AdvancedSettings,
+  AcceptedBuildPlan,
   AgentSettings,
   CodingPlan,
   ContextSettings,
@@ -58,6 +59,7 @@ export interface SessionState {
   importedPlan: ImportedPlanState | null;
   importError: ImportErrorState | null;
   providerSettings: ProviderSettings;
+  acceptedPlansByThreadId: Record<string, AcceptedBuildPlan | null>;
   apiKeys: Record<string, string>;
   credentialVaultProviders: string[];
   credentialVaultAutoUnlock: boolean;
@@ -67,6 +69,7 @@ export interface SessionState {
   outputFiles: string[];
   importPlan: (source: string, fileName?: string) => Promise<boolean>;
   restoreImportedPlan: (plan: ImportedPlanState | null) => void;
+  updateAcceptedPlan: (threadId: string, plan: AcceptedBuildPlan | null) => void;
   clearImportedPlan: () => void;
   updateTask: (taskId: string, updates: Partial<PlanTask>) => void;
   addTask: (task: PlanTask) => void;
@@ -148,6 +151,7 @@ export function useSession(): SessionState {
   const [isLoading, setIsLoading] = useState(true);
   const [importedPlan, setImportedPlan] = useState<ImportedPlanState | null>(null);
   const [importError, setImportError] = useState<ImportErrorState | null>(null);
+  const [acceptedPlansByThreadId, setAcceptedPlansByThreadId] = useState<Record<string, AcceptedBuildPlan | null>>({});
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>(() => normalizeProviderSettings(defaultProviderSettings));
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [credentialVaultProviders, setCredentialVaultProviders] = useState<string[]>([]);
@@ -160,6 +164,7 @@ export function useSession(): SessionState {
         const session = await sessionStore.loadSession();
         const storedConfigs = await sessionStore.loadProviderConfigs();
         if (session?.importedPlan) setImportedPlan(session.importedPlan);
+        setAcceptedPlansByThreadId(session?.acceptedPlansByThreadId || {});
         const storedSettings = session?.providerSettings as ProviderSettings | undefined;
         setProviderSettings(normalizeProviderSettings({
           activeProviderId: storedSettings?.activeProviderId || defaultProviderSettings.activeProviderId,
@@ -193,10 +198,11 @@ export function useSession(): SessionState {
     void sessionStore.saveSession({
       schemaVersion: "codex-sidecar.v1",
       importedPlan,
+      acceptedPlansByThreadId,
       providerSettings: providerSettings as any,
       lastActiveAt: new Date().toISOString(),
     });
-  }, [importedPlan, isLoading, providerSettings]);
+  }, [acceptedPlansByThreadId, importedPlan, isLoading, providerSettings]);
 
   const activeSelection = useMemo(() => resolveModelSelection(providerSettings, apiKeys, {
     providerId: providerSettings.activeProviderId,
@@ -225,6 +231,18 @@ export function useSession(): SessionState {
   const restoreImportedPlan = useCallback((plan: ImportedPlanState | null) => {
     setImportedPlan(plan);
     setImportError(null);
+  }, []);
+
+  const updateAcceptedPlan = useCallback((threadId: string, plan: AcceptedBuildPlan | null) => {
+    setAcceptedPlansByThreadId((prev) => {
+      const next = { ...prev };
+      if (plan) {
+        next[threadId] = plan;
+      } else {
+        delete next[threadId];
+      }
+      return next;
+    });
   }, []);
 
   const clearImportedPlan = useCallback(() => {
@@ -300,6 +318,7 @@ export function useSession(): SessionState {
     importedPlan,
     importError,
     providerSettings,
+    acceptedPlansByThreadId,
     apiKeys,
     credentialVaultProviders,
     credentialVaultAutoUnlock,
@@ -309,6 +328,7 @@ export function useSession(): SessionState {
     outputFiles: [],
     importPlan,
     restoreImportedPlan,
+    updateAcceptedPlan,
     clearImportedPlan,
     updateTask,
     addTask,

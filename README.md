@@ -2,7 +2,7 @@
 
 Orbit Code is a local-first, multi-model coding agent workbench built with Tauri, React, TypeScript, and Rust. It is designed for reviewing and approving local coding-agent work instead of blindly handing your filesystem to a model.
 
-The project is active and not yet product-complete. Core desktop, file browsing, provider import, approval, patch, and test flows are being stabilized toward a mature Codex-like local agent experience.
+The project is active and in a two-week Beta stabilization push. The Beta scope is Codex sidecar plus DeepSeek Build: Plan and ordinary chat use the direct provider route, while Build runs through `codex app-server` and Orbit's loopback Responses bridge. Other providers remain discovery-only for Build until they have equivalent bridge and desktop smoke evidence.
 
 ## What It Does
 
@@ -10,7 +10,7 @@ The project is active and not yet product-complete. Core desktop, file browsing,
 - Preview code with a read-only Monaco viewer.
 - Import model providers and only show models returned by the provider API.
 - Store provider API keys in Orbit's encrypted local credential vault instead of the OS Keychain.
-- Run a single coding task through Plan / Build modes.
+- Run a single coding task through Plan / Build modes, with accepted Plan drafts carried into Build.
 - Route commands, questions, patch proposals, and verification runs through Review Dock.
 - Apply file changes through patch review and transactional Rust-side writes.
 - Preserve local-first state for projects, layout, file tree expansion, and run controls.
@@ -76,7 +76,7 @@ Models only appear in the Composer after a provider is imported from Settings. P
 
 Current provider targets include OpenAI, Anthropic, Google Gemini, DeepSeek, OpenRouter, xAI, Mistral, Groq, Qwen/DashScope, Kimi/Moonshot, SiliconFlow, Zhipu/GLM, and Ollama discovery.
 
-Ollama model discovery is intentionally treated as discovery-only for now. Build execution is not exposed as supported until a local chat/streaming relay is implemented.
+DeepSeek is the only Build-enabled provider in the Beta line. Ollama and hosted OpenAI-compatible providers are intentionally discovery-only for Build until each bridge path has verified live desktop evidence.
 
 ## Release
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ActionRequiredEvent } from "../domain/actionRequired";
-import type { CodexItem, CodexRuntimeDiagnostics, CodexRuntimeProjection, CodexRuntimeSettingsModel, CodexRuntimeStatus, CodexSidecarStatus, CodexSidecarVersionInfo, CodexThread, CodexTurn, DesktopBuildSmokeResult, FreezeDiagnosticReport, RuntimeOperation, RuntimeOperationKind, RuntimeRestartResult, RuntimeRoute } from "../domain/codex";
+import type { CodexItem, CodexItemEvent, CodexRuntimeDiagnostics, CodexRuntimeProjection, CodexRuntimeSettingsModel, CodexRuntimeStatus, CodexSidecarStatus, CodexSidecarVersionInfo, CodexThread, CodexTurn, DesktopBuildSmokeResult, FreezeDiagnosticReport, RuntimeOperation, RuntimeOperationKind, RuntimeRestartResult, RuntimeRoute } from "../domain/codex";
 import type { ReasoningEffort, WorkbenchMode } from "../domain/types";
 import { agentRuntimePort } from "../runtime/agentRuntimePort";
 import { applyCodexItemEvent, applyCodexItemEvents } from "../runtime/codexItemEvents";
@@ -14,6 +14,10 @@ const BUILD_TURN_START_TIMEOUT_MS = 25_000;
 const CODEX_RUNTIME_RESTART_TIMEOUT_MS = 25_000;
 const RUNNING_TURN_IDLE_TIMEOUT_MS = 60_000;
 const DIRECT_PLAN_OPERATION_IDLE_TIMEOUT_MS = 180_000;
+const CODEX_SESSION_PERSIST_DEBOUNCE_MS = 250;
+const CODEX_DIAGNOSTICS_REFRESH_DEBOUNCE_MS = 200;
+const PLAN_CONTEXT_MAX_ITEMS = 8;
+const PLAN_CONTEXT_MAX_CHARS = 8_000;
 
 function now() {
   return new Date().toISOString();
@@ -61,6 +65,12 @@ function operationId(kind: RuntimeOperationKind) {
 
 function operationDeadlineFromNow(timeoutMs: number) {
   return new Date(Date.now() + timeoutMs).toISOString();
+}
+
+function truncateForPrompt(value: string, limit: number) {
+  const clean = value.trim();
+  if (clean.length <= limit) return clean;
+  return `${clean.slice(0, Math.max(0, limit - 24)).trimEnd()}\n[truncated]`;
 }
 
 function operationFor(input: {
@@ -194,6 +204,10 @@ export function codexRunningTurnIdleTimeoutMs(): number {
   return RUNNING_TURN_IDLE_TIMEOUT_MS;
 }
 
+export function codexSessionPersistenceDebounceMs(): number {
+  return CODEX_SESSION_PERSIST_DEBOUNCE_MS;
+}
+
 export function codexOperationIdleTimeoutMs(runtimeMode: RuntimeRoute): number {
   return runtimeMode === "direct-deepseek-plan"
     ? DIRECT_PLAN_OPERATION_IDLE_TIMEOUT_MS
@@ -215,6 +229,53 @@ export function codexSubmissionRoutingDecision(input: {
     echoUserItem: isFixture || !input.isDesktopRuntime || runtimeMode !== "codex-app-server-build" || buildBlocked,
     requiresBuildRuntimePreflight,
   };
+}
+
+function planDraftContextText(item: CodexItem): string {
+  const plan = item.metadata?.plan;
+  if (!plan || typeof plan !== "object") return item.text;
+  try {
+    return JSON.stringify(plan, null, 2);
+  } catch {
+    return item.text;
+  }
+}
+
+function codexPlanContextItemText(item: CodexItem): string {
+  if (item.kind === "planDraft") return planDraftContextText(item);
+  return item.text;
+}
+
+export function buildPlanPromptWithThreadContext(input: {
+  userPrompt: string;
+  items: CodexItem[];
+  threadId: string;
+}): string {
+  const userPrompt = input.userPrompt.trim();
+  const candidates = input.items
+    .filter((item) => item.threadId === input.threadId)
+    .filter((item) => item.status !== "failed")
+    .filter((item) => ["user", "assistant", "planDraft", "question"].includes(item.kind))
+    .filter((item) => codexPlanContextItemText(item).trim().length > 0)
+    .slice(-PLAN_CONTEXT_MAX_ITEMS);
+  if (candidates.length === 0) return userPrompt;
+
+  const budgetPerItem = Math.max(400, Math.floor(PLAN_CONTEXT_MAX_CHARS / candidates.length));
+  const context = candidates.map((item) => {
+    const role = item.kind === "user" ? "user" : item.kind === "planDraft" ? "accepted-plan-candidate" : "assistant";
+    const title = item.title ? ` (${item.title})` : "";
+    return `[${role}]${title}\n${truncateForPrompt(codexPlanContextItemText(item), budgetPerItem)}`;
+  }).join("\n\n");
+
+  return [
+    "# Recent Orbit thread context",
+    "Use this context to resolve short follow-up requests such as \"start\", \"continue\", \"do it\", or \"开始吧\". Do not treat this context as a new user instruction unless the current request refers to it.",
+    "",
+    context,
+    "",
+    "# Current user request",
+    userPrompt,
+  ].join("\n");
 }
 
 function withTimeout<T>(promise: Promise<T>, milliseconds: number, label: string): Promise<T> {
@@ -348,6 +409,45 @@ export function finishRuntimeOperation(
     error,
     lastEventAt: completedAt,
   };
+}
+
+export function codexOperationMatchesTurn(operation: RuntimeOperation | null | undefined, turn: CodexTurn | null | undefined): boolean {
+  if (!operation || !turn) return false;
+  if (operation.turnId && operation.turnId === turn.id) return true;
+  return operation.kind === "build" && Boolean(operation.threadId) && operation.threadId === turn.threadId;
+}
+
+export function codexShouldAutoRecoverIdleBuild(input: {
+  operation?: RuntimeOperation | null;
+  turn?: CodexTurn | null;
+  waitingForUser: boolean;
+}): boolean {
+  if (input.waitingForUser) return false;
+  if (input.operation) {
+    return input.operation.kind === "build"
+      && (input.operation.status === "starting" || input.operation.status === "running");
+  }
+  return input.turn?.mode === "build" && input.turn.status === "running";
+}
+
+export function codexItemSignalsFinalSummary(item?: Pick<CodexItem, "kind" | "title" | "status"> | null): boolean {
+  if (!item || item.kind !== "assistant" || item.status === "failed") return false;
+  return /final summary/i.test(item.title || "");
+}
+
+export function codexItemEventSignalsFinalSummary(event: CodexItemEvent | CodexItem): boolean {
+  if ("id" in event && "kind" in event && "text" in event && !("type" in event)) {
+    return codexItemSignalsFinalSummary(event);
+  }
+  if (!("type" in event)) return false;
+  const item = "item" in event ? event.item : undefined;
+  if (item && codexItemSignalsFinalSummary(item)) return true;
+  if (event.type !== "complete") return false;
+  return codexItemSignalsFinalSummary({
+    kind: event.kind || "assistant",
+    title: event.title || item?.title || "",
+    status: event.status || "completed",
+  });
 }
 
 export function codexStatusEventShouldCreateTimelineError(input: {
@@ -502,6 +602,9 @@ export function useCodexSession() {
   const ignoredTurnIdsRef = useRef<Set<string>>(new Set());
   const turnWatchdogRef = useRef<number | undefined>(undefined);
   const operationDeadlineRef = useRef<number | undefined>(undefined);
+  const sessionPersistTimerRef = useRef<number | undefined>(undefined);
+  const pendingSessionSnapshotRef = useRef<string | undefined>(undefined);
+  const diagnosticsRefreshTimerRef = useRef<number | undefined>(undefined);
   const restartInFlightRef = useRef<Promise<RuntimeRestartResult> | null>(null);
   const staleEventCountRef = useRef(0);
 
@@ -546,6 +649,50 @@ export function useCodexSession() {
       operationDeadlineRef.current = undefined;
     }
   }, []);
+
+  const flushStoredSession = useCallback(() => {
+    if (sessionPersistTimerRef.current) {
+      globalThis.clearTimeout(sessionPersistTimerRef.current);
+      sessionPersistTimerRef.current = undefined;
+    }
+    const snapshot = pendingSessionSnapshotRef.current;
+    if (!snapshot) return;
+    pendingSessionSnapshotRef.current = undefined;
+    localStorage.setItem(CODEX_SESSION_STORAGE_KEY, snapshot);
+  }, []);
+
+  const clearStoredSessionPersistence = useCallback(() => {
+    if (sessionPersistTimerRef.current) {
+      globalThis.clearTimeout(sessionPersistTimerRef.current);
+      sessionPersistTimerRef.current = undefined;
+    }
+    pendingSessionSnapshotRef.current = undefined;
+    localStorage.removeItem(CODEX_SESSION_STORAGE_KEY);
+  }, []);
+
+  const scheduleStoredSession = useCallback((snapshot: { thread: CodexThread | null; activeTurn: CodexTurn | null; items: CodexItem[] }) => {
+    pendingSessionSnapshotRef.current = JSON.stringify(snapshot);
+    if (sessionPersistTimerRef.current) {
+      globalThis.clearTimeout(sessionPersistTimerRef.current);
+    }
+    sessionPersistTimerRef.current = globalThis.setTimeout(flushStoredSession, CODEX_SESSION_PERSIST_DEBOUNCE_MS);
+  }, [flushStoredSession]);
+
+  const clearDiagnosticsRefresh = useCallback(() => {
+    if (diagnosticsRefreshTimerRef.current) {
+      globalThis.clearTimeout(diagnosticsRefreshTimerRef.current);
+      diagnosticsRefreshTimerRef.current = undefined;
+    }
+  }, []);
+
+  const scheduleDiagnosticsRefresh = useCallback(() => {
+    if (!isDesktopRuntime()) return;
+    clearDiagnosticsRefresh();
+    diagnosticsRefreshTimerRef.current = globalThis.setTimeout(() => {
+      diagnosticsRefreshTimerRef.current = undefined;
+      void agentRuntimePort.diagnostics().then(setDiagnostics).catch(() => undefined);
+    }, CODEX_DIAGNOSTICS_REFRESH_DEBOUNCE_MS);
+  }, [clearDiagnosticsRefresh]);
 
   const beginOperation = useCallback((input: {
     kind: RuntimeOperationKind;
@@ -610,6 +757,35 @@ export function useCodexSession() {
     }
   }, [finishOperation, sidecarStatus.running]);
 
+  const autoRecoverIdleBuild = useCallback(async (reason: string) => {
+    clearTurnWatchdog();
+    clearOperationDeadline();
+    const activeOperation = activeOperationRef.current;
+    const activeTurn = activeTurnRef.current;
+    ignoredTurnIdsRef.current = new Set([
+      ...ignoredTurnIdsRef.current,
+      ...(activeOperation?.turnId ? [activeOperation.turnId] : []),
+      ...(activeTurn?.id ? [activeTurn.id] : []),
+    ]);
+    const recovered = recoverCodexRuntimeState({
+      thread: threadRef.current,
+      activeTurn,
+      activeOperation,
+      reason,
+    });
+    activeOperationRef.current = recovered.activeOperation;
+    activeTurnRef.current = recovered.activeTurn;
+    setActiveOperation(recovered.activeOperation);
+    setActiveTurn(recovered.activeTurn);
+    setStatus(recovered.status);
+    setError(undefined);
+    if (isDesktopRuntime()) {
+      await agentRuntimePort.recoverRuntime()
+        .then(setDiagnostics)
+        .catch(() => undefined);
+    }
+  }, [clearOperationDeadline, clearTurnWatchdog]);
+
   useEffect(() => {
     clearOperationDeadline();
     if (!activeOperation || !isOperationActive(activeOperation)) return;
@@ -618,10 +794,18 @@ export function useCodexSession() {
     operationDeadlineRef.current = globalThis.setTimeout(() => {
       const current = activeOperationRef.current;
       if (!current || current.id !== activeOperation.id || !isOperationActive(current)) return;
+      const waitingForUser = itemsRef.current.some((item) => (
+        (Boolean(current.turnId) && item.turnId === current.turnId)
+        || (Boolean(current.threadId) && item.threadId === current.threadId)
+      ) && (item.kind === "approval" || item.kind === "question") && item.status === "pending");
+      if (codexShouldAutoRecoverIdleBuild({ operation: current, waitingForUser })) {
+        void autoRecoverIdleBuild(`${current.kind} operation timed out`);
+        return;
+      }
       void cancelOperation(current, `${current.kind} operation timed out`);
     }, delay);
     return clearOperationDeadline;
-  }, [activeOperation, cancelOperation, clearOperationDeadline]);
+  }, [activeOperation, autoRecoverIdleBuild, cancelOperation, clearOperationDeadline]);
 
   const armTurnWatchdog = useCallback((turn: CodexTurn | null | undefined) => {
     clearTurnWatchdog();
@@ -630,7 +814,7 @@ export function useCodexSession() {
       const currentTurn = activeTurnRef.current;
       if (!currentTurn || currentTurn.id !== turn.id || currentTurn.status !== "running") return;
       const waitingForUser = itemsRef.current.some((item) => (
-        item.turnId === turn.id
+        (item.turnId === turn.id || (turn.mode === "build" && item.threadId === turn.threadId))
         && (item.kind === "approval" || item.kind === "question")
         && item.status === "pending"
       ));
@@ -640,7 +824,15 @@ export function useCodexSession() {
       }
       const message = `Codex turn had no runtime progress for ${RUNNING_TURN_IDLE_TIMEOUT_MS}ms`;
       const currentOperation = activeOperationRef.current;
-      if (currentOperation?.turnId === currentTurn.id) {
+      if (codexShouldAutoRecoverIdleBuild({
+        operation: codexOperationMatchesTurn(currentOperation, currentTurn) ? currentOperation : null,
+        turn: currentTurn,
+        waitingForUser,
+      })) {
+        void autoRecoverIdleBuild(message);
+        return;
+      }
+      if (currentOperation && codexOperationMatchesTurn(currentOperation, currentTurn)) {
         void cancelOperation(currentOperation, message);
         return;
       }
@@ -656,7 +848,7 @@ export function useCodexSession() {
         metadata: { recoverable: true, idleTimeoutMs: RUNNING_TURN_IDLE_TIMEOUT_MS },
       }));
     }, RUNNING_TURN_IDLE_TIMEOUT_MS);
-  }, [cancelOperation, clearTurnWatchdog]);
+  }, [autoRecoverIdleBuild, cancelOperation, clearTurnWatchdog]);
 
   const projection: CodexRuntimeProjection = useMemo(() => buildCodexProjection({
     status,
@@ -668,8 +860,8 @@ export function useCodexSession() {
   }), [activeOperation, activeTurn, error, items, status, thread]);
 
   useEffect(() => {
-    localStorage.setItem(CODEX_SESSION_STORAGE_KEY, JSON.stringify({ thread, activeTurn, items }));
-  }, [activeTurn, items, thread]);
+    scheduleStoredSession({ thread, activeTurn, items });
+  }, [activeTurn, items, scheduleStoredSession, thread]);
 
   const recordRuntimeError = useCallback((message: string, metadata: Record<string, unknown> = {}) => {
     clearTurnWatchdog();
@@ -693,7 +885,9 @@ export function useCodexSession() {
   useEffect(() => () => {
     clearTurnWatchdog();
     clearOperationDeadline();
-  }, [clearOperationDeadline, clearTurnWatchdog]);
+    clearDiagnosticsRefresh();
+    flushStoredSession();
+  }, [clearDiagnosticsRefresh, clearOperationDeadline, clearTurnWatchdog, flushStoredSession]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -731,6 +925,26 @@ export function useCodexSession() {
             )),
           });
         }
+        const finalSummaryCompletesBuild = currentOperation?.kind === "build"
+          && isOperationActive(currentOperation)
+          && codexRuntimeEventMatchesOperation({
+            payloadTurnId,
+            payloadThreadId,
+            activeOperation: currentOperation,
+          })
+          && codexItemEventSignalsFinalSummary(event.payload);
+        if (finalSummaryCompletesBuild) {
+          finishOperation(currentOperation.id, "completed");
+          setActiveTurn((prev) => {
+            if (!prev || prev.status !== "running") return prev;
+            if (payloadThreadId && prev.threadId !== payloadThreadId) return prev;
+            return { ...prev, status: "completed", completedAt: now() };
+          });
+          setStatus("ready");
+          setError(undefined);
+          clearTurnWatchdog();
+          return;
+        }
         if (currentTurn?.status === "running" && (!payloadTurnId || payloadTurnId === currentTurn.id)) {
           armTurnWatchdog(currentTurn);
         }
@@ -746,6 +960,14 @@ export function useCodexSession() {
           payloadThreadId: event.payload.threadId,
           activeOperation: currentOperation,
           activeTurn: activeTurnRef.current,
+        })) {
+          recordStaleRuntimeEvent();
+          return;
+        }
+        if (currentOperation && !isOperationActive(currentOperation) && event.payload.status === "running" && codexRuntimeEventMatchesOperation({
+          payloadTurnId: event.payload.id,
+          payloadThreadId: event.payload.threadId,
+          activeOperation: currentOperation,
         })) {
           recordStaleRuntimeEvent();
           return;
@@ -791,6 +1013,13 @@ export function useCodexSession() {
         if (event.payload.sidecarStatus) {
           setSidecarStatus(event.payload.sidecarStatus);
         }
+        const eventTargetsTerminalOperation = Boolean(event.payload.operationId)
+          && currentOperation?.id === event.payload.operationId
+          && !isOperationActive(currentOperation);
+        if (eventTargetsTerminalOperation) {
+          scheduleDiagnosticsRefresh();
+          return;
+        }
         if (event.payload.operationId) {
           const finalState = event.payload.status === "error" ? "failed" : event.payload.status === "ready" ? "completed" : undefined;
           if (finalState) {
@@ -808,14 +1037,12 @@ export function useCodexSession() {
         if (codexStatusEventShouldCreateTimelineError(event.payload)) {
           recordRuntimeError(event.payload.error || "Codex runtime error", { source: "status" });
         }
-        if (isDesktopRuntime()) {
-          void agentRuntimePort.diagnostics().then(setDiagnostics).catch(() => undefined);
-        }
+        scheduleDiagnosticsRefresh();
         return;
       }
       recordRuntimeError(event.payload.message, { source: "event" });
     });
-  }, [armTurnWatchdog, clearTurnWatchdog, finishOperation, patchOperation, recordRuntimeError, recordStaleRuntimeEvent]);
+  }, [armTurnWatchdog, clearTurnWatchdog, finishOperation, patchOperation, recordRuntimeError, recordStaleRuntimeEvent, scheduleDiagnosticsRefresh]);
 
   useEffect(() => {
     if (!isDesktopRuntime()) return;
@@ -877,6 +1104,7 @@ export function useCodexSession() {
     if (codexComposerSubmitLocked(statusRef.current, activeTurnRef.current, activeOperationRef.current)) {
       return;
     }
+    const priorThreadItems = itemsRef.current;
     const activeThread = await ensureThread({
       workspacePath: input.workspacePath,
       mode: input.mode,
@@ -1051,12 +1279,19 @@ export function useCodexSession() {
       timeoutMs: codexOperationIdleTimeoutMs(runtimeMode),
       threadId: activeThread.id,
     });
+    const runtimePrompt = input.mode === "plan"
+      ? buildPlanPromptWithThreadContext({
+        userPrompt: input.prompt,
+        items: priorThreadItems,
+        threadId: activeThread.id,
+      })
+      : input.prompt;
     setStatus(input.mode === "build" ? "starting" : "running");
     try {
       const result = await withTimeout(agentRuntimePort.startTurn({
         threadId: activeThread.id,
         workspacePath: input.workspacePath,
-        prompt: input.prompt,
+        prompt: runtimePrompt,
         mode: input.mode,
         runtimeMode,
         providerId: input.providerId,
@@ -1130,7 +1365,7 @@ export function useCodexSession() {
           source: "approval-submit",
           metadata: failure.metadata,
         }));
-        void agentRuntimePort.diagnostics().then(setDiagnostics).catch(() => undefined);
+        scheduleDiagnosticsRefresh();
       }
       return;
     }
@@ -1195,7 +1430,7 @@ export function useCodexSession() {
         }),
       ];
     });
-  }, [items]);
+  }, [items, scheduleDiagnosticsRefresh]);
 
   const clear = useCallback(() => {
     clearTurnWatchdog();
@@ -1206,8 +1441,8 @@ export function useCodexSession() {
     setItems([]);
     setError(undefined);
     setStatus("stopped");
-    localStorage.removeItem(CODEX_SESSION_STORAGE_KEY);
-  }, [clearOperationDeadline, clearTurnWatchdog]);
+    clearStoredSessionPersistence();
+  }, [clearOperationDeadline, clearStoredSessionPersistence, clearTurnWatchdog]);
 
   const recoverRuntime = useCallback(async (reason = "Recovered stuck runtime state") => {
     clearTurnWatchdog();

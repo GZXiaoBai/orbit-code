@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { CodexSidecarStatus, ProviderBuildGate } from "../domain/codex";
 import { parseCodingPlan } from "../domain/planSchema";
 import type { ThreadEvent } from "../domain/threadEvents";
-import type { PermissionPreset, ProjectSecurityOverride } from "../domain/types";
+import type { AcceptedBuildPlan, CodingPlan, PermissionPreset, ProjectSecurityOverride } from "../domain/types";
 import { createDeepSeekSmokeRunRecord } from "../runtime/deepSeekSmokeHarness";
 import { buildEffectiveSecurityPolicy } from "../runtime/securityPolicy";
 import { ContextProviderRegistry, type ContextInspectorModel } from "../runtime/contextProviders";
@@ -18,7 +18,51 @@ import { useSession, type ImportedPlanState } from "./useSession";
 import { useThreadUiState } from "./useThreadUiState";
 import { useWindowActions } from "./useWindowActions";
 
+export type { AcceptedBuildPlan } from "../domain/types";
 export type { ImportedPlanState, ImportErrorState, ProviderSettings } from "./useSession";
+
+function listSection(title: string, values: string[]) {
+  const clean = values.map((value) => value.trim()).filter(Boolean);
+  if (clean.length === 0) return [`${title}:`, "- None"].join("\n");
+  return [`${title}:`, ...clean.map((value) => `- ${value}`)].join("\n");
+}
+
+function formatPlanTask(task: CodingPlan["tasks"][number]) {
+  return [
+    `- ${task.id}: ${task.title}`,
+    `  status: ${task.status}`,
+    `  description: ${task.description}`,
+    `  filesHint: ${task.filesHint.length > 0 ? task.filesHint.join(", ") : "None"}`,
+    `  verification: ${task.verification.length > 0 ? task.verification.join("; ") : "None"}`,
+    `  dependsOn: ${task.dependsOn.length > 0 ? task.dependsOn.join(", ") : "None"}`,
+  ].join("\n");
+}
+
+export function buildBuildPromptWithAcceptedPlan(userPrompt: string, acceptedPlan?: AcceptedBuildPlan | null): string {
+  const prompt = userPrompt.trim();
+  if (!acceptedPlan) return prompt;
+  const plan = acceptedPlan.plan;
+  return [
+    "Use the accepted Orbit Plan as the source of truth for this Build turn.",
+    "",
+    "## Accepted Plan",
+    `Title: ${plan.title}`,
+    `Accepted At: ${acceptedPlan.acceptedAt}`,
+    `Source: ${acceptedPlan.source}`,
+    "",
+    listSection("Goals", plan.goals),
+    "",
+    listSection("Constraints", plan.constraints),
+    "",
+    "Tasks:",
+    ...(plan.tasks.length > 0 ? plan.tasks.map(formatPlanTask) : ["- None"]),
+    "",
+    listSection("Acceptance Criteria", plan.acceptanceCriteria),
+    "",
+    "## User Build Request",
+    prompt || "Start the next Build step from the accepted plan.",
+  ].join("\n");
+}
 
 function emptyContextInspector(mode: "plan" | "build" = "plan"): ContextInspectorModel {
   return {
@@ -70,6 +114,7 @@ export function useWorkspace() {
   const [sessionSearchQuery, setSessionSearchQuery] = useState("");
   const [currentContextInspector, setCurrentContextInspector] = useState<ContextInspectorModel>(() => emptyContextInspector(runControls.mode));
   const [plansByThreadId, setPlansByThreadId] = useState<Record<string, ImportedPlanState | null>>({});
+  const acceptedBuildPlan = session.acceptedPlansByThreadId[threadUi.threadId] || null;
   const effectiveBuildGate = useMemo(() => buildEffectiveWorkspaceBuildGate({
     gate: runControls.buildGate,
     providerId: runControls.selection.providerId,
@@ -96,14 +141,14 @@ export function useWorkspace() {
       mode: runControls.mode,
       workspacePath: fs.workspaceRoot,
       threadId: threadUi.threadId,
-      planSnapshot: session.importedPlan?.plan || null,
+      planSnapshot: runControls.mode === "build" ? acceptedBuildPlan?.plan || null : null,
       userRules: session.providerSettings.context?.userRules || [],
       readWorkspaceFile: (path) => fs.workspaceRoot ? invokeDesktop("read_workspace_file", { path, workspacePath: fs.workspaceRoot }) : Promise.resolve(""),
       listWorkspaceFiles: () => fs.workspaceRoot ? invokeDesktop("list_workspace_files", { workspacePath: fs.workspaceRoot }) : Promise.resolve([]),
     });
     setCurrentContextInspector(inspector);
     return inspector;
-  }, [fs.workspaceRoot, runControls.mode, session.importedPlan?.plan, session.providerSettings.context?.userRules, threadUi.threadId]);
+  }, [acceptedBuildPlan?.plan, fs.workspaceRoot, runControls.mode, session.providerSettings.context?.userRules, threadUi.threadId]);
 
   const updateProjectSecurityOverride = useCallback((patch: Partial<ProjectSecurityOverride> & { preset?: PermissionPreset }) => {
     if (!fs.workspaceRoot) return;
@@ -132,8 +177,11 @@ export function useWorkspace() {
 
   const submitToCodex = useCallback(async (prompt: string, mode = runControls.mode) => {
     if (!prompt.trim()) return;
+    const runtimePrompt = mode === "build"
+      ? buildBuildPromptWithAcceptedPlan(prompt, acceptedBuildPlan)
+      : prompt;
     await codex.submit({
-      prompt,
+      prompt: runtimePrompt,
       workspacePath: fs.workspaceRoot,
       mode,
       providerId: runControls.selection.providerId,
@@ -145,15 +193,16 @@ export function useWorkspace() {
         ? effectiveBuildGate.blockedReason || "Build is blocked until the selected provider passes Orbit's Codex bridge checks."
         : undefined,
     });
-  }, [codex, effectiveBuildGate.blockedReason, effectiveBuildGate.canBuild, fs.workspaceRoot, runControls.mode, runControls.selection, session.providerSettings.configs, threadUi.threadId]);
+  }, [acceptedBuildPlan, codex, effectiveBuildGate.blockedReason, effectiveBuildGate.canBuild, fs.workspaceRoot, runControls.mode, runControls.selection, session.providerSettings.configs, threadUi.threadId]);
 
   const startAgentLoop = useCallback(async () => {
-    const task = session.importedPlan?.plan.tasks.find((item) => item.status !== "done" && item.status !== "verified");
+    const buildPlan = acceptedBuildPlan?.plan || session.importedPlan?.plan;
+    const task = buildPlan?.tasks.find((item) => item.status !== "done" && item.status !== "verified");
     const prompt = task
       ? `Execute this Build task with Codex sidecar:\n${task.title}\n\n${task.description}\n\nVerification:\n${task.verification.join("\n")}`
       : "Start a Codex Build turn for the current workspace.";
     await submitToCodex(prompt, "build");
-  }, [session.importedPlan?.plan.tasks, submitToCodex]);
+  }, [acceptedBuildPlan?.plan, session.importedPlan?.plan, submitToCodex]);
 
   const submitPlanMessage = useCallback(async (message: string) => {
     const parsed = parseCodingPlan(message);
@@ -186,19 +235,26 @@ export function useWorkspace() {
   const acceptPlanDraft = useCallback((eventId: string) => {
     const draft = codex.projection.events.find((event) => event.id === eventId)?.planDraft;
     if (draft) {
+      const acceptedAt = new Date().toISOString();
       session.restoreImportedPlan({
         plan: draft,
         fileName: "codex-plan-draft.yaml",
-        importedAt: new Date().toISOString(),
+        importedAt: acceptedAt,
       });
       setPlansByThreadId((prev) => ({
         ...prev,
         [threadUi.threadId]: {
           plan: draft,
           fileName: "codex-plan-draft.yaml",
-          importedAt: new Date().toISOString(),
+          importedAt: acceptedAt,
         },
       }));
+      session.updateAcceptedPlan(threadUi.threadId, {
+        plan: draft,
+        source: "codex-plan-draft",
+        acceptedAt,
+        title: draft.title,
+      });
       threadUi.renameThread(draft.title);
     }
     runControls.setMode("build");
@@ -285,6 +341,7 @@ export function useWorkspace() {
   const deleteThreadById = useCallback((targetThreadId: string) => {
     const deletingActiveThread = targetThreadId === threadUi.threadId;
     threadUi.deleteThread(targetThreadId);
+    session.updateAcceptedPlan(targetThreadId, null);
     if (deletingActiveThread) {
       session.clearImportedPlan();
       codex.clear();
@@ -296,6 +353,7 @@ export function useWorkspace() {
     importedPlan: session.importedPlan,
     importError: session.importError,
     providerSettings: session.providerSettings,
+    acceptedBuildPlan,
     apiKeys: session.apiKeys,
     credentialVaultProviders: session.credentialVaultProviders,
     credentialVaultAutoUnlock: session.credentialVaultAutoUnlock,

@@ -349,4 +349,32 @@ describe("Codex item projection", () => {
       totalTokens: 95,
     });
   });
+
+  it("reads nested app-server total token usage metadata", () => {
+    const projection = buildCodexProjection({
+      status: "ready",
+      thread: null,
+      activeTurn: null,
+      items: [
+        item({
+          id: "app-server-usage",
+          kind: "usage",
+          title: "Token usage",
+          text: "Codex app-server usage",
+          metadata: {
+            info: {
+              last_token_usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
+              total_token_usage: { input_tokens: 40, output_tokens: 11, total_tokens: 51 },
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(projection.inspectorModel.usage).toEqual({
+      inputTokens: 40,
+      outputTokens: 11,
+      totalTokens: 51,
+    });
+  });
 });
