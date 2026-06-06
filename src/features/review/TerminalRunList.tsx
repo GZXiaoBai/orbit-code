@@ -56,7 +56,13 @@ export function TerminalRunList({
   runs: TerminalRun[];
 }) {
   if (runs.length === 0) {
-    return <EmptyState icon={<TerminalSquare size={22} />} title={copy.terminal.waiting.trim()} />;
+    return (
+      <EmptyState
+        icon={<TerminalSquare size={22} />}
+        title={copy.terminal.waiting.trim()}
+        body={copy.language === "中" ? "Build 执行命令后会在这里显示命令、退出码、输出和恢复状态；没有条目表示当前没有终端动作。" : "Build command runs appear here with command text, exit code, output, and recovery state; no entries means there is no terminal action yet."}
+      />
+    );
   }
   const orderedRuns = [...runs].sort((a, b) => {
     const aTime = a.completedAt || a.startedAt || "";

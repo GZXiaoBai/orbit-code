@@ -148,6 +148,11 @@ function ApprovalActionDialog({
         ? "网络命令会访问远程地址，可能下载或上传数据。请确认来源可信。拒绝后不会创建终端运行。"
         : "Network commands can contact remote hosts and may download or upload data. Confirm the source is trusted. Denial will not create a terminal run.")
       : "";
+  const recoveryCopy = action.resumeAction
+    ? (copy.language === "中"
+      ? "该请求可在刷新或恢复后继续处理；Orbit 不会自动批准，拒绝会把结果明确回传给 Codex。"
+      : "This request can be handled after reload or recovery; Orbit will not auto-approve it, and denial is sent back to Codex.")
+    : "";
 
   useEffect(() => {
     dialogRef.current?.focus();
@@ -184,6 +189,7 @@ function ApprovalActionDialog({
           <code className="approval-command-line">{view.display || action.description}</code>
           <small>{copy.workbench.workspacePath}: {view.workspacePath || workspaceRoot || copy.workbench.noWorkspace}</small>
           {riskCopy ? <small className="approval-risk-copy">{riskCopy}</small> : null}
+          {recoveryCopy ? <small className="approval-risk-copy">{recoveryCopy}</small> : null}
           {view.cwd ? <small>CWD: {view.cwd}</small> : null}
           {view.args.length > 0 ? <small>{view.args.length} {copy.workbench.argsCount}</small> : null}
           <div className="approval-risk-list" aria-label={copy.workbench.permissionActions}>
@@ -309,7 +315,16 @@ function QuestionActionDialog({
   return (
     <div ref={dialogRef} className="structured-question-dialog" role="dialog" aria-modal="true" aria-labelledby="structured-question-title" tabIndex={-1} onKeyDown={onKeyDown}>
       <header className="structured-question-header">
-        <h2 id="structured-question-title">{action.question || action.description}</h2>
+        <div>
+          <h2 id="structured-question-title">{action.question || action.description}</h2>
+          {action.resumeAction ? (
+            <small className="structured-question-recovery-note">
+              {copy.language === "中"
+                ? "刷新或自动恢复后仍可回答；忽略会把取消结果回传给 Codex。"
+                : "This question remains answerable after reload or auto-recovery; ignoring it sends a cancellation back to Codex."}
+            </small>
+          ) : null}
+        </div>
         <Pager copy={copy} nav={nav} />
       </header>
       <div className="structured-question-options" role={hasChoices ? "radiogroup" : undefined}>
@@ -389,6 +404,11 @@ function PatchActionDialog({
         </StatusBadge>
         <span>{patches.length} {copy.language === "中" ? "个文件" : "files"}</span>
       </div>
+      <p className="patch-review-recovery-note">
+        {copy.language === "中"
+          ? "如果 patch sandbox 失败或出现冲突，先在差异视图中修正；Orbit 不会在冲突未解决时写入工作区。"
+          : "If patch sandboxing fails or conflicts appear, resolve them in the diff view first; Orbit will not write unresolved conflicts into the workspace."}
+      </p>
       <div className="patch-review-overlay-body">
         <DiffViewer copy={copy} patches={patches} onApply={() => Promise.resolve(onApplyPatch(event.id))} workspacePath={workspaceRoot} eventId={event.id} onUpdatePatch={onUpdatePatch} />
       </div>

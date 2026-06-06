@@ -1,12 +1,12 @@
 {
-  "id": "plan-live-streaming-2026-06-05T07-24-50-787Z",
+  "id": "plan-live-streaming-2026-06-06T12-41-38-305Z",
   "runtime": "direct-deepseek-plan",
   "provider": "deepseek",
   "model": "deepseek-v4-flash",
   "apiModel": "deepseek-chat",
   "scope": "Live noninteractive smoke for the ordinary Plan/chat path. It decrypts the Orbit trusted-device vault in memory, calls DeepSeek chat streaming directly, verifies SSE deltas, and never logs or persists the API key.",
-  "startedAt": "2026-06-05T07:24:49.018Z",
-  "completedAt": "2026-06-05T07:24:50.787Z",
+  "startedAt": "2026-06-06T12:41:36.990Z",
+  "completedAt": "2026-06-06T12:41:38.305Z",
   "result": "verified",
   "criteria": [
     {
@@ -36,18 +36,18 @@
         "requestedModel": "deepseek-v4-flash",
         "apiModel": "deepseek-chat",
         "status": 200,
-        "frames": 22,
-        "assistantDeltas": 20,
+        "frames": 21,
+        "assistantDeltas": 19,
         "reasoningDeltas": 0,
-        "assistantChars": 43,
+        "assistantChars": 42,
         "reasoningChars": 0,
         "completed": true,
         "usage": {
           "prompt_tokens": 18,
-          "completion_tokens": 21,
-          "total_tokens": 39
+          "completion_tokens": 19,
+          "total_tokens": 37
         },
-        "assistantPreview": "你好！我是Orbit Code的规划助理，很高兴为你服务！请问有什么可以帮助你的？😊"
+        "assistantPreview": "你好！我是 Orbit Code 的规划助理，很高兴为你服务。有什么可以帮助你的吗？"
       }
     }
   ]

@@ -1,8 +1,8 @@
 {
-  "id": "tauri-webdriver-plan-smoke-2026-06-03T11-44-05-202Z",
+  "id": "tauri-webdriver-plan-smoke-2026-06-05T08-35-38-092Z",
   "scope": "Packaged-window smoke for Orbit Code through tauri-driver/WebDriver. Default mode verifies launch and workbench render; live Plan submit requires ORBIT_DESKTOP_PLAN_LIVE=1.",
-  "startedAt": "2026-06-03T11:44:05.197Z",
-  "completedAt": "2026-06-03T11:44:05.202Z",
+  "startedAt": "2026-06-05T08:35:21.431Z",
+  "completedAt": "2026-06-05T08:35:38.092Z",
   "result": "blocked",
   "livePlanEnabled": false,
   "timeouts": {
@@ -12,14 +12,54 @@
   },
   "criteria": [
     {
-      "id": "desktop-webdriver-platform",
-      "label": "Host platform can drive the packaged Tauri window.",
-      "status": "blocked",
-      "message": "macOS cannot run Tauri WebDriver automation because WKWebView has no WebDriver implementation. Run this smoke on Linux/Windows CI.",
+      "id": "tauri-driver-binary",
+      "label": "tauri-driver is installed.",
+      "status": "verified",
+      "message": "tauri-driver found on PATH.",
       "evidence": {
-        "platform": "darwin",
-        "docs": "https://v2.tauri.app/develop/tests/webdriver/"
+        "path": "/home/runner/.cargo/bin/tauri-driver"
       }
+    },
+    {
+      "id": "linux-webkit-driver",
+      "label": "Linux WebKitWebDriver is installed.",
+      "status": "verified",
+      "message": "WebKitWebDriver found on PATH.",
+      "evidence": {
+        "path": "/usr/bin/WebKitWebDriver"
+      }
+    },
+    {
+      "id": "orbit-app-binary",
+      "label": "Orbit Code debug/release binary exists.",
+      "status": "verified",
+      "message": "Found a launchable Orbit Code binary.",
+      "evidence": {
+        "appPath": "/home/runner/work/orbit-code/orbit-code/src-tauri/target/debug/orbit-code"
+      }
+    },
+    {
+      "id": "webdriver-session",
+      "label": "WebDriver can launch an Orbit Code desktop session.",
+      "status": "verified",
+      "message": "tauri-driver created a WRY session for Orbit Code.",
+      "evidence": {
+        "sessionId": "cdccf7c1-fd69-41ba-84b2-17a423b6d7e5"
+      }
+    },
+    {
+      "id": "workbench-visible",
+      "label": "Workbench shell is visible in the real Tauri window.",
+      "status": "verified",
+      "message": "The launched desktop window rendered Orbit Code's workbench shell.",
+      "evidence": {}
+    },
+    {
+      "id": "live-plan-submit",
+      "label": "Plan submit streams through the real desktop window.",
+      "status": "blocked",
+      "message": "Skipped because ORBIT_DESKTOP_PLAN_LIVE=1 is not set. This keeps CI independent from local vault/API credentials.",
+      "evidence": {}
     }
   ]
 }

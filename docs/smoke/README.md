@@ -23,6 +23,12 @@ For live Ubuntu CI, trigger the `desktop-build-live` workflow manually with `des
 
 The workflow decodes the bundle into `ORBIT_APP_DATA_DIR`, so the app and smoke scripts share a temporary encrypted vault without exposing a plaintext provider key. It also sets `ORBIT_DESKTOP_BUILD_WORKSPACE` to an isolated temporary workspace; live smoke seeds that workspace into Orbit local storage, asks Build to write only `ORBIT_DESKTOP_BUILD_SMOKE.md`, then removes that smoke file after the run.
 
+The credentialed live job writes separate stable reports for the approval and denial paths:
+
+- `latest-tauri-webdriver-build-approve-smoke.json`
+- `latest-tauri-webdriver-build-deny-smoke.json`
+- `latest-tauri-webdriver-build-smoke.json`, overwritten by the last Build smoke invocation in the job
+
 To create the bundle from a local Orbit profile that already has DeepSeek saved and trusted-device auto-unlock enabled, run:
 
 ```bash

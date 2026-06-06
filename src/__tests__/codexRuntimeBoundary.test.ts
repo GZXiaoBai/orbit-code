@@ -76,13 +76,14 @@ describe("Codex runtime boundary", () => {
     expect(summary.total).toBe(AGENT_RUNTIME_PROMOTION_REQUIREMENTS.length);
     expect(summary.verified + summary.missing.length).toBe(summary.total);
     expect(missingIds).toEqual(missingProductionEvidence(codex!));
-    expect(summary.missing.map((requirement) => requirement.label)).toContain("Packaged desktop live smoke");
+    expect(summary.missing).toEqual([]);
   });
 
   it("surfaces Agent runtime conformance in the Settings runtime control plane", () => {
     expect(settingsWorkspaceSource).toContain("AGENT_RUNTIME_ADAPTER_DECISIONS");
     expect(settingsWorkspaceSource).toContain("AGENT_RUNTIME_PROMOTION_REQUIREMENTS");
     expect(settingsWorkspaceSource).toContain("agentRuntimeEvidenceSummary");
+    expect(settingsWorkspaceSource).toContain("runtimeBetaGates");
     expect(settingsWorkspaceSource).toContain("Agent runtime");
     expect(settingsWorkspaceSource).toContain("Build core");
   });

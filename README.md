@@ -2,7 +2,7 @@
 
 Orbit Code is a local-first, multi-model coding agent workbench built with Tauri, React, TypeScript, and Rust. It is designed for reviewing and approving local coding-agent work instead of blindly handing your filesystem to a model.
 
-The project is active and in a two-week Beta stabilization push. The Beta scope is Codex sidecar plus DeepSeek Build: Plan and ordinary chat use the direct provider route, while Build runs through `codex app-server` and Orbit's loopback Responses bridge. Other providers remain discovery-only for Build until they have equivalent bridge and desktop smoke evidence.
+The project is at the local Beta gate. The Beta scope is Codex sidecar plus DeepSeek Build: Plan and ordinary chat use the direct provider route, while Build runs through `codex app-server` and Orbit's loopback Responses bridge. Other providers remain discovery-only for Build until they have equivalent bridge and desktop smoke evidence.
 
 ## What It Does
 
@@ -14,6 +14,7 @@ The project is active and in a two-week Beta stabilization push. The Beta scope 
 - Route commands, questions, patch proposals, and verification runs through Review Dock.
 - Apply file changes through patch review and transactional Rust-side writes.
 - Preserve local-first state for projects, layout, file tree expansion, and run controls.
+- Recover stuck Build input state without turning idle runtime stalls into misleading Codex error cards.
 
 ## Current Status
 
@@ -77,6 +78,8 @@ Models only appear in the Composer after a provider is imported from Settings. P
 Current provider targets include OpenAI, Anthropic, Google Gemini, DeepSeek, OpenRouter, xAI, Mistral, Groq, Qwen/DashScope, Kimi/Moonshot, SiliconFlow, Zhipu/GLM, and Ollama discovery.
 
 DeepSeek is the only Build-enabled provider in the Beta line. Ollama and hosted OpenAI-compatible providers are intentionally discovery-only for Build until each bridge path has verified live desktop evidence.
+
+Automated Beta evidence currently includes frontend tests/build, Rust tests, Playwright E2E, Plan smoke, DeepSeek smoke, debug no-bundle desktop build, credentialed packaged desktop Build approve/deny smoke, and macOS/Windows/Linux release artifacts. See [docs/STATUS_MATRIX.md](docs/STATUS_MATRIX.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
 
 ## Release
 

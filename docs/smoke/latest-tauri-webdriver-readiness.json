@@ -1,9 +1,9 @@
 {
-  "id": "tauri-webdriver-readiness-2026-05-31T12-59-23-664Z",
+  "id": "tauri-webdriver-readiness-2026-06-05T08-33-06-542Z",
   "scope": "Readiness check for a future packaged Orbit Code window smoke driven by tauri-driver/WebDriver.",
-  "startedAt": "2026-05-31T12:59:23.205Z",
-  "completedAt": "2026-05-31T12:59:23.664Z",
-  "result": "blocked",
+  "startedAt": "2026-06-05T08:33:06.207Z",
+  "completedAt": "2026-06-05T08:33:06.542Z",
+  "result": "verified",
   "criteria": [
     {
       "id": "tauri-cli",
@@ -18,20 +18,29 @@
     {
       "id": "desktop-webdriver-platform",
       "label": "Host platform can run Tauri desktop WebDriver automation.",
-      "status": "blocked",
-      "message": "macOS cannot run Tauri desktop WebDriver automation because there is no WKWebView driver. Use Linux/Windows CI for tauri-driver coverage, or add a separate macOS accessibility smoke.",
+      "status": "verified",
+      "message": "Host platform can use tauri-driver if the binary is installed.",
       "evidence": {
-        "platform": "darwin",
+        "platform": "linux",
         "docs": "https://v2.tauri.app/develop/tests/webdriver/"
       }
     },
     {
       "id": "tauri-driver-binary",
       "label": "tauri-driver binary is installed.",
-      "status": "blocked",
-      "message": "Skipped on macOS because desktop WebDriver automation is not supported here.",
+      "status": "verified",
+      "message": "tauri-driver found on PATH.",
       "evidence": {
-        "path": null
+        "path": "/home/runner/.cargo/bin/tauri-driver"
+      }
+    },
+    {
+      "id": "linux-webkit-driver",
+      "label": "Linux WebKitWebDriver is installed for Tauri WebDriver automation.",
+      "status": "verified",
+      "message": "WebKitWebDriver found on PATH.",
+      "evidence": {
+        "path": "/usr/bin/WebKitWebDriver"
       }
     }
   ]

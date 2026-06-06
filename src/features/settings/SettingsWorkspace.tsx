@@ -47,7 +47,7 @@ import type {
   ContextRule,
   ModelCapability,
 } from "../../domain/types";
-import { SelectMenu } from "../../ui/primitives";
+import { SelectMenu, StatusBadge } from "../../ui/primitives";
 
 type ImportState = "idle" | "importing" | "done" | "error";
 
@@ -966,6 +966,122 @@ function evidenceStatusLabel(copy: AppCopy, status: AgentRuntimeEvidenceStatus) 
   return copy.language === "中" ? "未开始" : "Not started";
 }
 
+export type RuntimeBetaGateId =
+  | "runtime-conformance"
+  | "sidecar"
+  | "bridge"
+  | "model-discovery"
+  | "bridge-smoke"
+  | "desktop-build-live"
+  | "build-gate";
+
+export interface RuntimeBetaGate {
+  id: RuntimeBetaGateId;
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+export function runtimeBetaGates(input: {
+  runtime: CodexRuntimeSettingsModel;
+  activeGate: ProviderBuildGate;
+  bridgeStatus: ProviderBridgeStatus;
+}): RuntimeBetaGate[] {
+  const productionRuntime = AGENT_RUNTIME_ADAPTER_DECISIONS.find((adapter) => adapter.id === PRODUCTION_AGENT_RUNTIME_ADAPTER_ID) || AGENT_RUNTIME_ADAPTER_DECISIONS[0];
+  const runtimeEvidenceSummary = agentRuntimeEvidenceSummary(productionRuntime);
+  const desktopSmoke = input.runtime.latestDesktopBuildSmoke;
+  const sidecarAvailable = input.runtime.sidecarStatus.running
+    || Boolean(input.runtime.sidecarInfo?.path || input.runtime.sidecarPath || input.runtime.sidecarInfo?.source);
+  const bridgeHealthy = input.runtime.bridgeStatus === "ready" || input.runtime.bridgeStatus === "stopped";
+  return [
+    {
+      id: "runtime-conformance",
+      label: "Runtime conformance",
+      ok: runtimeEvidenceSummary.missing.length === 0,
+      detail: runtimeEvidenceSummary.missing.length === 0
+        ? "All production Codex adapter evidence is verified."
+        : `Missing ${runtimeEvidenceSummary.missing.map((requirement) => requirement.label).join(", ")}.`,
+    },
+    {
+      id: "sidecar",
+      label: "Codex sidecar",
+      ok: sidecarAvailable,
+      detail: input.runtime.sidecarStatus.running
+        ? `PID ${input.runtime.sidecarStatus.pid || "-"}`
+        : input.runtime.sidecarInfo?.path || input.runtime.sidecarPath || input.runtime.lastError || input.runtime.sidecarStatus.lastError || "Sidecar is not available.",
+    },
+    {
+      id: "bridge",
+      label: "Responses bridge",
+      ok: bridgeHealthy,
+      detail: input.runtime.bridgeBaseUrl || (input.runtime.bridgeStatus === "stopped" ? "stopped; starts on Build" : input.runtime.bridgeStatus),
+    },
+    {
+      id: "model-discovery",
+      label: "Model discovery",
+      ok: input.bridgeStatus.modelDiscovery === "ready",
+      detail: input.bridgeStatus.modelDiscovery,
+    },
+    {
+      id: "bridge-smoke",
+      label: "Bridge smoke",
+      ok: input.bridgeStatus.bridgeSmoke === "passed",
+      detail: input.bridgeStatus.bridgeSmoke,
+    },
+    {
+      id: "desktop-build-live",
+      label: "Desktop Build live smoke",
+      ok: desktopSmoke?.result === "verified" && desktopSmoke.liveBuildEnabled,
+      detail: desktopSmoke
+        ? `${desktopSmoke.result}${desktopSmoke.liveBuildEnabled ? " live" : " readiness"}${desktopSmoke.path ? ` ${desktopSmoke.path}` : ""}`
+        : "No desktop Build smoke report.",
+    },
+    {
+      id: "build-gate",
+      label: "Build gate",
+      ok: input.activeGate.canBuild && input.bridgeStatus.buildEnabled,
+      detail: input.bridgeStatus.blockedReason || input.activeGate.blockedReason || input.activeGate.bridgeStatus,
+    },
+  ];
+}
+
+export function runtimeBetaReady(input: {
+  runtime: CodexRuntimeSettingsModel;
+  activeGate: ProviderBuildGate;
+  bridgeStatus: ProviderBridgeStatus;
+}): boolean {
+  return runtimeBetaGates(input).every((gate) => gate.ok);
+}
+
+function localizedRuntimeGateLabel(copy: AppCopy, gate: RuntimeBetaGate): string {
+  if (copy.language !== "中") return gate.label;
+  if (gate.id === "runtime-conformance") return "Runtime 一致性";
+  if (gate.id === "sidecar") return "Codex sidecar";
+  if (gate.id === "bridge") return "Responses bridge";
+  if (gate.id === "model-discovery") return "模型导入";
+  if (gate.id === "bridge-smoke") return "Bridge smoke";
+  if (gate.id === "desktop-build-live") return "桌面 Build live smoke";
+  return "Build 门禁";
+}
+
+function desktopSmokeCriteriaSummary(runtime: CodexRuntimeSettingsModel, copy: AppCopy): string {
+  const criteria = runtime.latestDesktopBuildSmoke?.criteria || [];
+  if (criteria.length === 0) return copy.language === "中" ? "尚无 criteria 明细" : "No criteria details";
+  const verified = criteria.filter((criterion) => criterion.status === "verified").length;
+  const broken = criteria.filter((criterion) => criterion.status === "broken").length;
+  const blocked = criteria.filter((criterion) => criterion.status === "blocked").length;
+  const problem = criteria.find((criterion) => criterion.status !== "verified");
+  const prefix = copy.language === "中"
+    ? `${verified}/${criteria.length} 项 verified`
+    : `${verified}/${criteria.length} verified`;
+  const suffix = problem
+    ? ` · ${problem.label}: ${problem.message}`
+    : broken || blocked
+      ? ` · ${broken} broken / ${blocked} blocked`
+      : "";
+  return `${prefix}${suffix}`;
+}
+
 function CodexRuntimePanel({
   copy,
   runtime,
@@ -1028,8 +1144,37 @@ function CodexRuntimePanel({
   const runtimeEvidenceSummary = agentRuntimeEvidenceSummary(productionRuntime);
   const missingRuntimeEvidenceLabels = runtimeEvidenceSummary.missing.map((requirement) => requirement.label).join(", ");
   const alternativeRuntimes = AGENT_RUNTIME_ADAPTER_DECISIONS.filter((adapter) => adapter.id !== productionRuntime.id);
+  const betaGates = runtimeBetaGates({ runtime, activeGate, bridgeStatus });
+  const betaReady = betaGates.every((gate) => gate.ok);
+  const failedBetaGates = betaGates.filter((gate) => !gate.ok);
   return (
     <section className="provider-credential-panel codex-runtime-panel">
+      <section className={`runtime-beta-gate ${betaReady ? "ready" : "blocked"}`} aria-label={copy.language === "中" ? "Beta 发布门禁" : "Beta release gate"}>
+        <header>
+          <div>
+            <strong>{copy.language === "中" ? "Beta 门禁" : "Beta gate"}</strong>
+            <small>
+              {betaReady
+                ? (copy.language === "中" ? "DeepSeek Build + Codex sidecar 已满足本地 Beta 使用门槛。" : "DeepSeek Build + Codex sidecar meets the local Beta gate.")
+                : (copy.language === "中" ? "以下阻塞项解决后再标记 Beta ready。" : "Resolve the blocking checks below before marking Beta ready.")}
+            </small>
+          </div>
+          <StatusBadge tone={betaReady ? "success" : "warning"}>
+            {betaReady ? (copy.language === "中" ? "ready" : "ready") : (copy.language === "中" ? "blocked" : "blocked")}
+          </StatusBadge>
+        </header>
+        <div className="runtime-beta-checks">
+          {betaGates.map((gate) => (
+            <span key={gate.id} className={gate.ok ? "ok" : "blocked"} title={gate.detail}>
+              {gate.ok ? <Check size={13} /> : <ShieldAlert size={13} />}
+              {localizedRuntimeGateLabel(copy, gate)}
+            </span>
+          ))}
+        </div>
+        {!betaReady ? (
+          <p>{failedBetaGates.map((gate) => `${localizedRuntimeGateLabel(copy, gate)}: ${gate.detail}`).join(" · ")}</p>
+        ) : null}
+      </section>
       <section className="agent-runtime-summary" aria-label={copy.language === "中" ? "Agent runtime 状态" : "Agent runtime status"}>
         <header>
           <div>
@@ -1058,9 +1203,13 @@ function CodexRuntimePanel({
           })}
         </div>
         <p>
-          {copy.language === "中"
-            ? `${runtimeEvidenceSummary.verified}/${runtimeEvidenceSummary.total} 项证据已验证；仍需补齐：${missingRuntimeEvidenceLabels}。替代 Agent 在全部证据 verified 前不会进入生产 Build。`
-            : `${runtimeEvidenceSummary.verified}/${runtimeEvidenceSummary.total} evidence checks verified; still missing: ${missingRuntimeEvidenceLabels}. Replacement agents stay out of production Build until every check is verified.`}
+          {runtimeEvidenceSummary.missing.length === 0
+            ? (copy.language === "中"
+              ? `${runtimeEvidenceSummary.verified}/${runtimeEvidenceSummary.total} 项证据已验证；Codex 继续作为生产 Build runtime。替代 Agent 仍只允许隔离 spike。`
+              : `${runtimeEvidenceSummary.verified}/${runtimeEvidenceSummary.total} evidence checks verified; Codex remains the production Build runtime. Replacement agents stay isolated spikes.`)
+            : (copy.language === "中"
+              ? `${runtimeEvidenceSummary.verified}/${runtimeEvidenceSummary.total} 项证据已验证；仍需补齐：${missingRuntimeEvidenceLabels}。替代 Agent 在全部证据 verified 前不会进入生产 Build。`
+              : `${runtimeEvidenceSummary.verified}/${runtimeEvidenceSummary.total} evidence checks verified; still missing: ${missingRuntimeEvidenceLabels}. Replacement agents stay out of production Build until every check is verified.`)}
         </p>
         <div className="agent-runtime-adapter-list">
           {alternativeRuntimes.map((adapter) => (
@@ -1107,7 +1256,7 @@ function CodexRuntimePanel({
         />
         <InfoCard
           title={copy.language === "中" ? "Desktop Build smoke" : "Desktop Build smoke"}
-          body={desktopBuildSmoke}
+          body={`${desktopBuildSmoke} · ${desktopSmokeCriteriaSummary(runtime, copy)}`}
         />
         <InfoCard
           title={copy.language === "中" ? "Build enabled" : "Build enabled"}

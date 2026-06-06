@@ -55,6 +55,8 @@ function ActionItemCard({ copy, item }: { copy: AppCopy; item: CodexInspectableI
     ? JSON.stringify(item.metadata.params, null, 2)
     : "";
   const answer = typeof item.metadata?.answer === "string" ? item.metadata.answer : "";
+  const restored = item.metadata?.restoredFromRunning === true;
+  const recoverable = item.metadata?.recoverable === true;
   return (
     <article className={`codex-inspector-card codex-inspector-card-${item.tone}`} data-review-focus={item.status === "pending" || item.status === "running" ? "pending" : undefined}>
       <header>
@@ -65,6 +67,16 @@ function ActionItemCard({ copy, item }: { copy: AppCopy; item: CodexInspectableI
         <StatusBadge tone={item.tone}>{itemStatusLabel(copy, item)}</StatusBadge>
       </header>
       <p>{item.text}</p>
+      {restored ? (
+        <small className="codex-inspector-meta">
+          {copy.language === "中" ? "这是从上次未完成运行恢复的动作；处理后 Build 可继续，或使用设置里的恢复输入状态解除锁定。" : "Recovered from an unfinished run; resolve it to continue Build, or use Recover input state in Settings to unlock."}
+        </small>
+      ) : null}
+      {recoverable ? (
+        <small className="codex-inspector-meta">
+          {copy.language === "中" ? "该错误可恢复；不会自动批准任何动作，输入框应保持可继续。" : "This error is recoverable; Orbit will not auto-approve actions and the composer should stay usable."}
+        </small>
+      ) : null}
       {answer ? <small className="codex-inspector-meta">{copy.workbench.answerQuestion}: {answer}</small> : null}
       {params ? <pre>{params}</pre> : null}
       {(item.status === "pending" || item.status === "running") ? (
@@ -85,7 +97,11 @@ function UsageStrip({ copy, workspace }: { copy: AppCopy; workspace: WorkspaceSt
     <div className="codex-usage-strip" data-codex-usage-total={usage.totalTokens}>
       <span>{copy.language === "中" ? "Token 使用量" : "Token usage"}</span>
       <strong>{usage.totalTokens > 0 ? usage.totalTokens : pendingLabel}</strong>
-      <small>in {usage.inputTokens} / out {usage.outputTokens}</small>
+      <small>
+        {usage.totalTokens > 0
+          ? `in ${usage.inputTokens} / out ${usage.outputTokens}`
+          : (copy.language === "中" ? "usage 事件已到达，数值稍后补齐" : "usage event arrived; numbers may follow")}
+      </small>
     </div>
   );
 }
@@ -195,7 +211,11 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
           workspace.activeFilePath && workspace.activeFileContent !== null ? (
             <CodePreview copy={copy} preview={filePreview} workspacePath={workspace.workspaceRoot} theme={theme} onClose={() => workspace.viewFile("")} />
           ) : (
-            <EmptyState icon={<FileCode2 size={22} />} title={copy.workbench.noFileSelected} />
+            <EmptyState
+              icon={<FileCode2 size={22} />}
+              title={copy.workbench.noFileSelected}
+              body={copy.language === "中" ? "从左侧文件树选择文件后会在这里预览真实内容；这不会触发 Build 或修改文件。" : "Select a file from the project tree to preview real content here; this does not start Build or modify files."}
+            />
           )
         ) : null}
 
@@ -215,7 +235,11 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
               </article>
             ))}
             {model.actions.length === 0 && model.errors.length === 0 ? (
-              <EmptyState icon={<ShieldQuestion size={22} />} title={copy.workbench.noApprovals} />
+              <EmptyState
+                icon={<ShieldQuestion size={22} />}
+                title={copy.workbench.noApprovals}
+                body={copy.language === "中" ? "当前没有待处理的审批或问题。Build 卡住时，若这里为空，可用设置里的恢复输入状态解除无进展运行。" : "There are no pending approvals or questions. If Build appears stuck while this is empty, use Recover input state in Settings to clear an idle run."}
+              />
             ) : null}
           </div>
         ) : null}
@@ -247,7 +271,11 @@ export function ReviewDock({ copy, theme, workspace }: ReviewDockProps) {
               ))
             ) : null}
             {model.counts.edits === 0 ? (
-              <EmptyState icon={<GitPullRequestArrow size={22} />} title={copy.workbench.noChanges} />
+              <EmptyState
+                icon={<GitPullRequestArrow size={22} />}
+                title={copy.workbench.noChanges}
+                body={copy.language === "中" ? "Codex 产生文件编辑、patch sandbox 失败或冲突时会显示在这里；冲突需要先选择保留内容再应用。" : "Codex file edits, patch sandbox failures, and conflicts appear here; conflicts must be resolved before applying."}
+              />
             ) : null}
           </div>
         ) : null}

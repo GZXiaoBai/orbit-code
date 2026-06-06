@@ -1,11 +1,11 @@
 {
-  "id": "tauri-webdriver-build-smoke-2026-06-05T08-36-39-547Z",
+  "id": "tauri-webdriver-build-smoke-2026-06-05T08-36-08-219Z",
   "scope": "Packaged-window Build smoke for Orbit Code through tauri-driver/WebDriver. Default mode verifies readiness; live Build requires ORBIT_DESKTOP_BUILD_LIVE=1.",
-  "startedAt": "2026-06-05T08:36:08.973Z",
-  "completedAt": "2026-06-05T08:36:39.547Z",
+  "startedAt": "2026-06-05T08:35:32.811Z",
+  "completedAt": "2026-06-05T08:36:08.219Z",
   "result": "verified",
   "liveBuildEnabled": true,
-  "denyApproval": true,
+  "denyApproval": false,
   "smokeFile": "ORBIT_DESKTOP_BUILD_SMOKE.md",
   "timeouts": {
     "requestMs": 60000,
@@ -63,7 +63,7 @@
       "status": "verified",
       "message": "tauri-driver created a WRY session for Orbit Code.",
       "evidence": {
-        "sessionId": "f19238e8-016e-4e87-86bd-834ca8189b98"
+        "sessionId": "7a77c8c2-9026-48e3-8965-cb59b51d6f83"
       }
     },
     {
@@ -119,25 +119,56 @@
       "evidence": {
         "submitted": true,
         "source": "webdriver-element-click",
-        "denied": true
+        "denied": false
       }
     },
     {
-      "id": "deny-path",
-      "label": "Denied approval does not produce terminal output or file edits.",
+      "id": "approval-terminal",
+      "label": "Approved Build produces terminal output.",
       "status": "verified",
-      "message": "The packaged window reflected denial without terminal/fileEdit artifacts.",
-      "evidence": {}
+      "message": "The packaged window showed terminal evidence after approval.",
+      "evidence": {
+        "smokeFile": "ORBIT_DESKTOP_BUILD_SMOKE.md",
+        "terminal": ""
+      }
+    },
+    {
+      "id": "approval-file-edit",
+      "label": "Approved Build produces a fileEdit item.",
+      "status": "verified",
+      "message": "The packaged window showed file edit evidence after approval.",
+      "evidence": {
+        "smokeFile": "ORBIT_DESKTOP_BUILD_SMOKE.md",
+        "edit": ""
+      }
+    },
+    {
+      "id": "approval-usage",
+      "label": "Approved Build produces usage evidence.",
+      "status": "verified",
+      "message": "The packaged window showed token usage evidence after approval.",
+      "evidence": {
+        "smokeFile": "ORBIT_DESKTOP_BUILD_SMOKE.md"
+      }
+    },
+    {
+      "id": "approval-final-summary",
+      "label": "Approved Build produces a final assistant summary.",
+      "status": "verified",
+      "message": "The packaged window showed final assistant summary evidence after approval.",
+      "evidence": {
+        "smokeFile": "ORBIT_DESKTOP_BUILD_SMOKE.md"
+      }
     },
     {
       "id": "desktop-build-workspace-cleanup",
       "label": "Live Build smoke cleans the temporary file it asks Codex to write.",
       "status": "verified",
-      "message": "No smoke file was present after the run.",
+      "message": "Removed the smoke file created by the approved Build run.",
       "evidence": {
         "workspaceDir": "/tmp/orbit-desktop-build-workspace",
         "smokeFile": "ORBIT_DESKTOP_BUILD_SMOKE.md",
-        "existed": false
+        "existed": true
       }
     }
   ]

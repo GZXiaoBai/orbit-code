@@ -69,14 +69,14 @@ export interface AgentRuntimeEvidenceSummary {
 
 const codexEvidence = {
   "event-stream": "verified",
-  "approval-user-input": "partial",
+  "approval-user-input": "verified",
   "terminal-file-edit": "verified",
   "usage-final-summary": "verified",
   "workspace-boundaries": "verified",
-  "session-mapping": "partial",
-  "interrupt-crash-cleanup": "partial",
+  "session-mapping": "verified",
+  "interrupt-crash-cleanup": "verified",
   "no-secret-config": "verified",
-  "desktop-live-smoke": "partial",
+  "desktop-live-smoke": "verified",
 } as const satisfies Record<AgentRuntimeRequirementId, AgentRuntimeEvidenceStatus>;
 
 function evidenceWithStatus(status: AgentRuntimeEvidenceStatus): Record<AgentRuntimeRequirementId, AgentRuntimeEvidenceStatus> {
